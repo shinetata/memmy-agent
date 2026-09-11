@@ -22,6 +22,10 @@ export function KnowledgePage({
   const [settings, setSettings] = useState<KnowledgeSettings | null>(null);
   const [name, setName] = useState("");
   const [activeId, setActiveId] = useState("");
+  const [view, setView] = useState<"all" | "mine" | "sharedByMe" | "sharedWithMe">("all");
+  const [detailOpen, setDetailOpen] = useState(false);
+  const [shareOpen, setShareOpen] = useState(false);
+  const [createOpen, setCreateOpen] = useState(false);
   const [page, setPage] = useState(1);
   const [listing, setListing] = useState<KnowledgeFiles | null>(null);
   const [busy, setBusy] = useState(false);
@@ -147,27 +151,28 @@ export function KnowledgePage({
     acceptSettings(await api<KnowledgeSettings>("/settings", "PUT", patch));
   }
   const active = settings?.bases.find((base) => base.id === activeId);
+  const ownedBases = settings?.bases.filter((base) => !base.shared) ?? [];
+  const sharedBases = settings?.bases.filter((base) => base.shared) ?? [];
+  const visibleBases = settings?.bases.filter((base) =>
+    view === "sharedWithMe" ? Boolean(base.shared) : view === "sharedByMe" ? false : !base.shared,
+  ) ?? [];
   const selected =
     settings?.bases.filter((base) => base.selected).map((base) => base.id) ??
     [];
   return (
     <section className="memmy-knowledge">
       <style>{styles}</style>
-      <header>
-        <div>
-          <h1>{t("知识库", "Knowledge")}</h1>
-          <p>
-            {t(
-              "管理资料，让 Memmy 在任务对话中检索并使用它们。",
-              "Manage documents for Memmy to retrieve in your task conversations.",
-            )}
-          </p>
+      <div className="mk-library-content">
+        <header className="mk-page-header">
+          <div>
+            <h1>{t("知识库", "Knowledge")}</h1>
+            <p>{t("最近访问的知识库", "Recently accessed knowledge bases")}</p>
         </div>
-        <span className={`mk-badge ${settings?.enabled ? "mk-on" : ""}`}>
+        <div className="mk-header-actions"><span className={`mk-badge ${settings?.enabled ? "mk-on" : ""}`}>
           {settings?.enabled
             ? t("召回已开启", "Recall on")
             : t("召回已关闭", "Recall off")}
-        </span>
+        </span><div className="mk-header-actions"><button type="button" className="mk-secondary" onClick={() => setShareOpen(true)}>{t("共享知识库", "Share knowledge base")}</button><button type="button" className="mk-primary" onClick={() => setCreateOpen(true)}>{t("＋ 新建知识库", "＋ New knowledge base")}</button></div></div>
       </header>
       {error && (
         <div className="mk-error" role="alert">
@@ -214,41 +219,13 @@ export function KnowledgePage({
               )}
             </p>
           )}
-          <div className="mk-card mk-recall">
-            <div>
-              <h2>
-                {t(
-                  "在 Agent 对话中使用知识库",
-                  "Use knowledge in Agent conversations",
-                )}
-              </h2>
-              <p>
-                {t(
-                  "默认关闭。开启后，从下方勾选的知识库中召回相关资料。",
-                  "Off by default. Enable to retrieve from the knowledge bases selected below.",
-                )}
-              </p>
-            </div>
-            <label className="mk-toggle">
-              <input
-                type="checkbox"
-                role="switch"
-                checked={settings.enabled}
-                disabled={
-                  !settings.enabled &&
-                  (!settings.serviceAvailable || !selected.length)
-                }
-                onChange={(event) =>
-                  void run(async () => save({ enabled: event.target.checked }))
-                }
-                aria-label={t("知识库召回", "Knowledge recall")}
-              />
-              {settings.enabled ? t("开启", "On") : t("关闭", "Off")}
-            </label>
+          <div className="mk-view-tabs" role="tablist" aria-label={t("知识库分类", "Knowledge base categories")}>
+            {([["all", t("全部", "All")], ["mine", t("我的", "Mine")], ["sharedByMe", t("我分享的", "Shared by me")], ["sharedWithMe", t("与我共享", "Shared with me")]] as const).map(([key, label]) => <button key={key} className={view === key ? "mk-view-active" : ""} onClick={() => setView(key)} role="tab" aria-selected={view === key}>{label}<span>{key === "all" ? settings.bases.length : key === "sharedWithMe" || key === "sharedByMe" ? 0 : ownedBases.length}</span></button>)}
           </div>
           <div className="mk-columns">
-            <aside className="mk-card">
-              <h2>{t("我的知识库", "My knowledge bases")}</h2>
+            <aside className="mk-card mk-base-panel">
+              <div className="mk-section-heading"><h2>{t("最近", "Recent")}</h2><span>{visibleBases.length}</span></div>
+              <div className="mk-table-head"><span>{t("名称", "Name")}</span><span>{t("所有者", "Owner")}</span><span>{t("最近更新", "Last updated")}</span></div>
               {!settings.bases.length && (
                 <p className="mk-empty">
                   {t(
@@ -257,9 +234,9 @@ export function KnowledgePage({
                   )}
                 </p>
               )}
-              {settings.bases.map((base) => (
+              {visibleBases.map((base) => (
                 <div
-                  className={`mk-base ${base.id === activeId ? "mk-active" : ""}`}
+                  className={`mk-base mk-table-row ${base.id === activeId ? "mk-active" : ""}`}
                   key={base.id}
                 >
                   <input
@@ -284,49 +261,16 @@ export function KnowledgePage({
                     onClick={() => {
                       setActiveId(base.id);
                       setPage(1);
+                      setDetailOpen(true);
                     }}
                   >
-                    {base.name}{base.shared ? ` · ${t("共享给我的", "Shared with me")}` : ""}
+                    {base.name}
                   </button>
+                  <span>{base.shared ? (base.ownerName || t("其他用户", "Another user")) : t("我", "You")}</span><span>{t("最近更新", "Recently updated")}</span>
                 </div>
               ))}
-              <details className="mk-add">
-                <summary className="mk-primary">
-                  {t("添加知识库", "Add knowledge base")}
-                </summary>
-                <form
-                  onSubmit={(event) => {
-                    event.preventDefault();
-                    void run(async () => {
-                      acceptSettings(
-                        await api<KnowledgeSettings>("/bases", "POST", {
-                          name,
-                        }),
-                      );
-                      setName("");
-                    });
-                  }}
-                >
-                  <label>
-                    {t("名称", "Name")}
-                    <input
-                      value={name}
-                      onChange={(event) => setName(event.target.value)}
-                      maxLength={200}
-                      required
-                    />
-                  </label>
-                  <button
-                    className="mk-primary"
-                    type="submit"
-                    disabled={!settings.serviceAvailable}
-                  >
-                    {t("添加", "Add")}
-                  </button>
-                </form>
-              </details>
             </aside>
-            <main className="mk-card">
+            <main className={`mk-card mk-detail-modal ${detailOpen ? "mk-detail-open" : "mk-detail-closed"}`} role="dialog" aria-modal="true" aria-label={active?.name}>
               {!active ? (
                 <div className="mk-empty">
                   {t(
@@ -339,9 +283,9 @@ export function KnowledgePage({
                   <div className="mk-file-header">
                     <div>
                       <h2>{active.name}</h2>
-                      <small>{active.id}</small>
                     </div>
-                    {!active.shared && <details className="mk-share">
+                    <button type="button" className="mk-close" onClick={() => setDetailOpen(false)} aria-label={t("关闭", "Close")}>×</button>
+                    {!active.shared && <details className="mk-share" hidden>
                       <summary>{t("共享知识库", "Share knowledge base")}</summary>
                       <form onSubmit={(event) => { event.preventDefault(); void run(async () => { await api(`/bases/${encodeURIComponent(active.id)}/members`, "POST", { userId: shareUserId.trim() }); setShareUserId(""); setNotice(t("共享成功，用户刷新后即可看到该知识库。", "Shared. The user will see it after refreshing.")); const value = await api<{ members: KnowledgeMember[] }>(`/bases/${encodeURIComponent(active.id)}/members`); setMembers(value.members ?? []); }); }}>
                         <label>{t("Memmy 用户 ID", "Memmy user ID")}<input value={shareUserId} onChange={(event) => setShareUserId(event.target.value)} placeholder={t("输入对方的用户 ID", "Enter the other user's ID")} required /></label>
@@ -377,6 +321,7 @@ export function KnowledgePage({
                     </button>
                   </div>
                   {active.shared && <p className="mk-notice">{t(`来自 ${active.ownerName || "其他用户"} 的共享知识库，仅可查看和参与召回。`, `Shared by ${active.ownerName || "another user"}. View and recall only.`)}</p>}
+                  <div className="mk-detail-recall"><span>{t("在 Agent 对话中使用知识库", "Use in Agent conversations")}</span><label className="mk-toggle"><input type="checkbox" role="switch" checked={settings.enabled} disabled={!settings.serviceAvailable} onChange={(event) => void run(async () => save({ enabled: event.target.checked, ...(event.target.checked && !selected.includes(active.id) ? { selectedIds: [...selected, active.id] } : {}) }))} aria-label={t("知识库召回", "Knowledge recall")} />{settings.enabled ? t("开启", "On") : t("关闭", "Off")}</label></div>
                   <div className="mk-upload" hidden={active.shared}>
                     <div className="mk-upload-picker">
                       <input
@@ -542,9 +487,12 @@ export function KnowledgePage({
               )}
             </main>
           </div>
+          {createOpen && <div className="mk-modal-backdrop"><div className="mk-action-modal" role="dialog" aria-modal="true"><button className="mk-modal-close" onClick={() => setCreateOpen(false)}>×</button><h2>{t("新建知识库", "New knowledge base")}</h2><p>{t("创建一个新的个人知识库。", "Create a personal knowledge base.")}</p><form onSubmit={(event) => { event.preventDefault(); void run(async () => { acceptSettings(await api<KnowledgeSettings>("/bases", "POST", { name })); setName(""); setCreateOpen(false); }); }}><label>{t("名称", "Name")}<input value={name} onChange={(event) => setName(event.target.value)} maxLength={200} required autoFocus /></label><div className="mk-modal-actions"><button type="button" onClick={() => setCreateOpen(false)}>{t("取消", "Cancel")}</button><button className="mk-primary" type="submit" disabled={!settings.serviceAvailable}>{t("创建", "Create")}</button></div></form></div></div>}
+          {shareOpen && <div className="mk-modal-backdrop"><div className="mk-action-modal" role="dialog" aria-modal="true"><button className="mk-modal-close" onClick={() => setShareOpen(false)}>×</button><h2>{t("共享知识库", "Share knowledge base")}</h2><p>{t("选择知识库并输入对方的 Memmy 用户 ID。", "Choose a knowledge base and enter the other Memmy user's ID.")}</p><form onSubmit={(event) => { event.preventDefault(); const target = active ?? ownedBases[0]; if (!target) return; void run(async () => { await api(`/bases/${encodeURIComponent(target.id)}/members`, "POST", { userId: shareUserId.trim() }); setShareUserId(""); setShareOpen(false); setNotice(t("共享成功。", "Shared successfully.")); }); }}><label>{t("知识库", "Knowledge base")}<select value={activeId} onChange={(event) => setActiveId(event.target.value)}>{ownedBases.map((base) => <option value={base.id} key={base.id}>{base.name}</option>)}</select></label><label>{t("Memmy 用户 ID", "Memmy user ID")}<input value={shareUserId} onChange={(event) => setShareUserId(event.target.value)} placeholder={t("输入用户 ID", "Enter user ID")} required /></label><div className="mk-modal-actions"><button type="button" onClick={() => setShareOpen(false)}>{t("取消", "Cancel")}</button><button className="mk-primary" type="submit">{t("确认共享", "Share")}</button></div></form></div></div>}
         </fieldset>
       )}
       {busy && <p role="status">{t("正在处理…", "Working…")}</p>}
+      </div>
     </section>
   );
 }
@@ -561,5 +509,11 @@ const styles = `
 
 .memmy-knowledge .mk-primary{background:var(--color-action-sky,#5cbfae);color:white;border:0;border-radius:7px;padding:8px 12px;cursor:pointer}.memmy-knowledge .mk-primary:hover{background:var(--color-action-sky-hover,#3aa893)}.memmy-knowledge .mk-add>summary{width:fit-content}
 .mk-upload-picker{display:flex;align-items:center;gap:12px;flex-wrap:wrap;min-width:0}.mk-upload-picker span{font-size:13px;line-height:1.5}.mk-upload-failures{font-size:13px;color:#bb5555;overflow-wrap:anywhere;padding-left:20px}.mk-upload>button{flex-shrink:0}
+.mk-page-header{padding-bottom:4px}.mk-header-actions{display:flex;align-items:center;gap:10px}.mk-add-top{border:0;margin:0;padding:0}.mk-add-top form{position:absolute;right:28px;z-index:2;background:var(--background-primary,#fff);border:1px solid #8883;border-radius:10px;padding:14px;width:230px}.mk-view-tabs{display:flex;gap:4px;margin:26px 0 18px;border-bottom:1px solid #8882}.mk-view-tabs button{border:0;border-radius:8px 8px 0 0;padding:10px 14px;background:transparent;color:inherit;opacity:.62}.mk-view-tabs button span{font-size:11px;margin-left:7px;opacity:.55}.mk-view-tabs .mk-view-active{opacity:1;background:#8882;font-weight:600}.mk-overview-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:0 0 20px}.mk-overview-card{border-radius:12px;padding:17px 18px;position:relative;overflow:hidden}.mk-overview-card span,.mk-overview-card small{display:block;font-size:12px;opacity:.7}.mk-overview-card strong{display:block;font-size:27px;margin:9px 0 3px}.mk-overview-mine{background:#edf4ff}.mk-overview-shared{background:#f2effc}.mk-base-panel{padding:18px}.mk-section-heading{display:flex;justify-content:space-between;align-items:center;margin-bottom:9px}.mk-section-heading h2{margin:0}.mk-section-heading span{font-size:11px;opacity:.5}.mk-base-panel .mk-add{margin-top:16px}
+.mk-secondary{border:1px solid #8884!important;background:transparent!important}.mk-detail-closed{display:none}.mk-close{font-size:23px!important;border:0!important;padding:0!important;line-height:1;opacity:.65}.mk-detail-modal{position:fixed;z-index:20;top:9vh;right:6vw;width:min(720px,calc(100vw - 48px));max-height:82vh;overflow:auto;background:var(--background-primary,#fff);border-radius:16px;padding:24px;box-shadow:0 16px 60px #18212b35}.mk-detail-modal:before{content:"";position:fixed;inset:0;background:#18212b30;z-index:-1}.mk-detail-modal .mk-file-header{align-items:flex-start}.mk-detail-modal .mk-file-header>div:first-child{flex:1}
+.mk-view-tabs{margin-top:34px;gap:0;border:0}.mk-view-tabs button{padding:8px 14px;background:transparent;border-radius:7px}.mk-view-tabs .mk-view-active{background:#e7e7e7}.mk-overview-grid{display:none}.mk-columns{display:block}.mk-base-panel{border:0;padding:0;margin:0}.mk-section-heading{display:none}.mk-table-head,.mk-table-row{display:grid;grid-template-columns:minmax(280px,2fr) minmax(150px,1fr) 150px;align-items:center;column-gap:18px}.mk-table-head{padding:0 12px 10px;color:#999;font-size:12px;border-bottom:1px solid #eee}.mk-table-row{padding:13px 12px;border-bottom:1px solid #eee;border-radius:0}.mk-table-row:hover{background:transparent}.mk-table-row .mk-base-name:hover{text-decoration:underline;text-underline-offset:3px}.mk-table-row>span{font-size:12px;color:#999;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.mk-table-row .mk-base-name{font-size:13px;padding:0;text-decoration:none}.mk-table-row input{grid-column:1;position:absolute;opacity:0}.mk-table-row .mk-base-name{grid-column:1}.mk-detail-recall{display:flex;justify-content:space-between;align-items:center;border-top:1px solid #eee;border-bottom:1px solid #eee;padding:14px 0;margin:18px 0}.mk-detail-recall .mk-toggle{display:flex;gap:8px;align-items:center;font-size:12px}.mk-page-header h1{font-size:25px}.mk-page-header p{font-size:13px}
+.memmy-knowledge{display:block;max-width:none;padding:0;min-height:100%;position:relative}.mk-library-nav{width:190px;flex:0 0 190px;background:#f7f8fa;border-right:1px solid #8882;padding:25px 12px}.mk-library-nav-title{font-size:18px;font-weight:600;padding:0 12px 22px}.mk-library-nav button{display:block;width:100%;border:0;text-align:left;padding:9px 12px;border-radius:7px;background:transparent;color:inherit;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.mk-library-nav button:hover{background:#e9ecef}.mk-library-nav .mk-library-nav-active{background:#e1e5e9;font-weight:600}.mk-library-group{font-size:11px;opacity:.55;padding:22px 12px 7px}.mk-library-content{min-width:0;padding:32px 42px}.mk-detail-modal{position:absolute!important;right:0;top:0;width:min(650px,70%);height:100%;max-height:none;border-radius:0;box-shadow:-10px 0 35px #18212b18}.mk-detail-modal:before{display:none}.mk-modal-backdrop{position:fixed;inset:0;background:rgba(20,27,35,.12);z-index:40;display:grid;place-items:center}.mk-action-modal{box-shadow:0 14px 45px #18212b24}
+.mk-modal-backdrop{position:fixed;inset:0;background:rgba(20,27,35,.16);z-index:40;display:grid;place-items:center}.mk-action-modal{position:relative;width:390px;background:var(--background-primary,#fff);border:1px solid #8883;border-radius:12px;padding:25px}.mk-action-modal h2{font-size:18px;margin:0 0 8px}.mk-action-modal p{font-size:12px;opacity:.65;margin-bottom:20px}.mk-modal-close{position:absolute;right:15px;top:13px;border:0!important;font-size:22px!important;padding:0!important;opacity:.6}.mk-modal-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:20px}.mk-action-modal select{border:1px solid #8884;border-radius:7px;padding:9px;background:transparent;color:inherit}
+.mk-detail-modal .mk-file-header{position:relative;padding-top:48px}.mk-detail-modal .mk-close{position:absolute;left:0;top:12px;width:38px;height:38px;display:flex;align-items:center;justify-content:flex-start;z-index:5;cursor:pointer;pointer-events:auto}
 @media(max-width:850px){.mk-columns{grid-template-columns:1fr}.memmy-knowledge{padding:24px 16px}.mk-recall{align-items:flex-start}.mk-file-header{flex-wrap:wrap}}
 `;
