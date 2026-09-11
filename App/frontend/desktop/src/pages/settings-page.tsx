@@ -365,6 +365,7 @@ export function SettingsPageView(props: SettingsPageViewProps) {
   const [isEditingNickname, setIsEditingNickname] = useState(false);
   const [nicknameDraft, setNicknameDraft] = useState("");
   const [accountBusy, setAccountBusy] = useState(false);
+  const [accountIdCopied, setAccountIdCopied] = useState(false);
   const [accountError, setAccountError] = useState<string | null>(null);
   const [activeTabState, setActiveTabState] = useState<SettingsTabId>(() => {
     return readInitialSettingsTab(typeof window === "undefined" ? undefined : window.location.hash);
@@ -1343,6 +1344,33 @@ export function SettingsPageView(props: SettingsPageViewProps) {
                     <div className="min-w-0 space-y-0.5">
                       <OverflowTooltipText className="settings-account-meta-line block truncate" text={accountMeta} />
                       <div className="text-text-ink/45">{t("settings.account.registeredAt", { value: registeredAtText })}</div>
+                      {state.account.userId && (
+                        <div className="flex items-center gap-2 min-w-0 text-text-ink/45">
+                          <span className="shrink-0">{t("settings.account.userId", { value: state.account.userId })}</span>
+                          <button
+                            type="button"
+                            aria-label={t("settings.account.copyUserId")}
+                            className="inline-flex items-center gap-1 shrink-0 text-action-sky hover:underline cursor-pointer"
+                            onClick={() => {
+                              void (async () => {
+                                try {
+                                  if (typeof navigator === "undefined" || typeof navigator.clipboard?.writeText !== "function") {
+                                    throw new Error("Clipboard API is unavailable");
+                                  }
+                                  await navigator.clipboard.writeText(state.account.userId!);
+                                  setAccountIdCopied(true);
+                                  window.setTimeout(() => setAccountIdCopied(false), 2000);
+                                } catch (error) {
+                                  console.warn("copy account user id failed", error);
+                                }
+                              })();
+                            }}
+                          >
+                            <Copy size={11} strokeWidth={2.2} />
+                            {accountIdCopied ? t("settings.account.copied") : t("settings.account.copy")}
+                          </button>
+                        </div>
+                      )}
                       {accountError && <div className="text-status-error">{accountError}</div>}
                     </div>
                   ) : (

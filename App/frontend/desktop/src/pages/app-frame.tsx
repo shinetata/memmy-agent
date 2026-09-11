@@ -1,3 +1,4 @@
+import { BookOpen } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import {
@@ -196,6 +197,7 @@ const navItems: NavItem[] = [
   { action: "search", icon: <Search size={16} />, labelKey: "appFrame.search" },
   { path: "/tools", icon: <Link2 size={16} /> },
   { path: "/memory", icon: <BrainCircuit size={16} /> },
+  { path: "/knowledge", icon: <BookOpen size={16} /> },
   { action: "community", icon: <MessageCircle size={16} />, labelKey: "welcome.joinCommunity" }
 ];
 
