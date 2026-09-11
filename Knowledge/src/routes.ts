@@ -62,6 +62,19 @@ export function registerKnowledgeRoutes(
           ),
         ),
       );
+      scoped.get<{ Params: { id: string } }>("/bases/:id/members", async (request) => {
+        const data = record(await client.request(`/bases/${encodeURIComponent(request.params.id)}/members`));
+        return { members: Array.isArray(data.members) ? data.members : [] };
+      });
+      scoped.post<{ Params: { id: string } }>("/bases/:id/members", async (request) => {
+        const body = record(request.body);
+        if (Object.keys(body).some((key) => key !== "userId") || !text(body.userId).trim()) throw new KnowledgeError("用户 ID 无效");
+        return client.request(`/bases/${encodeURIComponent(request.params.id)}/members`, "POST", { userId: text(body.userId).trim() });
+      });
+      scoped.delete<{ Params: { id: string; memberId: string } }>("/bases/:id/members/:memberId", async (request) => {
+        await client.request(`/bases/${encodeURIComponent(request.params.id)}/members/${encodeURIComponent(request.params.memberId)}`, "DELETE");
+        return { ok: true };
+      });
       scoped.get<{ Params: { id: string }; Querystring: { page?: string } }>(
         "/bases/:id/files",
         async (request) => {

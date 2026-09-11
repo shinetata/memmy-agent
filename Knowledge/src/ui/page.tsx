@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { type KnowledgeFiles, type KnowledgeSettings } from "../types.js";
+import { type KnowledgeFiles, type KnowledgeMember, type KnowledgeSettings } from "../types.js";
 
 import {
   DOCUMENT_EXTENSIONS,
@@ -30,6 +30,8 @@ export function KnowledgePage({
   const [refresh, setRefresh] = useState(0);
   const uploadInput = useRef<HTMLInputElement>(null);
   const [uploadResults, setUploadResults] = useState<UploadResult[]>([]);
+  const [shareUserId, setShareUserId] = useState("");
+  const [members, setMembers] = useState<KnowledgeMember[]>([]);
   const api = useMemo(
     () =>
       async <T,>(
@@ -88,6 +90,11 @@ export function KnowledgePage({
   useEffect(() => {
     setUploadResults([]);
   }, [activeId]);
+  useEffect(() => {
+    setMembers([]);
+    if (!activeId || settings?.bases.find((base) => base.id === activeId)?.shared) return;
+    void api<{ members: KnowledgeMember[] }>(`/bases/${encodeURIComponent(activeId)}/members`).then((value) => setMembers(value.members ?? [])).catch(() => setMembers([]));
+  }, [activeId, settings, api]);
   useEffect(() => {
     setListing(null);
     if (!activeId) return;
@@ -279,7 +286,7 @@ export function KnowledgePage({
                       setPage(1);
                     }}
                   >
-                    {base.name}
+                    {base.name}{base.shared ? ` · ${t("共享给我的", "Shared with me")}` : ""}
                   </button>
                 </div>
               ))}
@@ -334,8 +341,17 @@ export function KnowledgePage({
                       <h2>{active.name}</h2>
                       <small>{active.id}</small>
                     </div>
+                    {!active.shared && <details className="mk-share">
+                      <summary>{t("共享知识库", "Share knowledge base")}</summary>
+                      <form onSubmit={(event) => { event.preventDefault(); void run(async () => { await api(`/bases/${encodeURIComponent(active.id)}/members`, "POST", { userId: shareUserId.trim() }); setShareUserId(""); setNotice(t("共享成功，用户刷新后即可看到该知识库。", "Shared. The user will see it after refreshing.")); const value = await api<{ members: KnowledgeMember[] }>(`/bases/${encodeURIComponent(active.id)}/members`); setMembers(value.members ?? []); }); }}>
+                        <label>{t("Memmy 用户 ID", "Memmy user ID")}<input value={shareUserId} onChange={(event) => setShareUserId(event.target.value)} placeholder={t("输入对方的用户 ID", "Enter the other user's ID")} required /></label>
+                        <button className="mk-primary" type="submit">{t("确认共享", "Share")}</button>
+                      </form>
+                      {members.length > 0 && <ul className="mk-members">{members.filter((member) => member.status === "ACTIVE").map((member) => <li key={member.userId}><span>{member.name} · {member.userId}</span><button type="button" onClick={() => void run(async () => { await api(`/bases/${encodeURIComponent(active.id)}/members/${encodeURIComponent(member.userId)}`, "DELETE"); setMembers((current) => current.filter((item) => item.userId !== member.userId)); })}>{t("撤销", "Revoke")}</button></li>)}</ul>}
+                    </details>}
                     <button
                       type="button"
+                      disabled={active.shared}
                       onClick={() => {
                         if (
                           !window.confirm(
@@ -360,7 +376,8 @@ export function KnowledgePage({
                       {t("删除知识库", "Delete knowledge base")}
                     </button>
                   </div>
-                  <div className="mk-upload">
+                  {active.shared && <p className="mk-notice">{t(`来自 ${active.ownerName || "其他用户"} 的共享知识库，仅可查看和参与召回。`, `Shared by ${active.ownerName || "another user"}. View and recall only.`)}</p>}
+                  <div className="mk-upload" hidden={active.shared}>
                     <div className="mk-upload-picker">
                       <input
                         ref={uploadInput}
@@ -469,6 +486,7 @@ export function KnowledgePage({
                           </div>
                           <button
                             type="button"
+                            disabled={active.shared}
                             onClick={() => {
                               if (
                                 !window.confirm(

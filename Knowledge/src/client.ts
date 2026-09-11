@@ -89,19 +89,27 @@ export class ManagedKnowledgeClient implements KnowledgeRecallClient {
       current.credential !== session.credential
     )
       throw new KnowledgeError("登录状态已改变，请重试", 401);
-    if (!response.ok)
+    if (!response.ok) {
+      let serverMessage = "";
+      try {
+        const errorPayload = record(await response.clone().json());
+        serverMessage = text(errorPayload.message) || text(errorPayload.error);
+      } catch {
+        // Keep the stable fallback below when the server response is not JSON.
+      }
       throw new KnowledgeError(
         response.status === 401 || response.status === 403
           ? "请重新登录 Memmy"
-          : response.status === 404
+          : serverMessage || (response.status === 404
             ? "知识库不存在或服务尚未就绪"
-            : "知识库操作未完成，请稍后重试",
+            : "知识库操作未完成，请稍后重试"),
         response.status === 401 || response.status === 403
           ? 401
           : response.status === 404
             ? 404
             : 502,
       );
+    }
     let payload: Record<string, unknown>;
     try {
       payload = record(await response.json());
@@ -182,6 +190,8 @@ export function parseSettings(input: unknown): KnowledgeSettings {
         id: text(base.id),
         name: text(base.name),
         selected: base.selected === true,
+        ...(typeof base.shared === "boolean" ? { shared: base.shared } : {}),
+        ...(typeof base.ownerName === "string" && base.ownerName ? { ownerName: base.ownerName } : {}),
       };
     }),
   };

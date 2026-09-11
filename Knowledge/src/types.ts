@@ -2,7 +2,10 @@ export interface KnowledgeBase {
   id: string;
   name: string;
   selected: boolean;
+  shared?: boolean;
+  ownerName?: string;
 }
+export interface KnowledgeMember { userId: string; name: string; status: string; }
 export interface KnowledgeSettings {
   authenticated: boolean;
   enabled: boolean;
