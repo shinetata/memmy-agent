@@ -30,6 +30,8 @@ const SOURCE = ${JSON.stringify(options.source)};
 const MODE = ${JSON.stringify(options.mode)};
 const CONFIG_URL = new URL("./memmy-memory-config.json", import.meta.url);
 const STATE_URL = new URL("./memmy-resume-state.json", import.meta.url);
+const REFERENCE_STATE_URL = new URL("./memmy-ref-state.json", import.meta.url);
+const REFERENCE_DISPLAY_LIMIT = 5;
 const DEFAULT_MEMMY_CONFIG_PATH = join(homedir(), ".memmy", "config.yaml");
 const FETCH_TIMEOUT_MS = 45000;
 const SEARCH_LIMIT = 20;
@@ -73,6 +75,9 @@ async function main() {
   }
 
   const prompt = extractPrompt(payload);
+  if (await handleSessionReference(payload, prompt)) {
+    return;
+  }
   const selection = parseResumeSelection(prompt);
   if (selection) {
     try {
@@ -609,6 +614,270 @@ function parseResumeSelection(prompt) {
   return explicit ? Number(explicit[1]) : 0;
 }
 
+/**
+ * Handles /memmy-ref: list local sessions of other agents, then reference one by number.
+ * Returns true when the prompt was consumed. Candidates only stay valid for the next input,
+ * so a later bare number is never mistaken for a selection.
+ */
+async function handleSessionReference(payload, prompt) {
+  const request = parseReferenceRequest(prompt);
+  const pending = referenceStateForSession(await readReferenceState(), sessionStateKey(payload));
+  if (!request) {
+    // Picking a session and asking in the next message is how Memmy behaves: the pick is held here
+    // instead of spending a host turn on "which part of it?".
+    const waiting = pendingReferenceForSession(await readReferenceState(), sessionStateKey(payload));
+    if (waiting && !isCommandText(prompt)) {
+      await clearReferenceState();
+      return injectPendingReference(payload, waiting, normalizeText(prompt));
+    }
+    if (!pending) {
+      return false;
+    }
+    await clearReferenceState();
+    const selection = parseReferenceSelection(prompt);
+    return selection ? referenceCandidate(payload, pending, selection) : false;
+  }
+  if (request.kind === "cancel") {
+    await clearReferenceState();
+    writeResultOutput("已取消引用。");
+    return true;
+  }
+  if (request.kind === "select") {
+    await clearReferenceState();
+    if (!pending) {
+      writeResultOutput("没有可选的会话，请先输入 /memmy-ref 列出会话。");
+      return true;
+    }
+    return referenceCandidate(payload, pending, request);
+  }
+  try {
+    const client = await createMemmyClient();
+    const result = await client.post("/api/v1/agent-sessions/search", {
+      query: request.query,
+      cwd: workspacePath(payload),
+      excludeConversationIds: currentConversationIds(payload),
+      limit: REFERENCE_DISPLAY_LIMIT
+    });
+    const sessions = Array.isArray(result && result.sessions) ? result.sessions : [];
+    // The service distinguishes "this directory has no project" from "the project has nothing linked",
+    // and the empty message has to tell the person which one to fix.
+    const reason = normalizeText(result && result.reason);
+    if (sessions.length) {
+      await writeReferenceState({
+        createdAt: new Date().toISOString(),
+        sessionKey: sessionStateKey(payload),
+        candidates: sessions.map((session, index) => ({
+          index: index + 1,
+          sourceId: normalizeText(session.sourceId),
+          conversationId: normalizeText(session.conversationId),
+          title: normalizeText(session.title)
+        }))
+      });
+    } else {
+      await clearReferenceState();
+    }
+    writeResultOutput(formatReferenceCandidates(sessions, reason));
+  } catch (error) {
+    writeResultOutput("无法读取本机会话，请确认 Memmy 已打开后重试。（" + formatError(error) + "）");
+  }
+  return true;
+}
+
+async function referenceCandidate(payload, pending, selection) {
+  const candidate = pending.candidates.find(item => item && Number(item.index) === selection.index);
+  if (!candidate) {
+    writeResultOutput("没有序号 " + selection.index + "，请重新输入 /memmy-ref 列出会话。");
+    return true;
+  }
+  let reference;
+  try {
+    const client = await createMemmyClient();
+    reference = await client.post("/api/v1/agent-sessions/reference", {
+      sourceId: candidate.sourceId,
+      conversationId: candidate.conversationId
+    });
+  } catch (error) {
+    writeResultOutput("引用失败：" + formatError(error));
+    return true;
+  }
+  if (MODE === "cursor") {
+    // Cursor's prompt hook can only allow or block, so the file path is handed to the person instead.
+    writeResultOutput("已保存会话「" + oneLine(reference.title) + "」：" + normalizeText(reference.path) + "\n请在下一条消息中让 Agent 先读取这个文件。");
+    return true;
+  }
+  let memoryContext = "";
+  if (selection.question) {
+    try {
+      memoryContext = turnStartMemoryContext(await startCapturedTurn(payload, selection.question));
+    } catch (error) {
+      reportCaptureFailure("start_failed", error, payload);
+    }
+  }
+  if (!selection.question) {
+    const createdAt = new Date().toISOString();
+    await writeReferenceState({
+      createdAt,
+      sessionKey: sessionStateKey(payload),
+      pending: {
+        agentName: normalizeText(reference.agentName),
+        title: normalizeText(reference.title),
+        path: normalizeText(reference.path),
+        updatedAt: normalizeText(reference.updatedAt),
+        turnCount: Number(reference.turnCount || 0),
+        createdAt
+      }
+    });
+    writeResultOutput("已引用 " + normalizeText(reference.agentName) + " 的会话「" + oneLine(reference.title) +
+      "」。直接在输入框里写你的问题，我会把这份会话记录一起发给 Agent。");
+    return true;
+  }
+  const context = formatReferenceContext(reference, selection.question);
+  writeResumeContextOutput(memoryContext ? context + "\n\n" + memoryContext : context);
+  return true;
+}
+
+/** Sends the held pick together with the question typed after it. */
+async function injectPendingReference(payload, reference, question) {
+  let memoryContext = "";
+  if (question) {
+    try {
+      memoryContext = turnStartMemoryContext(await startCapturedTurn(payload, question));
+    } catch (error) {
+      reportCaptureFailure("start_failed", error, payload);
+    }
+  }
+  const context = formatReferenceContext(reference, question);
+  writeResumeContextOutput(memoryContext ? context + "\n\n" + memoryContext : context);
+  return true;
+}
+
+function parseReferenceRequest(prompt) {
+  const text = normalizeText(prompt);
+  const shim = text.match(/MEMMY_REF_COMMAND_ARGUMENTS:\s*([\s\S]*?)\s*MEMMY_REF_COMMAND_END/u);
+  let args = shim ? normalizeText(shim[1]) : null;
+  if (args === null) {
+    for (const command of ["/memmy-ref", "$memmy-ref", "memmy-ref"]) {
+      if (text === command || text.startsWith(command + " ") || text.startsWith(command + "\n")) {
+        args = normalizeText(text.slice(command.length));
+        break;
+      }
+    }
+  }
+  if (args === null) {
+    return null;
+  }
+  if (args === "cancel") {
+    return { kind: "cancel" };
+  }
+  const selection = parseReferenceSelection(args);
+  return selection ? { kind: "select", ...selection } : { kind: "list", query: args };
+}
+
+function parseReferenceSelection(text) {
+  const match = normalizeText(text).match(/^([1-9])(?:\s+([\s\S]+))?$/u);
+  return match ? { index: Number(match[1]), question: normalizeText(match[2]) } : null;
+}
+
+function currentConversationIds(payload) {
+  return [
+    payload.session_id,
+    payload.sessionId,
+    payload.conversation_id,
+    payload.conversationId,
+    payload.thread_id,
+    payload.threadId
+  ].map(normalizeText).filter(Boolean);
+}
+
+function formatReferenceCandidates(sessions, reason) {
+  if (!sessions.length) {
+    if (reason === "no_project") {
+      return "当前目录还没有关联到 Memmy 本地项目。先在 Memmy 中把这个目录建为本地项目并关联会话，再输入 /memmy-ref。";
+    }
+    if (reason === "no_association") {
+      return "这个本地项目还没有关联任何会话。先在 Memmy 中关联其他 Agent 的会话，再输入 /memmy-ref。";
+    }
+    if (reason === "no_match") {
+      return "没有匹配的会话。换个更短的关键词，或直接输入 /memmy-ref 查看全部。";
+    }
+    return "没有匹配的会话。";
+  }
+  const lines = ["可引用的会话（输入序号引用）："];
+  sessions.forEach((session, index) => {
+    lines.push((index + 1) + ". " + (oneLine(session.title) || "（无标题）"));
+    lines.push("   " + normalizeText(session.agentName) + " · " + formatShortLocalTime(session.updatedAt));
+    const lastQuestion = oneLine(session.lastQuestion);
+    if (lastQuestion && lastQuestion !== oneLine(session.title)) {
+      lines.push("   " + truncateText(lastQuestion, 80));
+    }
+  });
+  return lines.join("\n");
+}
+
+function formatReferenceContext(reference, question) {
+  const lines = [
+    "<memmy_reference>",
+    "已引用 " + normalizeText(reference.agentName) + " 的会话「" + oneLine(reference.title) + "」（最近交互 " +
+      formatShortLocalTime(reference.updatedAt) + "，共 " + Number(reference.turnCount || 0) + " 轮）。",
+    "完整记录：" + normalizeText(reference.path),
+    "回答与该会话相关的问题前，先读取此文件。"
+  ];
+  if (!question) {
+    lines.push("用户只选择了引用，还没有提问：简要确认已引用的会话，然后等待提问。");
+  }
+  lines.push("</memmy_reference>");
+  return lines.join("\n");
+}
+
+function formatShortLocalTime(value) {
+  const date = new Date(normalizeText(value));
+  if (Number.isNaN(date.getTime())) {
+    return "时间未知";
+  }
+  const pad = (number) => String(number).padStart(2, "0");
+  return (date.getMonth() + 1) + "/" + pad(date.getDate()) + " " + pad(date.getHours()) + ":" + pad(date.getMinutes());
+}
+
+async function readReferenceState() {
+  try {
+    const state = parseJson(await readFile(REFERENCE_STATE_URL, "utf8"));
+    return state && typeof state === "object" && !Array.isArray(state) ? state : null;
+  } catch {
+    return null;
+  }
+}
+
+async function writeReferenceState(state) {
+  await writeFile(REFERENCE_STATE_URL, JSON.stringify(state, null, 2) + "\n", "utf8");
+}
+
+async function clearReferenceState() {
+  await unlink(REFERENCE_STATE_URL).catch(() => undefined);
+}
+
+function referenceStateForSession(state, sessionKey) {
+  if (!state || !Array.isArray(state.candidates) || normalizeText(state.sessionKey) !== sessionKey) {
+    return null;
+  }
+  const createdAt = Date.parse(normalizeText(state.createdAt));
+  return Number.isFinite(createdAt) && Date.now() - createdAt <= STATE_TTL_MS ? state : null;
+}
+
+/** A held reference from the previous turn, cleared by the time to live. */
+function pendingReferenceForSession(state, sessionKey) {
+  if (!state || !state.pending || normalizeText(state.sessionKey) !== sessionKey) {
+    return null;
+  }
+  const createdAt = Date.parse(normalizeText(state.pending.createdAt));
+  return Number.isFinite(createdAt) && Date.now() - createdAt <= STATE_TTL_MS ? state.pending : null;
+}
+
+/** Never swallow another slash command while a reference is held. */
+function isCommandText(prompt) {
+  const text = normalizeText(prompt);
+  return text.startsWith("/") || text.startsWith("$");
+}
+
 function sessionStateKey(payload) {
   return normalizeText(payload.session_id) ||
     normalizeText(payload.sessionId) ||
@@ -710,20 +979,28 @@ function writeTurnStartOutput(started) {
     writeAllowOutput();
     return;
   }
+  const context = turnStartMemoryContext(started);
+  if (!context) {
+    writeAllowOutput();
+    return;
+  }
+  writeResumeContextOutput(context);
+}
+
+function turnStartMemoryContext(started) {
   const injected = started && started.injectedContext && typeof started.injectedContext === "object"
     ? normalizeText(started.injectedContext.markdown)
     : normalizeText(started && started.injectedContext);
   if (!injected) {
-    writeAllowOutput();
-    return;
+    return "";
   }
-  writeResumeContextOutput([
+  return [
     '<memmy_memory_context source="turn_start">',
     "The following is historical memory context. Use it as supporting context, not as a new user request.",
     "",
     injected,
     "</memmy_memory_context>"
-  ].join("\n"));
+  ].join("\n");
 }
 
 function writeResultOutput(message) {
@@ -1307,6 +1584,7 @@ function formatError(error) {
 function sanitizeCaptureText(value) {
   return normalizeText(value)
     .replace(/<memmy_memory_context\b[\s\S]*?<\/memmy_memory_context>/giu, "")
+    .replace(/<memmy_reference>[\s\S]*?<\/memmy_reference>/giu, "")
     .replace(/<current_user_request>[\s\S]*?<\/current_user_request>/giu, "")
     .trim();
 }

@@ -122,6 +122,8 @@ async function runMemoryService(argv: string[], lifecycle: {
                 ? { localServiceToken: config.storage.token }
                 : { allowAnonymous: true },
             configPath,
+            localProjectsFile: join(serviceHome, "local-projects.json"),
+            localSessionIndexFile: join(serviceHome, "local-session-index.json"),
             startAgentSourceAutomation: true
         });
         server = listening.server;

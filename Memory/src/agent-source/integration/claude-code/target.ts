@@ -24,6 +24,7 @@ const WORKSPACE_BRIDGE_FILE_NAME = "memmy-workspace-bridge.mjs";
 const HOOK_TIMEOUT_SECONDS = 60;
 const COMMAND_DIRECTORY_NAME = "commands";
 const RESUME_COMMAND_FILE_NAME = "memmy-resume.md";
+const REFERENCE_COMMAND_FILE_NAME = "memmy-ref.md";
 const LEGACY_TARGET_FILE_NAMES = ["claude.md"];
 const START_MARKER = "<!-- memmy:start v=1 -->";
 const END_MARKER = "<!-- memmy:end v=1 -->";
@@ -107,6 +108,7 @@ export function createClaudeCodeSkillTarget(deps: CreateClaudeCodeSkillTargetDep
         await loadMemmyWorkspaceBridgeRuntimeAsset()
       );
       await writeFileAtomically(join(root, COMMAND_DIRECTORY_NAME, RESUME_COMMAND_FILE_NAME), CLAUDE_CODE_RESUME_COMMAND);
+      await writeFileAtomically(join(root, COMMAND_DIRECTORY_NAME, REFERENCE_COMMAND_FILE_NAME), CLAUDE_CODE_REFERENCE_COMMAND);
       await upsertClaudeCodeHookSettings(join(root, SETTINGS_FILE_NAME), hookScriptPath);
       await rm(join(root, HOOK_DIRECTORY_NAME, LEGACY_HOOK_SCRIPT_FILE_NAME), { force: true });
 
@@ -132,6 +134,7 @@ export function createClaudeCodeSkillTarget(deps: CreateClaudeCodeSkillTargetDep
       await rm(join(root, HOOK_DIRECTORY_NAME, HOOK_CONFIG_FILE_NAME), { force: true });
       await rm(join(root, HOOK_DIRECTORY_NAME, WORKSPACE_BRIDGE_FILE_NAME), { force: true });
       await rm(join(root, COMMAND_DIRECTORY_NAME, RESUME_COMMAND_FILE_NAME), { force: true });
+      await rm(join(root, COMMAND_DIRECTORY_NAME, REFERENCE_COMMAND_FILE_NAME), { force: true });
       const filePath = join(root, TARGET_FILE_NAME);
       await writeFileAtomically(filePath, removeMarkerBlock(removeLegacyMarkerBlock(await readTextFile(filePath))));
       await removeLegacyAgentInstructions(root);
@@ -358,6 +361,20 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function isNodeError(error: unknown): error is NodeJS.ErrnoException {
   return error instanceof Error && "code" in error;
 }
+
+const CLAUDE_CODE_REFERENCE_COMMAND = `---
+description: Reference another local agent session through Memmy.
+argument-hint: [keyword | number [question] | cancel]
+---
+
+MEMMY_REF_COMMAND_ARGUMENTS:
+$ARGUMENTS
+MEMMY_REF_COMMAND_END
+
+This slash command is a parser shim for the installed Memmy UserPromptSubmit hook.
+If a <memmy_reference> block is attached, follow it and treat any text after the leading number above as the user's request.
+Otherwise respond only with: Memmy reference hook did not intercept this command; reinstall the Memmy Claude Code hook.
+`;
 
 const CLAUDE_CODE_RESUME_COMMAND = `---
 description: Fast Memmy resume lookup handled by the installed hook.

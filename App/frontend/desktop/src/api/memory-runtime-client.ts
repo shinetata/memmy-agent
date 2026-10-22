@@ -66,6 +66,24 @@ import { z } from "zod";
 const ApproveObservedSkillOutputSchema = z.object({ id: z.string(), status: z.literal("activated"), serverTime: z.string() });
 const UpdateObservedSkillOutputSchema = ApproveObservedSkillOutputSchema.extend({ version: z.number().int().positive() });
 
+const LocalSessionCandidateSchema = z.object({
+  sourceId: z.string(),
+  agentName: z.string(),
+  conversationId: z.string(),
+  title: z.string(),
+  lastQuestion: z.string(),
+  workspacePath: z.string().nullable(),
+  updatedAt: z.string(),
+  turnCount: z.number()
+});
+const LocalSessionSearchOutputSchema = z.object({ sessions: z.array(LocalSessionCandidateSchema) });
+const LocalSessionReferenceSchema = LocalSessionCandidateSchema.extend({ path: z.string(), markdown: z.string() });
+
+/** A session the person had with another agent on this computer. */
+export type LocalSessionCandidate = z.infer<typeof LocalSessionCandidateSchema>;
+/** A referenced session rendered to Markdown, with the file the Memory service saved it to. */
+export type LocalSessionReference = z.infer<typeof LocalSessionReferenceSchema>;
+
 export const MEMORY_RUNTIME_ENDPOINTS = [
   "GET /api/v1/health",
   "POST /api/v1/admin/reload-config",
@@ -74,6 +92,8 @@ export const MEMORY_RUNTIME_ENDPOINTS = [
   "POST /api/v1/turns/start",
   "POST /api/v1/turns/:turnId/complete",
   "POST /api/v1/memory/search",
+  "POST /api/v1/agent-sessions/search",
+  "POST /api/v1/agent-sessions/reference",
   "POST /api/v1/memory/add",
   "POST /api/v1/evidence/skills/:id/approve",
   "PATCH /api/v1/evidence/skills/:id",
@@ -98,6 +118,12 @@ export interface MemoryRuntimeClient {
   startTurn(input: StartTurnInput): Promise<StartTurnOutput>;
   completeTurn(turnId: string, input: CompleteTurnInput): Promise<CompleteTurnOutput>;
   search(input: SearchInput): Promise<SearchOutput>;
+  /**
+   * Sessions associated with a local project. Passing `cwd` scopes the list to the project that
+   * contains that directory; without it every project's associations are listed.
+   */
+  searchLocalSessions?(input: { query: string; limit?: number; cwd?: string }): Promise<LocalSessionCandidate[]>;
+  referenceLocalSession?(input: { sourceId: string; conversationId: string }): Promise<LocalSessionReference>;
   addMemory(input: AddMemoryInput): Promise<AddMemoryOutput>;
   getMemory(id: string): Promise<GetMemoryOutput>;
   deleteMemory(id: string): Promise<DeleteMemoryOutput>;
@@ -162,6 +188,15 @@ export function createHttpMemoryRuntimeClient(config: RuntimeConfig): MemoryRunt
 
     async search(input) {
       return requestJson({ config, path: "/api/v1/memory/search", schema: SearchOutputSchema, body: SearchInputSchema.parse(input) });
+    },
+
+    async searchLocalSessions(input) {
+      const output = await requestJson({ config, path: "/api/v1/agent-sessions/search", schema: LocalSessionSearchOutputSchema, body: input });
+      return output.sessions;
+    },
+
+    async referenceLocalSession(input) {
+      return requestJson({ config, path: "/api/v1/agent-sessions/reference", schema: LocalSessionReferenceSchema, body: input });
     },
 
     async addMemory(input) {

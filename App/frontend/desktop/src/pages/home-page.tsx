@@ -65,6 +65,14 @@ import {
   type SlashCommandPaletteItem,
   type SlashCommandStorageLike
 } from "./agent-command-palette.js";
+import {
+  AgentSessionMentionPalette,
+  MAX_VISIBLE_SESSION_MENTIONS,
+  removeSessionMention,
+  sessionMentionQueryFromInput,
+  sessionReferenceFile
+} from "./agent-session-mention.js";
+import type { LocalSessionCandidate } from "../api/memory-runtime-client.js";
 import { AgentAttachmentCard, splitAgentAttachmentName } from "./agent-file-attachment-chip.js";
 import { AgentGoalBar, type AgentGoalControlRequest } from "./agent-goal-bar.js";
 import { AgentQueuedMessageList, queuedComposerEditDecision } from "./agent-queued-message-list.js";
@@ -887,6 +895,9 @@ export function HomePage() {
   const slashCommandsAttemptRef = useRef(0);
   const [slashMenuDismissed, setSlashMenuDismissed] = useState(false);
   const [selectedCommandIndex, setSelectedCommandIndex] = useState(0);
+  const [sessionMentions, setSessionMentions] = useState<LocalSessionCandidate[]>([]);
+  const [sessionMentionDismissed, setSessionMentionDismissed] = useState(false);
+  const [selectedSessionMentionIndex, setSelectedSessionMentionIndex] = useState(0);
   const [selectedComposerCommandsByScope, setSelectedComposerCommandsByScope] = useState<Record<string, typeof COMPOSER_GOAL_COMMAND>>({});
   const [recentSlashCommands, setRecentSlashCommands] = useState<string[]>(() => readRecentSlashCommands());
   const [statusPanel, setStatusPanel] = useState<StatusPanelState>({ open: false });
@@ -1632,6 +1643,10 @@ export function HomePage() {
     : visibleSlashCommands;
   const filteredSlashCommands = slashQuery == null ? [] : filterSlashCommands(modeVisibleSlashCommands, slashQuery, recentSlashCommands);
   const slashMenuOpen = filteredSlashCommands.length > 0;
+  const sessionMentionQuery = slashMenuOpen || sessionMentionDismissed || !clients?.memoryRuntime?.searchLocalSessions
+    ? null
+    : sessionMentionQueryFromInput(composerInput);
+  const sessionMentionMenuOpen = sessionMentionQuery != null && sessionMentions.length > 0;
   const displayConnectionStatus = state.agent.recoveryKind === "initial"
     ? "connecting"
     : state.agent.recoveryKind === "reconnect"
@@ -1677,6 +1692,33 @@ export function HomePage() {
       setSelectedCommandIndex(0);
     }
   }, [filteredSlashCommands.length, selectedCommandIndex]);
+
+  useEffect(() => {
+    const client = clients?.memoryRuntime;
+    if (sessionMentionQuery == null || !client?.searchLocalSessions) {
+      setSessionMentions([]);
+      return;
+    }
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      void client.searchLocalSessions!({ query: sessionMentionQuery, limit: MAX_VISIBLE_SESSION_MENTIONS })
+        .then((sessions) => {
+          if (!cancelled) {
+            setSessionMentions(sessions);
+            setSelectedSessionMentionIndex(0);
+          }
+        })
+        .catch(() => {
+          if (!cancelled) {
+            setSessionMentions([]);
+          }
+        });
+    }, 150);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [clients?.memoryRuntime, sessionMentionQuery]);
 
   useEffect(() => {
     composerDraftsRef.current = composerDrafts;
@@ -2251,6 +2293,7 @@ export function HomePage() {
     setCurrentComposerDraft(buildComposerCommandDraft(selectedComposerCommand, value));
     setSlashMenuDismissed(false);
     setSelectedCommandIndex(0);
+    setSessionMentionDismissed(false);
     if (
       slashQueryFromInput(value) != null &&
       clients?.memmyAgent &&
@@ -2259,6 +2302,24 @@ export function HomePage() {
     ) {
       loadSlashCommands({ resetAttempts: true });
     }
+  }
+
+  /** Attaches the picked local session as a Markdown file and removes the @ token from the draft. */
+  async function selectSessionMention(session: LocalSessionCandidate) {
+    const client = clients?.memoryRuntime;
+    const scopeKey = chatScopeKey;
+    updateComposerInput(removeSessionMention(composerInput));
+    setSessionMentions([]);
+    if (!client?.referenceLocalSession) {
+      return;
+    }
+    try {
+      const reference = await client.referenceLocalSession({ sourceId: session.sourceId, conversationId: session.conversationId });
+      await attachMediaFilesToScope(scopeKey, [sessionReferenceFile(reference)]);
+    } catch (error) {
+      setComposerMediaErrorForScope(scopeKey, error instanceof Error ? error.message : String(error));
+    }
+    inputRef.current?.focus();
   }
 
   /** Removes the selected command token while preserving the typed message. */
@@ -2650,6 +2711,32 @@ export function HomePage() {
       }
     }
 
+    if (sessionMentionMenuOpen) {
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        setSelectedSessionMentionIndex((index) => (index + 1) % sessionMentions.length);
+        return;
+      }
+      if (event.key === "ArrowUp") {
+        event.preventDefault();
+        setSelectedSessionMentionIndex((index) => (index - 1 + sessionMentions.length) % sessionMentions.length);
+        return;
+      }
+      if (event.key === "Enter" || event.key === "Tab") {
+        event.preventDefault();
+        const session = sessionMentions[selectedSessionMentionIndex] ?? sessionMentions[0];
+        if (session) {
+          void selectSessionMention(session);
+        }
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setSessionMentionDismissed(true);
+        return;
+      }
+    }
+
     if (event.key === "Escape" && historyDagPanel.open) {
       event.preventDefault();
       setHistoryDagPanel({ open: false });
@@ -2911,6 +2998,11 @@ export function HomePage() {
                     <AgentCommandPalette commands={filteredSlashCommands} heading={t("home.commandPalette.commands")} selectedIndex={selectedCommandIndex} onSelect={selectSlashCommand} />
                   </div>
                 )}
+                {sessionMentionMenuOpen && (
+                  <div className="absolute left-0 bottom-full mb-3 z-40" style={{ width: "min(448px, 100%)" }}>
+                    <AgentSessionMentionPalette sessions={sessionMentions} heading={t("home.sessionMention.heading")} selectedIndex={selectedSessionMentionIndex} onSelect={(session) => { void selectSessionMention(session); }} />
+                  </div>
+                )}
                 {lastCompactionPanel.open && !slashMenuOpen && (
                   <div className="absolute left-0 bottom-full mb-3 z-30 w-full" style={{ right: 0 }}>
                     <AgentStatusPanel state={lastCompactionPanel} closeLabel={t("common.close")} loadingLabel={t("home.agent.connecting")} onClose={closeLastCompactionPanel} />
@@ -3065,6 +3157,11 @@ export function HomePage() {
                 {slashMenuOpen && (
                   <div className="agent-composer-popover absolute left-0 bottom-full mb-3 z-40" style={{ width: "min(448px, 100%)" }}>
                     <AgentCommandPalette commands={filteredSlashCommands} heading={t("home.commandPalette.commands")} selectedIndex={selectedCommandIndex} onSelect={selectSlashCommand} />
+                  </div>
+                )}
+                {sessionMentionMenuOpen && (
+                  <div className="agent-composer-popover absolute left-0 bottom-full mb-3 z-40" style={{ width: "min(448px, 100%)" }}>
+                    <AgentSessionMentionPalette sessions={sessionMentions} heading={t("home.sessionMention.heading")} selectedIndex={selectedSessionMentionIndex} onSelect={(session) => { void selectSessionMention(session); }} />
                   </div>
                 )}
                 {statusPanel.open && !slashMenuOpen && (

@@ -1,0 +1,514 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>引用会话</title>
+<style>
+  :root {
+    --bg: #fbfbfa;
+    --panel: #ffffff;
+    --line: #ecebe8;
+    --line-strong: #e4e3df;
+    --text: #1f2328;
+    --muted: #8b8f98;
+    --muted-soft: #a8acb4;
+    --select: #eaf2ec;
+    --select-border: #cfe3d5;
+    --accent: #2f7a4f;
+    --warn: #b0661f;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    font: 13px/1.45 -apple-system, "SF Pro Text", "PingFang SC", sans-serif;
+    color: var(--text);
+    background: var(--bg);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  /* 搜索 */
+  .search { display: flex; align-items: center; gap: 10px; padding: 13px 16px 10px; -webkit-app-region: drag; }
+  .search svg { flex: none; color: var(--muted); -webkit-app-region: no-drag; }
+  .search input {
+    flex: 1; min-width: 0; border: 0; outline: none; background: transparent;
+    font-size: 15px; color: var(--text); -webkit-app-region: no-drag;
+  }
+  .search input::placeholder { color: var(--muted-soft); }
+
+  /* Agent 过滤：单行，不换行 */
+  .filters {
+    display: flex; align-items: center; gap: 4px;
+    padding: 0 12px 9px; overflow: hidden;
+    border-bottom: 1px solid var(--line);
+  }
+  .chip {
+    flex: none; white-space: nowrap;
+    font-size: 12px; color: var(--muted); line-height: 1;
+    padding: 6px 11px; border-radius: 999px;
+    border: 1px solid transparent; background: transparent;
+  }
+  .chip:hover { background: rgba(0, 0, 0, 0.04); }
+  .chip.on { color: var(--accent); background: var(--select); border-color: var(--select-border); font-weight: 500; }
+
+  /* 列表 */
+  .list { flex: 1; overflow-y: auto; padding: 4px 8px 8px; }
+  .row {
+    display: flex; align-items: center; gap: 11px;
+    padding: 9px 10px; border-radius: 10px; margin: 1px 0;
+    cursor: default; border: 1px solid transparent;
+  }
+  .row:hover { background: rgba(0, 0, 0, 0.035); }
+  .row.focused { background: rgba(0, 0, 0, 0.05); }
+  .row.selected { background: var(--select); border-color: var(--select-border); }
+  .logo {
+    flex: none; width: 32px; height: 32px; border-radius: 8px;
+    background: #f2f2f0; display: flex; align-items: center; justify-content: center;
+    overflow: hidden;
+  }
+  .logo img { width: 22px; height: 22px; object-fit: contain; }
+  .body { flex: 1; min-width: 0; }
+  .title {
+    font-size: 13.5px; font-weight: 600; letter-spacing: -0.01em;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .sub {
+    margin-top: 1px; font-size: 12px; color: var(--muted);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .meta { flex: none; font-size: 11.5px; color: var(--muted-soft); white-space: nowrap; }
+  /* 多选指示：未选是空心圈，选中是实心勾 */
+  .check {
+    flex: none; width: 18px; height: 18px; border-radius: 50%;
+    border: 1.5px solid var(--line-strong); background: #fff;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 11px; color: transparent;
+  }
+  .row.selected .check { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+  .empty { padding: 44px 20px; text-align: center; color: var(--muted); font-size: 12.5px; line-height: 2; }
+  .link { color: var(--accent); border: 0; background: none; font: inherit; padding: 0; }
+  .link:hover { text-decoration: underline; }
+
+  /* 底部 */
+  footer { border-top: 1px solid var(--line); background: var(--panel); padding: 10px 12px 11px; }
+  .chosen { display: flex; align-items: center; gap: 8px; padding: 0 2px 8px; min-height: 20px; }
+  .chosen .text { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .chosen .pill {
+    flex: none; font-size: 11px; color: var(--accent);
+    background: var(--select); border: 1px solid var(--select-border);
+    border-radius: 999px; padding: 1px 8px;
+  }
+  .ask {
+    width: 100%; height: 50px; resize: none; padding: 9px 11px;
+    font: inherit; font-size: 13px; color: var(--text);
+    border: 1px solid var(--line-strong); border-radius: 9px;
+    background: #fff; outline: none;
+  }
+  .ask:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(47, 122, 79, 0.10); }
+  .actions { display: flex; align-items: center; gap: 8px; margin-top: 9px; }
+  .actions .grow { flex: 1; }
+  button.btn {
+    font: inherit; font-size: 12.5px; padding: 6px 13px; border-radius: 8px;
+    border: 1px solid var(--line-strong); background: #fff; color: var(--text);
+  }
+  button.btn:hover { background: #f7f7f5; }
+  button.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 500; }
+  button.btn.primary:hover { background: #2a6b45; }
+  button.btn:disabled { opacity: .45; }
+  button.btn.ghost { border-color: transparent; color: var(--muted); }
+  .hint { font-size: 11px; color: var(--muted-soft); }
+  .status { font-size: 11px; color: var(--muted); margin-top: 6px; min-height: 13px; }
+  .status.warn { color: var(--warn); }
+  .status.tip { color: var(--accent); min-height: 0; margin-top: 8px; display: none; }
+  .status.tip.warn { color: var(--warn); }
+</style>
+</head>
+<body>
+  <div class="search">
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6">
+      <circle cx="7" cy="7" r="4.6"></circle><path d="M10.6 10.6 14 14"></path>
+    </svg>
+    <input id="query" placeholder="搜索会话标题、提问或 Agent" autocomplete="off" spellcheck="false" />
+  </div>
+
+  <div class="filters" id="filters">
+    <button class="chip on" data-source="">全部</button>
+    <button class="chip" data-source="claude_code">Claude Code</button>
+    <button class="chip" data-source="codex">Codex</button>
+    <button class="chip" data-source="workbuddy">WorkBuddy</button>
+    <button class="chip" data-source="cursor">Cursor</button>
+  </div>
+
+  <div class="list" id="list"></div>
+
+  <footer>
+    <div class="chosen" id="chosen"></div>
+    <textarea id="question" class="ask" placeholder="写下问题（可留空，只引用会话）"></textarea>
+    <div class="actions">
+      <button class="btn primary" id="send" disabled>引用到当前窗口</button>
+      <button class="btn" id="copy" disabled>仅复制</button>
+      <span class="grow"></span>
+      <span class="hint" id="hint">⌘↵ 引用 · ⌘C 复制</span>
+      <button class="btn ghost" id="close">关闭</button>
+    </div>
+    <div class="status tip" id="tip"></div>
+    <div class="status" id="status"></div>
+  </footer>
+
+<script>
+  const api = window.memmyRefPicker;
+
+  const AGENTS = {
+    claude_code: { label: 'Claude Code', logo: 'agent-logos/claude-code.svg' },
+    codex: { label: 'Codex', logo: 'agent-logos/codex.svg' },
+    workbuddy: { label: 'WorkBuddy', logo: 'agent-logos/workbuddy.png' },
+    cursor: { label: 'Cursor', logo: 'agent-logos/cursor.svg' },
+    opencode: { label: 'OpenCode', logo: 'agent-logos/opencode.svg' },
+    openclaw: { label: 'OpenClaw', logo: 'agent-logos/openclaw.svg' },
+    hermes: { label: 'Hermes', logo: 'agent-logos/hermes.svg' },
+    deepseek_harness: { label: 'DeepSeek', logo: 'agent-logos/deepseek-harness.svg' },
+    pi: { label: 'Pi', logo: 'agent-logos/pi.svg' },
+    qwenwork: { label: 'QwenWork', logo: 'agent-logos/qwenwork.svg' }
+  };
+
+  const state = {
+    /** 一次性取回的全部索引元数据；切 Agent 与搜关键词都在本地过滤 */
+    all: [],
+    sessions: [],
+    /** 多选：存 sourceId/conversationId 的键 */
+    picked: new Set(),
+    /** 键盘焦点行，不参与选中 */
+    focused: 0,
+    source: '',
+    query: '',
+    status: null,
+    busy: false,
+    /** 请求序号：只接受最后一次请求的结果，避免旧响应覆盖新列表 */
+    seq: 0
+  };
+
+  const el = (id) => document.getElementById(id);
+  const listEl = el('list');
+  const chosenEl = el('chosen');
+  const questionEl = el('question');
+  const statusEl = el('status');
+  const tipEl = el('tip');
+  const sendBtn = el('send');
+  const copyBtn = el('copy');
+
+  const keyOf = (session) => `${session.sourceId}/${session.conversationId}`;
+  const agentOf = (session) => AGENTS[session.sourceId] || { label: session.agentName || session.sourceId, logo: '' };
+
+  function timeLabel(value) {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return '';
+    const now = new Date();
+    const pad = (n) => String(n).padStart(2, '0');
+    if (date.toDateString() === now.toDateString()) return `${pad(date.getHours())}:${pad(date.getMinutes())}`;
+    return date.getFullYear() === now.getFullYear()
+      ? `${date.getMonth() + 1}/${pad(date.getDate())}`
+      : `${date.getFullYear()}/${date.getMonth() + 1}`;
+  }
+
+  function render() {
+    listEl.replaceChildren();
+    if (!state.sessions.length) {
+      const empty = document.createElement('div');
+      empty.className = 'empty';
+      empty.append(document.createTextNode('没有匹配的会话'));
+      empty.append(document.createElement('br'));
+      const link = document.createElement('button');
+      link.className = 'link';
+      link.textContent = '建立全量索引（后台运行）';
+      link.addEventListener('click', () => void startFullIndex());
+      empty.append(link);
+      listEl.append(empty);
+      return;
+    }
+    state.sessions.forEach((session, index) => {
+      const agent = agentOf(session);
+      const row = document.createElement('div');
+      row.className = 'row'
+        + (state.picked.has(keyOf(session)) ? ' selected' : '')
+        + (index === state.focused ? ' focused' : '');
+
+      const logo = document.createElement('div');
+      logo.className = 'logo';
+      if (agent.logo) {
+        const img = document.createElement('img');
+        img.src = agent.logo;
+        img.alt = agent.label;
+        logo.append(img);
+      }
+
+      const body = document.createElement('div');
+      body.className = 'body';
+      const title = document.createElement('div');
+      title.className = 'title';
+      title.textContent = session.title || '（无标题）';
+      const sub = document.createElement('div');
+      sub.className = 'sub';
+      sub.textContent = session.lastQuestion || '';
+      body.append(title, sub);
+
+      const meta = document.createElement('div');
+      meta.className = 'meta';
+      meta.textContent = `${agent.label} · ${timeLabel(session.updatedAt)}`;
+
+      const check = document.createElement('div');
+      check.className = 'check';
+      check.textContent = '✓';
+
+      row.append(logo, body, meta, check);
+      // 只有点击才切换选中；悬停只做视觉反馈
+      row.addEventListener('click', () => toggle(session, index));
+      listEl.append(row);
+    });
+    paintChosen();
+  }
+
+  function toggle(session, index) {
+    const key = keyOf(session);
+    if (state.picked.has(key)) state.picked.delete(key);
+    else state.picked.add(key);
+    state.focused = index;
+    render();
+  }
+
+  function paintChosen() {
+    const count = state.picked.size;
+    chosenEl.replaceChildren();
+    sendBtn.disabled = count === 0 || state.busy;
+    copyBtn.disabled = count === 0 || state.busy;
+    if (!count) {
+      const hint = document.createElement('span');
+      hint.className = 'text';
+      hint.textContent = '点击会话进行选择，可多选';
+      chosenEl.append(hint);
+      return;
+    }
+    const text = document.createElement('span');
+    text.className = 'text';
+    const first = pickedSessions()[0];
+    text.textContent = count === 1
+      ? `已选 ${first.title || '（无标题）'}`
+      : `已选 ${count} 个会话`;
+    chosenEl.append(text);
+    // 按 Agent 汇总，避免一长串标题
+    const byAgent = new Map();
+    for (const session of pickedSessions()) {
+      const label = agentOf(session).label;
+      byAgent.set(label, (byAgent.get(label) || 0) + 1);
+    }
+    for (const [label, n] of byAgent) {
+      const pill = document.createElement('span');
+      pill.className = 'pill';
+      pill.textContent = n > 1 ? `${label} ×${n}` : label;
+      chosenEl.append(pill);
+    }
+  }
+
+  function pickedSessions() {
+    return state.sessions.filter((session) => state.picked.has(keyOf(session)));
+  }
+
+  /** 操作反馈单独一行，不会被索引进度覆盖。 */
+  function showTip(text, warn = false) {
+    tipEl.textContent = text;
+    tipEl.className = 'status tip' + (warn ? ' warn' : '');
+    tipEl.style.display = text ? 'block' : 'none';
+  }
+
+  function renderStatus() {
+    const status = state.status;
+    statusEl.className = 'status';
+    if (!status) { statusEl.textContent = ''; return; }
+    if (status.state === 'running') {
+      const mode = status.mode === 'full' ? '全量索引' : '更新索引';
+      statusEl.textContent = `${mode}中：${status.agentsDone}/${status.agentsTotal} 个 Agent · ${status.sessions} 个会话`;
+      return;
+    }
+    if (status.state === 'failed') {
+      statusEl.textContent = `索引失败：${status.error || '未知原因'}`;
+      return;
+    }
+    statusEl.textContent = '';
+  }
+
+  /** 服务可能刚启动：读不到就退避重试，而不是直接报错。 */
+  async function load(attempt = 0) {
+    const seq = ++state.seq;
+    try {
+      // 一次取回全部元数据（不含正文），后续切 Agent、输入关键词都在本地算，不再发请求。
+      const result = await api.searchSessions({ query: '' });
+      if (seq !== state.seq) return;
+      state.all = result.sessions || [];
+      state.status = result.status || state.status;
+      applyFilter();
+      renderStatus();
+    } catch (error) {
+      if (seq !== state.seq) return;
+      if (attempt < 5) {
+        statusEl.className = 'status';
+        showTip( 'Memmy 服务正在启动，稍候…');
+        setTimeout(() => void load(attempt + 1), 800);
+        return;
+      }
+      state.all = [];
+      state.sessions = [];
+      render();
+      showTip(`无法读取会话：${error.message}。确认 Memmy 正在运行后重试。`, true);
+    }
+  }
+
+  /** 纯本地过滤：Agent + 关键词，按最近活动排序。切 tab 不会有网络等待。 */
+  function applyFilter() {
+    const keywords = state.query.toLowerCase().split(/\s+/u).filter(Boolean);
+    const pool = state.all.filter((session) => {
+      if (state.source && session.sourceId !== state.source) return false;
+      if (!keywords.length) return true;
+      const haystack = `${session.title}\n${session.lastQuestion}\n${agentOf(session).label}`.toLowerCase();
+      return keywords.some((word) => haystack.includes(word));
+    });
+    pool.sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt));
+    state.sessions = pool;
+    const alive = new Set(pool.map(keyOf));
+    for (const key of [...state.picked]) if (!alive.has(key)) state.picked.delete(key);
+    if (state.focused >= pool.length) state.focused = 0;
+    render();
+  }
+
+  async function startFullIndex() {
+    showTip('已开始建立全量索引，在后台运行，可以继续使用。');
+    try {
+      state.status = await api.indexFull();
+      renderStatus();
+      poll();
+    } catch (error) {
+      showTip(`无法开始索引：${error.message}`, true);
+    }
+  }
+
+  let pollTimer = null;
+  function poll() {
+    clearTimeout(pollTimer);
+    pollTimer = setTimeout(async () => {
+      try {
+        const wasRunning = state.status?.state === 'running';
+        state.status = await api.indexStatus();
+        renderStatus();
+        if (state.status?.state === 'running') poll();
+        else if (wasRunning) await load();
+      } catch { /* 忽略轮询失败 */ }
+    }, 1500);
+  }
+
+  async function submit(paste) {
+    const picked = pickedSessions();
+    if (!picked.length) {
+      showTip('先点击会话进行选择，可以多选', true);
+      return;
+    }
+    if (state.busy) return;
+    state.busy = true;
+    paintChosen();
+    showTip(paste ? '正在引用…' : '正在复制…');
+    try {
+      const result = await api.submit({
+        sessions: picked.map((session) => ({ sourceId: session.sourceId, conversationId: session.conversationId })),
+        question: questionEl.value,
+        paste
+      });
+      if (result.pasted) {
+        showTip('');
+        questionEl.value = '';
+        return;
+      }
+      showTip(
+        paste
+          ? '已复制，但没能自动粘贴。请在「隐私与安全性 → 辅助功能」中允许 Memmy，或直接 ⌘V。'
+          : '已复制，去输入框 ⌘V 即可。',
+        paste
+      );
+    } catch (error) {
+      showTip(`引用失败：${error.message}`, true);
+    } finally {
+      state.busy = false;
+      paintChosen();
+    }
+  }
+
+  // 搜索
+  el('query').addEventListener('input', (event) => {
+    state.query = event.target.value;
+    applyFilter();
+  });
+
+  // Agent 过滤
+  el('filters').addEventListener('click', (event) => {
+    const chip = event.target.closest('.chip');
+    if (!chip) return;
+    state.source = chip.dataset.source || '';
+    [...el('filters').querySelectorAll('.chip')].forEach((item) => item.classList.toggle('on', item === chip));
+    state.focused = 0;
+    applyFilter();
+  });
+
+  // 按钮
+  sendBtn.addEventListener('click', () => void submit(true));
+  copyBtn.addEventListener('click', () => void submit(false));
+  el('close').addEventListener('click', () => api.close());
+
+  // 键盘：只在这里处理一次，避免重复提交
+  document.addEventListener('keydown', (event) => {
+    const inTextarea = document.activeElement === questionEl;
+    if (event.key === 'Escape') { event.preventDefault(); api.close(); return; }
+    if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+      event.preventDefault();
+      void submit(true);
+      return;
+    }
+    if (event.key === 'c' && event.metaKey && !inTextarea) {
+      event.preventDefault();
+      void submit(false);
+      return;
+    }
+    if ((event.key === 'ArrowDown' || event.key === 'ArrowUp') && !inTextarea) {
+      event.preventDefault();
+      const count = state.sessions.length;
+      if (!count) return;
+      state.focused = (state.focused + (event.key === 'ArrowDown' ? 1 : count - 1)) % count;
+      render();
+      const row = listEl.querySelectorAll('.row')[state.focused];
+      row?.scrollIntoView({ block: 'nearest' });
+      return;
+    }
+    if (event.key === ' ' && !inTextarea) {
+      event.preventDefault();
+      const session = state.sessions[state.focused];
+      if (session) toggle(session, state.focused);
+    }
+  });
+
+  if (api.onShow) {
+    api.onShow(() => {
+      const input = el('query');
+      input.focus();
+      input.select();
+      state.picked.clear();
+      void load();
+      void api.indexStatus().then((status) => {
+        state.status = status;
+        renderStatus();
+        if (status?.state === 'running') poll();
+      }).catch(() => {});
+    });
+  }
+
+  void load();
+  void api.indexStatus().then((status) => { state.status = status; renderStatus(); }).catch(() => {});
+</script>
+</body>
+</html>

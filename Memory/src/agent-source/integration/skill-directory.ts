@@ -1,8 +1,10 @@
 import { mkdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import {
+  MEMMY_REFERENCE_SKILL_DIRECTORY_NAME,
   MEMMY_RESUME_SKILL_DIRECTORY_NAME,
   MEMMY_SKILL_DIRECTORY_NAME,
+  renderMemmyReferenceSkillFile,
   renderMemmyResumeSkillFile,
   renderMemmySkillDirectoryFiles
 } from "./templates/memmy-skill-directory.js";
@@ -13,9 +15,12 @@ export async function replaceMemmySkillDirectory(rootDirectory: string, manifest
   await replaceDirectory(targetPath, renderMemmySkillDirectoryFiles(manifest));
 }
 
+/** Installs the /memmy-resume skill and its sibling /memmy-ref skill, which share one lifecycle. */
 export async function replaceMemmyResumeSkillDirectory(rootDirectory: string, source: string): Promise<void> {
   const targetPath = join(rootDirectory, "skills", MEMMY_RESUME_SKILL_DIRECTORY_NAME);
   await replaceDirectory(targetPath, [{ relativePath: "SKILL.md", content: renderMemmyResumeSkillFile(source) }]);
+  const referencePath = join(rootDirectory, "skills", MEMMY_REFERENCE_SKILL_DIRECTORY_NAME);
+  await replaceDirectory(referencePath, [{ relativePath: "SKILL.md", content: renderMemmyReferenceSkillFile(source) }]);
 }
 
 async function replaceDirectory(
@@ -56,6 +61,7 @@ export async function removeMemmySkillDirectory(rootDirectory: string): Promise<
 
 export async function removeMemmyResumeSkillDirectory(rootDirectory: string): Promise<void> {
   await rm(join(rootDirectory, "skills", MEMMY_RESUME_SKILL_DIRECTORY_NAME), { recursive: true, force: true });
+  await rm(join(rootDirectory, "skills", MEMMY_REFERENCE_SKILL_DIRECTORY_NAME), { recursive: true, force: true });
 }
 
 function temporarySiblingPath(path: string): string {

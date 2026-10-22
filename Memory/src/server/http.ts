@@ -1,10 +1,26 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { randomUUID } from "node:crypto";
+import { homedir } from "node:os";
+import { dirname, join } from "node:path";
 import type { AddressInfo } from "node:net";
 import {
   createAgentSourceExecutor,
+  createBuiltinSourceRegistry,
   type AgentSourceExecutor
 } from "../agent-source/runtime.js";
+import {
+  createLocalSessionReferenceService,
+  type LocalSessionCandidate,
+  type LocalSessionReferenceService
+} from "../agent-source/session-reference/local-session-reference.js";
+import {
+  createLocalProjectStore,
+  type LocalProjectStore
+} from "../agent-source/session-reference/local-project-store.js";
+import {
+  createLocalSessionIndex,
+  type LocalSessionIndex
+} from "../agent-source/session-reference/local-session-index.js";
 import {
   L3WorldModelBoundaryRequestSchema,
   L3WorldModelRequestEnvelopeSchema,
@@ -78,6 +94,17 @@ export const API_ROUTES = [
   "POST /api/v1/turns/:turnId/complete",
   "POST /api/v1/source-turns/complete",
   "POST /api/v1/memory/search",
+  "POST /api/v1/agent-sessions/search",
+  "POST /api/v1/agent-sessions/available",
+  "POST /api/v1/agent-sessions/reference",
+  "POST /api/v1/local-sessions/search",
+  "GET /api/v1/local-sessions/index",
+  "POST /api/v1/local-sessions/index",
+  "GET /api/v1/local-projects",
+  "POST /api/v1/local-projects",
+  "DELETE /api/v1/local-projects/:projectId",
+  "POST /api/v1/local-projects/:projectId/sessions",
+  "DELETE /api/v1/local-projects/:projectId/sessions",
   "GET /api/v1/memory/recalls/:queryId",
   "POST /api/v1/memory/add",
   "POST /api/v1/evidence/sync",
@@ -119,6 +146,10 @@ export interface MemoryHttpServerOptions {
   onRestartRequested?: () => void | Promise<void>;
   agentSourceExecutor?: AgentSourceExecutor;
   startAgentSourceAutomation?: boolean;
+  /** Where local project associations are stored. Defaults to the Memmy home directory. */
+  localProjectsFile?: string;
+  /** Where the local session index lives; one file beside the service data. */
+  localSessionIndexFile?: string;
 }
 
 export interface MemoryHttpAuthOptions {
@@ -172,6 +203,29 @@ export function createMemoryHttpServer(options: MemoryHttpServerOptions): Server
     scheduleWorker: autoWorker.schedule,
     memoryAddAnalytics
   });
+  // Local project associations live beside the service data, so a test config never touches real data.
+  const localProjects = createLocalProjectStore({
+    filePath: options.localProjectsFile ?? defaultLocalProjectsFile(options.configPath)
+  });
+  const localSessions = createLocalSessionIndex({
+    filePath: options.localSessionIndexFile ?? defaultLocalSessionIndexFile(options.configPath),
+    registry: createBuiltinSourceRegistry()
+  });
+  const localSessionContext = {
+    projects: localProjects,
+    references: createLocalSessionReferenceService({
+      registry: createBuiltinSourceRegistry(),
+      projects: localProjects
+    }),
+    index: localSessions
+  };
+  // 索引起来后先补一次「最近会话」，之后每分钟刷一次；全量索引只在界面触发时跑。
+  localSessions.warmUp();
+  const refreshTimer = setInterval(() => {
+    void localSessions.refreshRecent().catch(() => undefined);
+  }, 60_000);
+  // unref 让定时器不阻止进程退出；服务结束时由进程生命周期回收。
+  refreshTimer.unref?.();
   const activeRequests = new Set<Promise<void>>();
   const server = createServer((request, response) => {
     const handling = handleRequest(request, response);
@@ -252,7 +306,8 @@ export function createMemoryHttpServer(options: MemoryHttpServerOptions): Server
         principal,
         Boolean(options.onShutdownRequested),
         pluginRuntimeAnalytics,
-        requestId
+        requestId,
+        localSessionContext
       );
       if (request.method === "POST" && url.pathname === "/api/v1/admin/shutdown") {
         response.once("finish", () => options.onShutdownRequested?.());
@@ -542,7 +597,12 @@ async function routeRequest(
   principal: AuthPrincipal,
   canShutdown: boolean,
   pluginRuntimeAnalytics: PluginRuntimeAnalytics,
-  requestId: string
+  requestId: string,
+  localSessions: {
+    projects: LocalProjectStore;
+    references: LocalSessionReferenceService;
+    index: LocalSessionIndex;
+  }
 ): Promise<unknown> {
   const path = url.pathname;
 
@@ -778,6 +838,118 @@ async function routeRequest(
     );
     scheduleAutoWorkerForEvolution(result, autoWorker);
     return publicCompleteTurnResponse(result);
+  }
+
+  if (method === "POST" && path === "/api/v1/local-sessions/search") {
+    requireMemoryRead(principal);
+    const request = asObject(body, "local-sessions.search");
+    return localSessions.index.search({
+      query: typeof request.query === "string" ? request.query : undefined,
+      cwd: typeof request.cwd === "string" ? request.cwd : null,
+      sourceIds: stringList(request.sourceIds),
+      limit: finiteNumber(request.limit)
+    });
+  }
+  if (method === "GET" && path === "/api/v1/local-sessions/index") {
+    requireMemoryRead(principal);
+    return { status: localSessions.index.status() };
+  }
+  if (method === "POST" && path === "/api/v1/local-sessions/index") {
+    requireMemoryWrite(principal);
+    return { status: localSessions.index.status(), result: localSessions.index.startFullIndex() };
+  }
+
+  if (method === "POST" && path === "/api/v1/agent-sessions/search") {
+    requireMemoryRead(principal);
+    const request = asObject(body, "agent-sessions.search");
+    // Only sessions associated with the asking project are offered, so the answer carries the project
+    // and a reason for an empty list instead of silently looking like there is nothing on this machine.
+    return localSessions.references.search({
+      query: typeof request.query === "string" ? request.query : undefined,
+      cwd: typeof request.cwd === "string" ? request.cwd : null,
+      sourceIds: stringList(request.sourceIds),
+      excludeConversationIds: stringList(request.excludeConversationIds),
+      limit: finiteNumber(request.limit)
+    });
+  }
+  if (method === "POST" && path === "/api/v1/agent-sessions/available") {
+    requireMemoryRead(principal);
+    const request = asObject(body, "agent-sessions.available");
+    return {
+      sessions: await localSessions.references.available({
+        query: typeof request.query === "string" ? request.query : undefined,
+        cwd: typeof request.cwd === "string" ? request.cwd : null,
+        sourceIds: stringList(request.sourceIds),
+        excludeConversationIds: stringList(request.excludeConversationIds),
+        limit: finiteNumber(request.limit)
+      })
+    };
+  }
+  if (method === "POST" && path === "/api/v1/agent-sessions/reference") {
+    requireMemoryRead(principal);
+    const request = asObject(body, "agent-sessions.reference");
+    requireStringField(request, "sourceId", "agent-sessions.reference");
+    requireStringField(request, "conversationId", "agent-sessions.reference");
+    return localSessions.references.reference({
+      sourceId: request.sourceId as string,
+      conversationId: request.conversationId as string
+    });
+  }
+
+  if (method === "GET" && path === "/api/v1/local-projects") {
+    requireMemoryRead(principal);
+    const cwd = url.searchParams.get("cwd");
+    if (cwd) {
+      const project = await localSessions.projects.findByPath(cwd);
+      return { projects: project ? [project] : [] };
+    }
+    return { projects: await localSessions.projects.list() };
+  }
+  if (method === "POST" && path === "/api/v1/local-projects") {
+    requireMemoryWrite(principal);
+    const request = asObject(body, "local-projects.create");
+    requireStringField(request, "name", "local-projects.create");
+    requireStringField(request, "rootPath", "local-projects.create");
+    return {
+      project: await localSessions.projects.createOrUpdate({
+        id: typeof request.id === "string" && request.id.trim() ? request.id : undefined,
+        name: request.name as string,
+        rootPath: request.rootPath as string
+      })
+    };
+  }
+  const projectSessions = match(path, /^\/api\/v1\/local-projects\/([^/]+)\/sessions$/);
+  if (method === "POST" && projectSessions) {
+    requireMemoryWrite(principal);
+    const request = asObject(body, "local-projects.sessions");
+    const requested = Array.isArray(request.sessions) ? request.sessions : [];
+    if (!requested.length) {
+      throw new MemoryServiceError("invalid_argument", "local-projects.sessions requires sessions");
+    }
+    const projectId = decodeMatchSegment(projectSessions, 1);
+    const resolved: LocalSessionCandidate[] = [];
+    for (const item of requested) {
+      resolved.push(await associationCandidate(localSessions.references, asObject(item, "local-projects.sessions")));
+    }
+    return { project: await localSessions.projects.addSessions(projectId, resolved) };
+  }
+  if (method === "DELETE" && projectSessions) {
+    requireMemoryWrite(principal);
+    const request = asObject(body, "local-projects.sessions.remove");
+    const requested = Array.isArray(request.sessions) ? request.sessions : [];
+    const keys = requested.map((item) => {
+      const entry = asObject(item, "local-projects.sessions.remove");
+      requireStringField(entry, "sourceId", "local-projects.sessions.remove");
+      requireStringField(entry, "conversationId", "local-projects.sessions.remove");
+      return { sourceId: entry.sourceId as string, conversationId: entry.conversationId as string };
+    });
+    return { project: await localSessions.projects.removeSessions(decodeMatchSegment(projectSessions, 1), keys) };
+  }
+  const projectDelete = match(path, /^\/api\/v1\/local-projects\/([^/]+)$/);
+  if (method === "DELETE" && projectDelete) {
+    requireMemoryWrite(principal);
+    await localSessions.projects.remove(decodeMatchSegment(projectDelete, 1));
+    return { ok: true };
   }
 
   if (method === "POST" && path === "/api/v1/memory/search") {
@@ -1461,6 +1633,58 @@ function stableTokenId(token: string): string {
     hash = (hash * 31 + token.charCodeAt(index)) >>> 0;
   }
   return `tok_${hash.toString(16).padStart(8, "0")}`;
+}
+
+/** Resolves the association file that belongs to this service's config. */
+function defaultLocalProjectsFile(configPath?: string): string {
+  if (process.env.MEMMY_LOCAL_PROJECTS_FILE?.trim()) {
+    return process.env.MEMMY_LOCAL_PROJECTS_FILE.trim();
+  }
+  const home = process.env.MEMMY_HOME?.trim();
+  return configPath
+    ? join(dirname(configPath), "local-projects.json")
+    : join(home || join(homedir(), ".memmy"), "local-projects.json");
+}
+
+/** 索引文件与关联文件放在同一处，跟着配置走，测试与真实数据互不干扰。 */
+function defaultLocalSessionIndexFile(configPath?: string): string {
+  if (process.env.MEMMY_LOCAL_SESSION_INDEX_FILE?.trim()) {
+    return process.env.MEMMY_LOCAL_SESSION_INDEX_FILE.trim();
+  }
+  const home = process.env.MEMMY_HOME?.trim();
+  return configPath
+    ? join(dirname(configPath), "local-session-index.json")
+    : join(home || join(homedir(), ".memmy"), "local-session-index.json");
+}
+
+/** Resolves one association entry: metadata given by the caller wins, otherwise the session is read once. */
+async function associationCandidate(
+  references: LocalSessionReferenceService,
+  entry: Record<string, unknown>
+): Promise<LocalSessionCandidate> {
+  const sourceId = entry.sourceId as string;
+  const conversationId = entry.conversationId as string;
+  if (typeof entry.title !== "string" || !entry.title.trim()) {
+    return references.describe({ sourceId, conversationId });
+  }
+  return {
+    sourceId,
+    conversationId,
+    agentName: typeof entry.agentName === "string" && entry.agentName.trim() ? entry.agentName : sourceId,
+    title: entry.title,
+    lastQuestion: typeof entry.lastQuestion === "string" ? entry.lastQuestion : "",
+    workspacePath: typeof entry.workspacePath === "string" ? entry.workspacePath : null,
+    updatedAt: typeof entry.updatedAt === "string" ? entry.updatedAt : "",
+    turnCount: finiteNumber(entry.turnCount) ?? 0
+  };
+}
+
+function stringList(value: unknown): string[] | undefined {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : undefined;
+}
+
+function finiteNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
 function requireMemoryRead(principal: AuthPrincipal): void {

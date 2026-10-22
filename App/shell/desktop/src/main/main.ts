@@ -154,6 +154,7 @@ import {
   type WindowsDataLayout
 } from "./windows-data-layout.js";
 import { assertWindowsRuntimeOwnership } from "./windows-runtime-ownership.js";
+import { registerMemmyRefPicker } from "./ref-picker-window.js";
 import { createWindowsUpdateLauncherFile } from "./windows-update-launcher.js";
 import { createWindowsUpdateVerificationScript, validateWindowsUpdateInstaller, windowsUpdatePowerShellExecutable, windowsUpdatePowerShellFile, type WindowsUpdateVerification } from "./windows-update-validation.js";
 import { applyLocalTestProfileEnvironment, prepareLocalTestProfile,
@@ -5799,6 +5800,13 @@ app.whenReady().then(async () => {
 
   installMacQuitEventObserver();
   await boot();
+  // 服务就绪后再注册浮窗，避免第一次打开时读不到会话。
+  // 浮窗只是可选入口，注册失败不能让主程序起不来。
+  try {
+    registerMemmyRefPicker();
+  } catch (error) {
+    console.error("[ref-picker] registration failed", error);
+  }
 }).catch(handleStartupFailure);
 
 app.on("activate", () => {

@@ -12,7 +12,7 @@ describe("memory runtime client", () => {
   });
 
   it("declares the memory runtime endpoints exposed under /api/v1", () => {
-    expect(MEMORY_RUNTIME_ENDPOINTS).toHaveLength(21);
+    expect(MEMORY_RUNTIME_ENDPOINTS).toHaveLength(23);
     expect(MEMORY_RUNTIME_ENDPOINTS).toEqual([
       "GET /api/v1/health",
       "POST /api/v1/admin/reload-config",
@@ -21,6 +21,8 @@ describe("memory runtime client", () => {
       "POST /api/v1/turns/start",
       "POST /api/v1/turns/:turnId/complete",
       "POST /api/v1/memory/search",
+      "POST /api/v1/agent-sessions/search",
+      "POST /api/v1/agent-sessions/reference",
       "POST /api/v1/memory/add",
       "POST /api/v1/evidence/skills/:id/approve",
       "PATCH /api/v1/evidence/skills/:id",
@@ -36,6 +38,26 @@ describe("memory runtime client", () => {
       "GET /api/v1/panel/tasks",
       "DELETE /api/v1/panel/tasks/:id"
     ]);
+  });
+
+  it("searches and references local agent sessions", async () => {
+    const candidate = {
+      sourceId: "codex", agentName: "Codex", conversationId: "codex-1", title: "分享弹窗", lastQuestion: "账号不存在呢？",
+      workspacePath: null, updatedAt: "2026-10-20T08:05:00.000Z", turnCount: 2
+    };
+    const fetchMock = vi.fn(async (url: URL) => new Response(JSON.stringify(url.pathname.endsWith("/search")
+      ? { sessions: [candidate] }
+      : { ...candidate, path: "/cache/codex-codex-1.md", markdown: "# 分享弹窗" }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = createHttpMemoryRuntimeClient(runtimeConfig);
+
+    await expect(client.searchLocalSessions!({ query: "分享", limit: 8 })).resolves.toEqual([candidate]);
+    await expect(client.referenceLocalSession!({ sourceId: "codex", conversationId: "codex-1" }))
+      .resolves.toMatchObject({ path: "/cache/codex-codex-1.md", markdown: "# 分享弹窗" });
+    expect(fetchMock).toHaveBeenNthCalledWith(1, new URL("/api/v1/agent-sessions/search", runtimeConfig.baseUrl),
+      expect.objectContaining({ method: "POST", body: JSON.stringify({ query: "分享", limit: 8 }) }));
+    expect(fetchMock).toHaveBeenNthCalledWith(2, new URL("/api/v1/agent-sessions/reference", runtimeConfig.baseUrl),
+      expect.objectContaining({ method: "POST", body: JSON.stringify({ sourceId: "codex", conversationId: "codex-1" }) }));
   });
 
   it("saves observed Skill content with the original version through PATCH", async () => {
