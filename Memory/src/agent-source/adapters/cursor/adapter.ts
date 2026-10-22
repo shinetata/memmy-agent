@@ -86,7 +86,11 @@ export function createCursorSourceAdapter(deps: CreateCursorSourceAdapterDeps = 
 
         for await (const rawMessage of streamConversationWindow(
           options.fullHistory
-            ? streamCursorVscdb(target.stateDbPath, options.signal)
+            ? streamCursorVscdb(
+              target.stateDbPath,
+              options.signal,
+              options.order === "recent_first" ? options.maxConversations : undefined
+            )
             : readCursorVscdb(target.stateDbPath, options.signal),
           options.since,
           options.signal,

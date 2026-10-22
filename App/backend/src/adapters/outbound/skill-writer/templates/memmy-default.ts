@@ -1,5 +1,6 @@
 /** Memmy default module. */
 import type { SkillManifest } from "../types.js";
+import { onlineProjectSessionLines } from "./online-project-sessions.js";
 
 const MEMMY_MARKER = "<!-- memmy:start v=1 -->";
 
@@ -17,6 +18,8 @@ export function renderMemmyDefaultContent(source: string): string {
     "# Memmy Memory CLI Skill",
     "",
     "Use `memmy-memory` to read and write the shared Memmy memory substrate.",
+    "",
+    ...onlineProjectSessionLines(),
     "",
     "## Ground Rules",
     "",
@@ -93,6 +96,6 @@ export function renderMemmyDefaultContent(source: string): string {
     "",
     "```bash",
     `memmy-memory delete "$MEMORY_ID" --source ${source}`,
-    "```"
+    "```",
   ].join("\n");
 }

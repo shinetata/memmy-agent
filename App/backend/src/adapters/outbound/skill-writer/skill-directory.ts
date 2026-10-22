@@ -1,4 +1,4 @@
-import { mkdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import {
   MEMMY_RESUME_SKILL_DIRECTORY_NAME,
@@ -54,6 +54,19 @@ export async function removeMemmySkillDirectory(rootDirectory: string): Promise<
   await rm(join(rootDirectory, "skills", MEMMY_SKILL_DIRECTORY_NAME), { recursive: true, force: true });
 }
 
+/**
+ * Whether the installed skill already matches this build's content. Lets a connected agent pick up new skill
+ * instructions without being uninstalled and installed again.
+ */
+export async function isMemmySkillDirectoryCurrent(rootDirectory: string, manifest: SkillManifest): Promise<boolean> {
+  const directory = join(rootDirectory, "skills", MEMMY_SKILL_DIRECTORY_NAME);
+  for (const file of renderMemmySkillDirectoryFiles(manifest)) {
+    const actual = await readFile(join(directory, file.relativePath), "utf8").catch(() => null);
+    if (actual !== file.content) return false;
+  }
+  return true;
+}
+
 export async function removeMemmyResumeSkillDirectory(rootDirectory: string): Promise<void> {
   await rm(join(rootDirectory, "skills", MEMMY_RESUME_SKILL_DIRECTORY_NAME), { recursive: true, force: true });
 }
@@ -76,4 +89,16 @@ async function pathExists(path: string): Promise<boolean> {
 
 function isNodeError(error: unknown): error is NodeJS.ErrnoException {
   return error instanceof Error && "code" in error;
+}
+
+/**
+ * Which kind of Memmy skill is installed, judged by its own text, so a refresh keeps the variant the agent was
+ * set up with. `plugin` agents are driven by a hook; `skill` agents call the CLI themselves.
+ */
+export async function readInstalledSkillKind(rootDirectory: string): Promise<"skill" | "plugin" | null> {
+  const content = await readFile(join(rootDirectory, "skills", MEMMY_SKILL_DIRECTORY_NAME, "SKILL.md"), "utf8").catch(() => null);
+  if (content === null) return null;
+  if (content.includes("## Automatic Memory")) return "plugin";
+  if (content.includes("## Agent Loop")) return "skill";
+  return null;
 }

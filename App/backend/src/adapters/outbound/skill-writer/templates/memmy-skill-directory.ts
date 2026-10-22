@@ -15,7 +15,7 @@ export function renderMemmySkillDirectoryFiles(manifest: SkillManifest): Rendere
       content: [
         "---",
         "name: memmy-memory",
-        "description: Use shared Memmy memory when prior context may be relevant.",
+        "description: Use shared Memmy memory when prior context may be relevant, and read Memmy online project sessions when a message contains a Memmy session link or refers to a project member's session.",
         "---",
         "",
         manifest.content.trimEnd(),

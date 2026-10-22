@@ -119,6 +119,25 @@ describe("claude code skill target", () => {
     }
   });
 
+  it("allows the read-only session commands once and removes only its own rules", async () => {
+    const { rootDirectory, memmyConfigPath } = createFixture();
+    const target = createClaudeCodeSkillTarget({ rootDirectory, memmyConfigPath });
+    writeFileSync(join(rootDirectory, "settings.json"), JSON.stringify({ permissions: { allow: ["Bash(npm test:*)"], deny: ["Bash(rm:*)"] } }));
+    const readSettings = () => JSON.parse(readFileSync(join(rootDirectory, "settings.json"), "utf8")) as { permissions?: { allow?: string[]; deny?: string[] } };
+
+    await target.installPlugin?.("claude_code");
+    await target.installPlugin?.("claude_code");
+
+    expect(readSettings().permissions).toEqual({
+      allow: ["Bash(npm test:*)", "Bash(memmy-memory sessions read:*)", "Bash(memmy-memory sessions search:*)", "Read(~/.memmy/projects/**)"],
+      deny: ["Bash(rm:*)"]
+    });
+
+    await target.uninstallPlugin?.("claude_code");
+
+    expect(readSettings().permissions).toEqual({ allow: ["Bash(npm test:*)"], deny: ["Bash(rm:*)"] });
+  });
+
   it("marks a hook without a stored revision as outdated and refreshes it in place", async () => {
     const { rootDirectory, memmyConfigPath } = createFixture();
     const target = createClaudeCodeSkillTarget({ rootDirectory, memmyConfigPath });

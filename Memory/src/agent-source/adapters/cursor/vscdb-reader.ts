@@ -23,10 +23,14 @@ export async function* readCursorVscdb(path: string, signal?: AbortSignal): Asyn
 }
 
 /** Streams without materialising a database-wide message array. */
-export async function* streamCursorVscdb(path: string, signal?: AbortSignal): AsyncIterable<RawCursorMessage> {
+export async function* streamCursorVscdb(
+  path: string,
+  signal?: AbortSignal,
+  recentLimit?: number
+): AsyncIterable<RawCursorMessage> {
   const db = new Database(path, { readonly: true });
   try {
-    yield* readComposers(createSource(db), signal);
+    yield* readComposers(createSource(db, recentLimit), signal);
   } finally {
     db.close();
   }
@@ -41,9 +45,12 @@ async function* readComposers(source: CursorVscdbSource | null, signal?: AbortSi
 }
 
 /** A workspace database without the chat tables is not a conversation store. */
-function createSource(db: Database.Database): CursorVscdbSource | null {
+function createSource(db: Database.Database, recentLimit?: number): CursorVscdbSource | null {
   if (!hasTable(db, "composerHeaders") || !hasTable(db, "cursorDiskKV")) return null;
-  const mainComposers = db.prepare("SELECT composerId FROM composerHeaders WHERE isSubagent = 0 AND composerId IS NOT NULL");
+  const mainComposerQuery = "SELECT composerId FROM composerHeaders WHERE isSubagent = 0 AND composerId IS NOT NULL";
+  const mainComposers = recentLimit === undefined
+    ? db.prepare(mainComposerQuery)
+    : db.prepare(`${mainComposerQuery} ORDER BY lastUpdatedAt DESC LIMIT ${Math.max(1, Math.trunc(recentLimit))}`);
   const diskValue = db.prepare("SELECT value FROM cursorDiskKV WHERE key = ?");
   const parse = (key: string): unknown => {
     const row = diskValue.get(key) as { value?: unknown } | undefined;

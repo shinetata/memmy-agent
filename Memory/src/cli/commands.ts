@@ -21,6 +21,7 @@ import {
 } from "./setup.js";
 import { DEFAULT_MEMORY_URL, loadCliMemoryConfig } from "./config.js";
 import { PROJECT_VERSION } from "./project-version.js";
+import { runProjectSessionsCommand } from "./project-sessions.js";
 import {
   currentInstalledRuntime,
   repairInstalledWindowsMemoryService,
@@ -86,6 +87,11 @@ export async function runCommand(context: CommandContext): Promise<unknown> {
 
   if (words[0] === "serve") {
     return serveMemory(parsed);
+  }
+
+  // Online project sessions go through the desktop app, which holds the account; not the Memory service.
+  if (words[0] === "sessions") {
+    return runProjectSessionsCommand(words.slice(1), parsed, { ...(context.fetch ? { fetch: context.fetch } : {}) });
   }
 
   const getVerbose = words[0] === "get" && optionBoolean(options, "verbose") === true;
@@ -616,6 +622,8 @@ function helpText(): string {
     "  get <id>                     Read one memory by id",
     "  delete <id>                  Delete one memory by id",
     "  raw <method> <path>          Call an exposed Memory API route directly",
+    "  sessions read <link|id>      Read a session of your online projects",
+    "  sessions search <keywords>   Find sessions of your online projects (--member, --project, --limit)",
     "",
     "Setup examples:",
     `  ${CLI_NAME} init`,

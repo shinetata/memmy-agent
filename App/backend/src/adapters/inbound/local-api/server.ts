@@ -6,7 +6,9 @@ import type { ManagedKnowledgeOptions } from "@memmy/knowledge";
 import { registerKnowledgeRoutes } from "@memmy/knowledge/routes";
 import type { PermissionManager } from "../../../permission/index.js";
 import type { BackendServices } from "../../../services/index.js";
+import type { CollabService } from "../../../services/collab-service.js";
 import { registerAccountRoutes } from "./routes/account.js";
+import { registerCollabRoutes } from "./routes/collab.js";
 import { registerTokenQuotaRoutes } from "./routes/token-quota.js";
 import { registerAppConfigRoutes } from "./routes/app-config.js";
 import { registerAgentSourceRoutes } from "./routes/agent-sources.js";
@@ -30,6 +32,8 @@ const FILE_ORIGIN = "file://";
 
 export interface CreateLocalApiServerOptions {
   knowledge?: ManagedKnowledgeOptions;
+  /** Online projects; absent in tests that do not exercise them. */
+  collab?: CollabService;
   permissionManager: PermissionManager;
   services: BackendServices;
   /** Configured agent timezone. Renderer headers are used only when absent. */
@@ -127,6 +131,9 @@ export function createLocalApiServer(options: CreateLocalApiServerOptions): Fast
     localData: options.services.localData,
     authenticateRuntimeToken
   });
+  if (options.collab) {
+    registerCollabRoutes(app, { collab: options.collab, authenticateRuntimeToken });
+  }
   registerByokTokenUsageRoutes(app, {
     byokTokenUsage: options.services.byokTokenUsage,
     authenticateRuntimeToken

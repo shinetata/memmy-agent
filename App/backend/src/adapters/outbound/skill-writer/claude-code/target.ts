@@ -273,7 +273,24 @@ async function upsertClaudeCodeHookSettings(filePath: string, hookScriptPath: st
   hooks.PostCompact = claudeHookEntries(hooks.PostCompact, hookScriptPath);
   hooks.SessionEnd = claudeHookEntries(hooks.SessionEnd, hookScriptPath);
   config.hooks = hooks;
+  const permissions = toMutableRecord(config.permissions);
+  permissions.allow = [...withoutMemmySessionRules(permissions.allow), ...MEMMY_SESSION_PERMISSION_RULES];
+  config.permissions = permissions;
   await writeFileAtomically(filePath, `${JSON.stringify(config, null, 2)}\n`);
+}
+
+/**
+ * Online project sessions are read through read-only commands and saved under ~/.memmy/projects.
+ * Allowing them keeps a pasted session link from stopping on an approval prompt at every step.
+ */
+const MEMMY_SESSION_PERMISSION_RULES = [
+  "Bash(memmy-memory sessions read:*)",
+  "Bash(memmy-memory sessions search:*)",
+  "Read(~/.memmy/projects/**)"
+];
+
+function withoutMemmySessionRules(value: unknown): unknown[] {
+  return Array.isArray(value) ? value.filter((rule) => !MEMMY_SESSION_PERMISSION_RULES.includes(rule as string)) : [];
 }
 
 async function removeClaudeCodeHookSettings(filePath: string): Promise<void> {
@@ -306,6 +323,15 @@ async function removeClaudeCodeHookSettings(filePath: string): Promise<void> {
     config.hooks = hooks;
   } else {
     delete config.hooks;
+  }
+
+  if (config.permissions !== undefined) {
+    const permissions = toMutableRecord(config.permissions);
+    const allow = withoutMemmySessionRules(permissions.allow);
+    if (allow.length > 0) permissions.allow = allow;
+    else delete permissions.allow;
+    if (Object.keys(permissions).length > 0) config.permissions = permissions;
+    else delete config.permissions;
   }
 
   await writeFileAtomically(filePath, `${JSON.stringify(config, null, 2)}\n`);

@@ -1,0 +1,371 @@
+/**
+ * Local session reader. Lists this machine's agent sessions so a person can pick which ones to associate with an
+ * online project, and reads one session's turns so they can be uploaded to it.
+ */
+import { MemoryServiceError } from "../../utils/error.js";
+import type { SourceRegistry } from "../adapters/source-registry.js";
+import type { ConversationMessage, SourceAdapter } from "../adapters/types.js";
+import { rankLocalSessions } from "./local-session-rank.js";
+import { createSessionGrouper, type LocalSessionGroup, type SessionGrouper } from "./session-group.js";
+
+export type { LocalSessionGroup } from "./session-group.js";
+
+const DEFAULT_SESSIONS_PER_SOURCE = 30;
+/** A wider window used only when a requested session is older than the recent list. */
+const WIDE_SESSIONS_PER_SOURCE = 200;
+const DEFAULT_SNAPSHOT_TTL_MS = 15_000;
+const DEFAULT_AVAILABLE_LIMIT = 50;
+const MAX_AVAILABLE_LIMIT = 500;
+const TITLE_MAX_CHARS = 40;
+
+/** One question and everything the agent did until the next question. */
+export interface LocalSessionTurn {
+  question: string;
+  reply: string;
+  steps: string[];
+  startedAt: string;
+}
+
+/** A local agent session reduced to what association and reading need. */
+export interface LocalSession {
+  sourceId: string;
+  agentName: string;
+  conversationId: string;
+  title: string;
+  lastQuestion: string;
+  workspacePath: string | null;
+  /** The agent's project or workspace, or the directory; null outside every unit. */
+  group: LocalSessionGroup | null;
+  updatedAt: string;
+  turns: LocalSessionTurn[];
+}
+
+/** A session as listed in the association picker, without its turns. */
+export interface LocalSessionCandidate {
+  sourceId: string;
+  agentName: string;
+  conversationId: string;
+  title: string;
+  lastQuestion: string;
+  workspacePath: string | null;
+  group: LocalSessionGroup | null;
+  updatedAt: string;
+  turnCount: number;
+}
+
+/** The candidate pool, and whether a newer scan is running behind it. */
+export interface LocalSessionListing {
+  sessions: LocalSessionCandidate[];
+  /** True when these came from the previous scan; asking again with `fresh` returns the newer one. */
+  refreshing: boolean;
+}
+
+/** Contract for the candidate pool the association picker chooses from. */
+export interface LocalSessionAvailableInput {
+  query?: string;
+  /** Sessions in this directory rank first. */
+  cwd?: string | null;
+  /** Only sessions of these agents, e.g. ["workbuddy"]; all agents when absent. */
+  sourceIds?: readonly string[];
+  limit?: number;
+  /** Waits for a current scan instead of answering from the previous one. */
+  fresh?: boolean;
+}
+
+/** Contract for local session reader. */
+export interface LocalSessionReader {
+  /** The agents' sessions, most relevant first; answers from the last scan while a newer one runs. */
+  available(input: LocalSessionAvailableInput): Promise<LocalSessionListing>;
+  /** Rereads one session so an upload carries its latest turns. */
+  read(input: { sourceId: string; conversationId: string }): Promise<LocalSession>;
+}
+
+export interface CreateLocalSessionReaderDeps {
+  registry: SourceRegistry;
+  sessionsPerSource?: number;
+  snapshotTtlMs?: number;
+  now?: () => number;
+}
+
+/** Creates the local session reader. */
+export function createLocalSessionReader(deps: CreateLocalSessionReaderDeps): LocalSessionReader {
+  const sessionsPerSource = deps.sessionsPerSource ?? DEFAULT_SESSIONS_PER_SOURCE;
+  const snapshotTtlMs = deps.snapshotTtlMs ?? DEFAULT_SNAPSHOT_TTL_MS;
+  const now = deps.now ?? Date.now;
+  let snapshot: { loadedAt: number; sessions: LocalSession[] } | null = null;
+  let loading: Promise<LocalSession[]> | null = null;
+
+  /** One live read of the agents' stores at a time, shared by every caller waiting on it. */
+  function scan(): Promise<LocalSession[]> {
+    loading ??= Promise.all(deps.registry.list().map((adapter) => readRecentSessions(adapter, sessionsPerSource)))
+      .then((perSource) => {
+        const sessions = perSource.flat();
+        snapshot = { loadedAt: now(), sessions };
+        return sessions;
+      })
+      .finally(() => {
+        loading = null;
+      });
+    return loading;
+  }
+
+  /**
+   * Scanning every agent takes seconds, so an expired snapshot is still answered at once while a new scan runs
+   * behind it. Only the first request, or one that asks for `fresh`, waits for the scan.
+   */
+  async function allSessions(fresh: boolean): Promise<{ sessions: LocalSession[]; refreshing: boolean }> {
+    if (snapshot && now() - snapshot.loadedAt < snapshotTtlMs) {
+      return { sessions: snapshot.sessions, refreshing: false };
+    }
+    if (snapshot && !fresh) {
+      void scan();
+      return { sessions: snapshot.sessions, refreshing: true };
+    }
+    return { sessions: await scan(), refreshing: false };
+  }
+
+  return {
+    async available(input) {
+      const sources = input.sourceIds?.length ? new Set(input.sourceIds) : null;
+      const limit = Math.min(MAX_AVAILABLE_LIMIT, Math.max(1, Math.trunc(input.limit ?? DEFAULT_AVAILABLE_LIMIT)));
+      const { sessions: all, refreshing } = await allSessions(input.fresh === true);
+      const sessions = all.filter((session) => !sources || sources.has(session.sourceId));
+      return {
+        sessions: rankLocalSessions(sessions, { query: input.query?.trim() ?? "", cwd: input.cwd ?? null })
+          .slice(0, limit)
+          .map(toCandidate),
+        refreshing
+      };
+    },
+
+    async read(input) {
+      const adapter = deps.registry.get(input.sourceId);
+      if (!adapter) {
+        throw new MemoryServiceError("not_found", `Unknown agent source: ${input.sourceId}`);
+      }
+      const session = await readOneSession(adapter, input.conversationId, sessionsPerSource);
+      if (!session) {
+        throw new MemoryServiceError("not_found", `Session not found: ${input.sourceId}/${input.conversationId}`);
+      }
+      return session;
+    }
+  };
+}
+
+/** Reads the most recent sessions of one source; a broken or missing source yields none. */
+export async function readRecentSessions(adapter: SourceAdapter, limit: number): Promise<LocalSession[]> {
+  try {
+    if (!(await adapter.detect())) {
+      return [];
+    }
+    const grouper = createSessionGrouper(adapter);
+    const builders = new Map<string, SessionBuilder>();
+    for await (const message of adapter.scan({ order: "recent_first", maxScanTargets: limit, maxConversations: limit, fullHistory: true })) {
+      let builder = builders.get(message.conversationId);
+      if (!builder) {
+        builder = { workspacePath: null, updatedAt: "", turns: [] };
+        builders.set(message.conversationId, builder);
+      }
+      appendMessage(builder, message);
+    }
+    return [...builders.entries()]
+      .map(([conversationId, builder]) => finishSession(adapter, grouper, conversationId, builder))
+      .filter((session): session is LocalSession => session !== null);
+  } catch {
+    return [];
+  }
+}
+
+/** Reads one conversation, widening the window once when it is older than the recent list. */
+async function readOneSession(adapter: SourceAdapter, conversationId: string, recentLimit: number): Promise<LocalSession | null> {
+  try {
+    if (!(await adapter.detect())) {
+      return null;
+    }
+    for (const limit of [recentLimit, WIDE_SESSIONS_PER_SOURCE]) {
+      const builder: SessionBuilder = { workspacePath: null, updatedAt: "", turns: [] };
+      let seen = false;
+      for await (const message of adapter.scan({ order: "recent_first", maxScanTargets: limit, maxConversations: limit, fullHistory: true })) {
+        if (message.conversationId !== conversationId) {
+          continue;
+        }
+        seen = true;
+        appendMessage(builder, message);
+      }
+      if (seen) {
+        return finishSession(adapter, createSessionGrouper(adapter), conversationId, builder);
+      }
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+interface SessionBuilder {
+  workspacePath: string | null;
+  updatedAt: string;
+  turns: LocalSessionTurn[];
+}
+
+function appendMessage(builder: SessionBuilder, message: ConversationMessage): void {
+  builder.workspacePath ??= message.workspacePath;
+  if (message.createdAt > builder.updatedAt) {
+    builder.updatedAt = message.createdAt;
+  }
+  if (message.role === "system") {
+    return;
+  }
+  if (message.role === "user") {
+    builder.turns.push({ question: stripInjectedContext(message.content), reply: "", steps: [], startedAt: message.createdAt });
+    return;
+  }
+  let turn = builder.turns.at(-1);
+  if (!turn) {
+    turn = { question: "", reply: "", steps: [], startedAt: message.createdAt };
+    builder.turns.push(turn);
+  }
+  if (message.role === "assistant") {
+    const text = message.content.trim();
+    if (text) {
+      turn.reply = turn.reply ? `${turn.reply}\n\n${text}` : text;
+    }
+    return;
+  }
+  turn.steps.push(toolName(message));
+}
+
+function finishSession(adapter: SourceAdapter, grouper: SessionGrouper, conversationId: string, builder: SessionBuilder): LocalSession | null {
+  const asked = builder.turns.filter((turn) => turn.question);
+  if (!asked.length) {
+    return null;
+  }
+  const questions = asked.map((turn) => cleanQuestion(turn.question)).filter((text) => text.length > 0);
+  return {
+    sourceId: adapter.descriptor.sourceId,
+    agentName: adapter.descriptor.displayName,
+    conversationId,
+    title: pickTitle(questions, adapter, builder.workspacePath, builder.updatedAt),
+    lastQuestion: oneLine(questions.at(-1) ?? asked.at(-1)!.question, 120),
+    workspacePath: builder.workspacePath,
+    group: grouper({ workspacePath: builder.workspacePath, conversationId }),
+    updatedAt: builder.updatedAt,
+    turns: builder.turns
+  };
+}
+
+/**
+ * 会话的第一条用户消息常常是宿主注入的上下文（AGENTS.md、推荐插件、环境说明、文件清单），
+ * 直接拿来当标题会出现大量重复且无意义的条目。这里把它剥掉，留下人真正问的那句。
+ */
+export function cleanQuestion(text: string): string {
+  let value = text;
+  // 宿主注入的整块内容：已知标签 + 任意带属性/无属性的成对标签
+  value = value.replace(/<(recommended_plugins|environment_context|user_instructions|system[_-]reminder|pasted_content|local-command-[a-z]+)(?:\s[^>]*)?>[\s\S]*?<\/\1>/giu, " ");
+  // 自动任务：只保留任务名，去掉 ID 与 memory 路径
+  const automation = /^Automation:\s*([^\n]+?)\s*(?:Automation ID|$)/iu.exec(value.trim());
+  if (automation) {
+    value = automation[1] ?? value;
+  }
+  const lines = value
+    .split("\n")
+    // markdown 标题式的文件说明、文件清单头、代码围栏
+    .filter((line) => {
+      const trimmed = line.trim();
+      if (/^```/u.test(trimmed)) return false;
+      if (/^#\s*(AGENTS\.md|CLAUDE\.md|Files mentioned by the user|Relevant code)/iu.test(trimmed)) return false;
+      if (/^<\/?[a-z_-]+>/iu.test(trimmed)) return false;
+      return true;
+    })
+    .join(" ");
+  return collapse(lines);
+}
+
+/** 判断一段用户消息像不像人真的问的问题，而不是宿主或自动化塞进来的模板。 */
+export function isHumanQuestion(text: string): boolean {
+  if (text.length < 4 || !/[\p{L}\p{N}]/u.test(text)) {
+    return false;
+  }
+  // 纯链接、纯路径
+  if (/^(https?:\/\/\S+|\/\S+|@\S+)$/u.test(text)) {
+    return false;
+  }
+  // 常见注入模板的开头
+  if (/^(你现在的任务是|你的任务是|You are an? (AI|assistant)|Your task is|You MUST follow|Please follow these steps|Target file this round|Current (file|working))/iu.test(text)) {
+    return false;
+  }
+  // 文档标题、残留标签、以链接开头的消息：都不是「人问的那句话」
+  if (/^#/u.test(text) || /^<\/?[a-z]/iu.test(text) || /^https?:\/\//iu.test(text)) {
+    return false;
+  }
+  // 以标点或代码围栏开头的碎片
+  if (/^[.。,、:：\-–—]\s*/u.test(text) && !/[一-龥]/u.test(text.slice(0, 4))) {
+    return false;
+  }
+  // 链接占了大半内容
+  const urlChars = text.match(/https?:\/\/\S+/gu)?.join("").length ?? 0;
+  if (urlChars > 0 && urlChars / text.length > 0.6) {
+    return false;
+  }
+  // 一大段文件清单式的 markdown
+  if ((text.match(/\n#/gu)?.length ?? 0) >= 2) {
+    return false;
+  }
+  return true;
+}
+
+function collapse(text: string): string {
+  return text.replace(/\s+/gu, " ").trim();
+}
+
+/** 选一个能代表会话的标题：优先人问的第一句，否则退回到目录或时间。 */
+function pickTitle(
+  questions: readonly string[],
+  adapter: SourceAdapter,
+  workspacePath: string | null,
+  updatedAt: string
+): string {
+  const usable = questions.find((question) => isHumanQuestion(question.trim()));
+  if (usable) {
+    return oneLine(usable, TITLE_MAX_CHARS);
+  }
+  const folder = (workspacePath ?? "").replace(/\/+$/u, "").split("/").filter(Boolean).pop();
+  const date = Number.isNaN(Date.parse(updatedAt))
+    ? ""
+    : new Date(updatedAt).toLocaleDateString("zh-CN", { month: "2-digit", day: "2-digit" });
+  return oneLine([folder || adapter.descriptor.displayName, date].filter(Boolean).join(" · "), TITLE_MAX_CHARS);
+}
+
+function toCandidate(session: LocalSession): LocalSessionCandidate {
+  return {
+    sourceId: session.sourceId,
+    agentName: session.agentName,
+    conversationId: session.conversationId,
+    title: session.title,
+    lastQuestion: session.lastQuestion,
+    workspacePath: session.workspacePath,
+    group: session.group,
+    updatedAt: session.updatedAt,
+    turnCount: session.turns.length
+  };
+}
+
+function toolName(message: ConversationMessage): string {
+  const fromMeta = message.rawMeta?.toolName;
+  if (typeof fromMeta === "string" && fromMeta.trim()) {
+    return fromMeta.trim();
+  }
+  return /^Tool:\s*(\S+)/u.exec(message.content)?.[1] ?? "tool";
+}
+
+/** Drops context that memory plugins and hosts inject into the prompt, keeping what the person typed. */
+function stripInjectedContext(text: string): string {
+  return text
+    .replace(/<(system[_-]reminder|[a-z_]*memory_context|memmy_reference|project_context)\b[^>]*>[\s\S]*?<\/\1>/giu, "")
+    .trim();
+}
+
+function oneLine(text: string, maxChars: number): string {
+  const collapsed = text.replace(/\s+/gu, " ").trim();
+  return collapsed.length > maxChars ? `${collapsed.slice(0, maxChars - 1)}…` : collapsed;
+}

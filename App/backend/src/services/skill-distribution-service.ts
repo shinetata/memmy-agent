@@ -2,7 +2,9 @@
 import { createHash } from "node:crypto";
 import { readdir, readFile, stat } from "node:fs/promises";
 import { join, relative } from "node:path";
+import { isMemmySkillDirectoryCurrent, readInstalledSkillKind, replaceMemmySkillDirectory } from "../adapters/outbound/skill-writer/skill-directory.js";
 import { renderMemmyDefaultSkillManifest } from "../adapters/outbound/skill-writer/templates/memmy-default.js";
+import { renderMemmyPluginSkillManifest } from "../adapters/outbound/skill-writer/templates/memmy-plugin.js";
 import type { MemoryPluginConflict } from "../adapters/outbound/skill-writer/types.js";
 import type { SkillTargetRegistry } from "../adapters/outbound/skill-writer/target-registry.js";
 import { AgentSourceUnavailableError } from "./runtime-errors.js";
@@ -27,6 +29,12 @@ export interface SkillDistributionService {
   uninstallPlugin(sourceId: string): Promise<void>;
   isInstalledHookCurrent?(sourceId: string): Promise<boolean>;
   detectMemoryPluginConflicts?(): Promise<MemoryPluginConflict[]>;
+  /**
+   * Rewrites the Memmy skill an agent already has when this build ships different instructions. The installed
+   * file decides which variant to keep, so an agent whose connection status was lost is still refreshed.
+   * Returns whether anything was written.
+   */
+  refreshInstalledSkill(sourceId: string, mode?: "skill" | "plugin"): Promise<boolean>;
 }
 
 /** Contract for create skill distribution service options. */
@@ -117,6 +125,29 @@ export function createSkillDistributionService(
         }
       }
       return conflicts;
+    },
+
+    async refreshInstalledSkill(sourceId, mode) {
+      const target = options.targetRegistry.get(sourceId);
+      if (!target) return false;
+      const root = await target.resolveRootDirectory();
+      if (!root) return false;
+
+      // A skill on disk is what Memmy installed before; only its variant is inferred from its own text.
+      const installed = await readInstalledSkillKind(root);
+      if (!installed) return false;
+      const kind = mode ?? installed;
+      if (kind === "plugin" && !target.installPlugin) return false;
+
+      const manifest = kind === "plugin"
+        ? renderMemmyPluginSkillManifest(sourceId)
+        : renderMemmyDefaultSkillManifest(sourceId);
+      if (await isMemmySkillDirectoryCurrent(root, manifest)) return false;
+
+      if (kind === "plugin") await target.installPlugin!(sourceId);
+      // Skill-only agents get the skill directory alone: their instructions file must not gain memory guidance.
+      else await replaceMemmySkillDirectory(root, manifest);
+      return true;
     }
   };
 }

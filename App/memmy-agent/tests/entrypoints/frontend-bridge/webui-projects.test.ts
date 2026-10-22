@@ -27,6 +27,40 @@ afterEach(() => {
 });
 
 describe("ProjectStore", () => {
+  it("gives a shared project its own record over a directory a local project already uses", () => {
+    const root = tempRoot();
+    const store = storeAt(root);
+    const shared = path.join(root, "workspace");
+    fs.mkdirSync(shared, { recursive: true });
+    fs.writeFileSync(path.join(shared, "file.txt"), "x", "utf8");
+
+    const local = store.add(shared, "existing", "本地项目");
+    // Without the flag the folder resolves to the project that already owns it, which is what merges sessions.
+    expect(store.add(shared, "existing", "协作项目")).toMatchObject({ id: local.id });
+
+    const separate = store.add(shared, "existing", "协作项目", { allowShared: true });
+    expect(separate.id).not.toBe(local.id);
+    expect(separate.rootPath).toBe(local.rootPath);
+    expect(separate.name).toBe("协作项目");
+    // Both records survive, so each keeps its own sessions.
+    expect(store.snapshot().projects.map((project) => project.id).sort()).toEqual([local.id, separate.id].sort());
+  });
+
+  it("resolves a shared folder to the project that already owned it, not the shared one", () => {
+    const root = tempRoot();
+    const store = storeAt(root);
+    const shared = path.join(root, "workspace");
+    fs.mkdirSync(shared, { recursive: true });
+
+    const local = store.add(shared, "existing", "本地项目");
+    store.add(shared, "existing", "协作项目", { allowShared: true });
+
+    // Path-based callers (the CLI's --project, a folder opened by hand) must land on the local project: the
+    // shared project owns only the sessions that were started from it.
+    const resolved = store.resolveOrRegisterExisting(shared, (project) => project);
+    expect(resolved.id).toBe(local.id);
+  });
+
   it("registers existing directories and rejects non-empty blank directories", () => {
     const root = tempRoot();
     const existing = path.join(root, "existing");

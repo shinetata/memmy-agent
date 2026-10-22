@@ -106,6 +106,8 @@ export interface AgentSourceService {
   uninstallPlugin(sourceId: string, action?: AgentSourcePluginActionInput): Promise<void>;
   isInstalledHookCurrent(sourceId: string): Promise<boolean>;
   detectMemoryPluginConflicts(): Promise<AgentSourceMemoryPluginConflict[]>;
+  /** Gives already-connected agents this build's skill instructions; returns the refreshed source ids. */
+  refreshInstalledSkills(): Promise<string[]>;
 }
 
 export interface ProcessingFailure {
@@ -503,6 +505,22 @@ export function createAgentSourceService(options: CreateAgentSourceServiceOption
         });
       }
       return conflicts;
+    },
+
+    async refreshInstalledSkills() {
+      const refreshed: string[] = [];
+      for (const source of options.agentSourceRepository.listSources()) {
+        try {
+          // The installed skill decides whether there is anything to refresh, so an agent whose connection
+          // status was lost ("not connected" while its skill still sits on disk) is refreshed too.
+          if (await options.skillDistributionService.refreshInstalledSkill(source.sourceId)) {
+            refreshed.push(source.sourceId);
+          }
+        } catch {
+          // A stale skill must not block start-up; the next explicit install writes it.
+        }
+      }
+      return refreshed;
     }
   };
 }

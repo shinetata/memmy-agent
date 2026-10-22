@@ -1,5 +1,5 @@
-import { BookOpen } from "lucide-react";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode } from "react";
+import { BookOpen, Cloud, LayoutPanelLeft } from "lucide-react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type MouseEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import {
   productTourIncludesLogs,
@@ -19,6 +19,15 @@ import {
   type SidebarIntent
 } from "../app/agent-runtime-bridge.js";
 import { useOptionalApiClients } from "../app/providers.js";
+import { createHttpCollabClient } from "../api/collab-client.js";
+import {
+  getCollabProjectsSnapshot,
+  loadCollabProjects,
+  markCollabProjectBound,
+  requestCreateCollabProject,
+  selectCollabProject,
+  subscribeCollabProjects
+} from "../app/collab-projects-store.js";
 import { MemmyAgentRequestError } from "../api/memmy-agent-client.js";
 import { ConfirmDialog } from "../components/confirm-dialog.js";
 import { MemoryTokenBudgetBanner } from "../components/memory-token-budget-banner.js";
@@ -108,6 +117,11 @@ interface TaskGroups {
 export interface ProjectSidebarNode {
   project: MemmyAgentProject;
   tasks: AgentTaskView[];
+  /**
+   * Set for an online project. Its tasks run in `project`, and its row opens the cloud board instead of only
+   * expanding, so one project is one row whether or not it is shared.
+   */
+  online?: { id: string; name: string };
 }
 
 export interface ProjectSidebarTree {
@@ -125,6 +139,8 @@ type SidebarContextMenuPlacementSource =
 
 interface ProjectContextMenuState {
   projectId: string;
+  /** Set for an online project, whose menu also opens its board. */
+  onlineProjectId?: string;
   placement: SidebarContextMenuPlacementSource;
 }
 
@@ -290,6 +306,45 @@ export function AppFrame(props: AppFrameProps) {
   const taskStateCoordinator = useOptionalAgentRuntimeBridge()?.taskStateCoordinator
     ?? standaloneRenderTaskStateCoordinator;
   const taskBus = useTaskBus();
+  const collabClient = useMemo(() => (clients ? createHttpCollabClient(clients.runtimeConfig) : null), [clients]);
+  const collabSnapshot = useSyncExternalStore(subscribeCollabProjects, getCollabProjectsSnapshot, getCollabProjectsSnapshot);
+  const collabLoadedForAccount = useRef<string | null>(null);
+  useEffect(() => {
+    // Online projects need a signed-in account; loading once per account keeps the sidebar and the board in step.
+    if (!collabClient || !state.account.userId) return;
+    if (collabLoadedForAccount.current === state.account.userId) return;
+    collabLoadedForAccount.current = state.account.userId;
+    void loadCollabProjects(collabClient);
+  }, [collabClient, state.account.userId]);
+  // An online project created before binding existed, or whose local project went missing, gets one here so
+  // its row can hold tasks. A failed attempt is not retried until the next launch.
+  const collabBindAttempts = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (!collabClient) return;
+    const pending = (collabSnapshot.projects ?? []).filter((project) => (
+      !project.localProjectId && !collabBindAttempts.current.has(project.id)
+    ));
+    if (!pending.length) return;
+    void (async () => {
+      for (const project of pending) {
+        collabBindAttempts.current.add(project.id);
+        try {
+          const directory = await collabClient.ensureWorkingDirectory(project.id, project.name);
+          const outcome = await taskStateCoordinator.mutateProject({
+            kind: "create",
+            input: { mode: "blank", path: directory, name: project.name }
+          });
+          const localProjectId = outcome.status === "committed" ? outcome.project?.id : undefined;
+          if (!localProjectId) continue;
+          await collabClient.bindLocalProject(project.id, localProjectId);
+          markCollabProjectBound(project.id, localProjectId);
+        } catch {
+          // The row still opens the board; tasks are the only thing missing.
+        }
+      }
+    })();
+  }, [collabClient, collabSnapshot.projects, taskStateCoordinator]);
+
   const [searchPaletteOpen, setSearchPaletteOpen] = useState(false);
   const [taskListMenuAnchor, setTaskListMenuAnchor] = useState<SidebarMenuAnchor | null>(null);
   const [sortMenuOpen, setSortMenuOpen] = useState(false);
@@ -299,6 +354,9 @@ export function AppFrame(props: AppFrameProps) {
   const [inlineRename, setInlineRename] = useState<SidebarInlineRename | null>(null);
   const [inlineRenameDraft, setInlineRenameDraft] = useState("");
   const [removeProjectId, setRemoveProjectId] = useState<string | null>(null);
+  /** The shared project awaiting delete confirmation. */
+  const [deleteOnlineProjectId, setDeleteOnlineProjectId] = useState<string | null>(null);
+  const [deletingOnlineProject, setDeletingOnlineProject] = useState(false);
   const [archiveProjectId, setArchiveProjectId] = useState<string | null>(null);
   const [projectMutationId, setProjectMutationId] = useState<string | null>(null);
   const [archiveConfirmSessionKey, setArchiveConfirmSessionKey] = useState<string | null>(null);
@@ -348,6 +406,56 @@ export function AppFrame(props: AppFrameProps) {
     [projectTree, showingArchived]
   );
   const highlightedSessionKey = state.navigation.currentPath === "/main" ? state.agent.currentSessionKey : null;
+  // A local project that an online project runs tasks in is shown once, as the online project.
+  const boundLocalProjectIds = useMemo(() => new Set(
+    (collabSnapshot.projects ?? [])
+      .map((project) => project.localProjectId)
+      .filter((id): id is string => Boolean(id))
+  ), [collabSnapshot.projects]);
+
+  const onlineProjectNodes = useMemo<ProjectSidebarNode[]>(() => {
+    const nodes: ProjectSidebarNode[] = [];
+    for (const online of collabSnapshot.projects ?? []) {
+      if (!online.localProjectId) continue;
+      const local = state.agent.projects.find((project) => project.id === online.localProjectId);
+      if (!local) continue;
+      nodes.push({
+        project: local,
+        tasks: state.agent.tasks.filter((task) => task.projectId === local.id && !task.archived),
+        online: { id: online.id, name: online.name }
+      });
+    }
+    return nodes;
+  }, [collabSnapshot.projects, state.agent.projects, state.agent.tasks]);
+
+  // A shared project created over a local project's folder gets its own record, so both rows belong in the list.
+  // One created earlier keeps the local record as its carrier: it must not appear twice — once as a folder and
+  // once as a cloud project — because both rows would share one id and one expand state.
+  const onlineCarrierIds = useMemo(
+    () => new Set(onlineProjectNodes.map((node) => node.project.id)),
+    [onlineProjectNodes]
+  );
+
+  const sidebarPinnedProjects = useMemo(() => [
+    ...visibleProjectTree.pinnedProjects.filter((node) => !onlineCarrierIds.has(node.project.id)),
+    ...onlineProjectNodes.filter((node) => node.project.pinned)
+  ], [visibleProjectTree.pinnedProjects, onlineCarrierIds, onlineProjectNodes]);
+
+  const unboundOnlineProjects = useMemo(
+    () => (collabSnapshot.projects ?? [])
+      .filter((project) => !project.localProjectId)
+      .map((project) => ({ id: project.id, name: project.name })),
+    [collabSnapshot.projects]
+  );
+
+  const sidebarProjects = useMemo(() => [
+    ...visibleProjectTree.projects.filter((node) => !onlineCarrierIds.has(node.project.id)),
+    ...onlineProjectNodes.filter((node) => !node.project.pinned)
+  ], [visibleProjectTree.projects, onlineCarrierIds, onlineProjectNodes]);
+
+  /** The highlighted online project, only while its board is open. */
+  const onlineBoardProjectId = state.navigation.currentPath === "/collab" ? collabSnapshot.selectedId : null;
+
   const selectedSidebarProjectId = resolveSelectedSidebarProjectId(state.agent, state.navigation.currentPath);
 
   const removeProject = state.agent.projects.find((project) => project.id === removeProjectId) ?? null;
@@ -713,6 +821,39 @@ export function AppFrame(props: AppFrameProps) {
     openNewAgent({ kind: "project", projectId });
   }
 
+  function openOnlineProject(projectId: string) {
+    setProjectCreateMenuAnchor(null);
+    handleFirstSidebarInteraction();
+    selectCollabProject(projectId);
+    dispatch(appActions.navigate("/collab"));
+  }
+
+  async function deleteOnlineProject() {
+    const projectId = deleteOnlineProjectId;
+    if (!projectId || !collabClient || deletingOnlineProject) return;
+    setDeletingOnlineProject(true);
+    try {
+      await collabClient.deleteProject(projectId);
+      setDeleteOnlineProjectId(null);
+      await loadCollabProjects(collabClient);
+      // The local project stays; the sidebar shows it as a plain local project again.
+      void refreshAgentTasks();
+    } catch (error) {
+      showProjectOperationError(error);
+      setDeleteOnlineProjectId(null);
+    } finally {
+      setDeletingOnlineProject(false);
+    }
+  }
+
+  /** The sidebar asks for the new-project dialog; the board owns the dialog itself. */
+  function newOnlineProject() {
+    setProjectCreateMenuAnchor(null);
+    handleFirstSidebarInteraction();
+    requestCreateCollabProject();
+    dispatch(appActions.navigate("/collab"));
+  }
+
   async function registerProject(mode: "blank" | "existing") {
     setProjectCreateMenuAnchor(null);
     if (!clients?.memmyAgent || !window.memmy || projectMutationId) return;
@@ -723,9 +864,14 @@ export function AppFrame(props: AppFrameProps) {
         ? await window.memmy.selectEmptyProjectDirectory()
         : await window.memmy.selectProjectDirectory();
       if (selected.canceled) return;
+      // A folder owned by a shared project must not absorb this local project: otherwise the shared project
+      // would list the local project's sessions as its own.
+      const occupiedByShared = state.agent.projects.some((project) => (
+        boundLocalProjectIds.has(project.id) && sameWorkspacePath(project.rootPath, selected.path)
+      ));
       const result = await taskStateCoordinator.mutateProject({
         kind: "create",
-        input: { mode, path: selected.path }
+        input: { mode, path: selected.path, ...(occupiedByShared ? { allowShared: true } : {}) }
       });
       if (result.status !== "committed") {
         showProjectOperationError(result.status === "rejected" ? result.code : "network_unavailable");
@@ -873,7 +1019,7 @@ export function AppFrame(props: AppFrameProps) {
     })));
   }
 
-  function openProjectMenu(event: MouseEvent, projectId: string) {
+  function openProjectMenu(event: MouseEvent, projectId: string, onlineProjectId?: string) {
     event.preventDefault();
     event.stopPropagation();
     setTaskListMenuAnchor(null);
@@ -889,6 +1035,7 @@ export function AppFrame(props: AppFrameProps) {
       const buttonRect = target.getBoundingClientRect();
       setProjectContextMenu({
         projectId,
+        ...(onlineProjectId ? { onlineProjectId } : {}),
         placement: {
           kind: "anchor",
           // Left edge lines up with the … button.
@@ -903,6 +1050,7 @@ export function AppFrame(props: AppFrameProps) {
     }
     setProjectContextMenu({
       projectId,
+      ...(onlineProjectId ? { onlineProjectId } : {}),
       placement: { kind: "point", x: event.clientX, y: event.clientY }
     });
   }
@@ -1232,15 +1380,17 @@ export function AppFrame(props: AppFrameProps) {
               </div>
             </div>
             <div className="app-frame-task-list__body space-y-4">
-            {visibleProjectTree.pinnedTasks.length > 0 || visibleProjectTree.pinnedProjects.length > 0 ? (
+            {visibleProjectTree.pinnedTasks.length > 0 || sidebarPinnedProjects.length > 0 ? (
               <ProjectTreeSection
                 title={t("common.pin")}
                 groupKey="pinned"
                 collapsedGroups={state.agent.sidebarState.collapsed_groups}
-                projects={visibleProjectTree.pinnedProjects}
+                projects={sidebarPinnedProjects}
                 tasks={visibleProjectTree.pinnedTasks}
                 currentSessionKey={highlightedSessionKey}
                 selectedProjectId={selectedSidebarProjectId}
+                selectedOnlineProjectId={onlineBoardProjectId}
+                onOpenOnlineProject={openOnlineProject}
                 showPreviews={state.agent.sidebarState.view.show_previews}
                 projectRegistryState={state.agent.projectRegistryState}
                 onToggleGroup={toggleSidebarGroup}
@@ -1270,7 +1420,10 @@ export function AppFrame(props: AppFrameProps) {
               showingArchived={showingArchived}
               groupKey="projects"
               collapsedGroups={state.agent.sidebarState.collapsed_groups}
-              projects={visibleProjectTree.projects}
+              projects={sidebarProjects}
+              selectedOnlineProjectId={onlineBoardProjectId}
+              onOpenOnlineProject={openOnlineProject}
+              pendingOnlineProjects={unboundOnlineProjects}
               tasks={[]}
               currentSessionKey={highlightedSessionKey}
               selectedProjectId={selectedSidebarProjectId}
@@ -1323,6 +1476,7 @@ export function AppFrame(props: AppFrameProps) {
                       registryState={state.agent.projectRegistryState}
                       onSelectProject={selectSidebarWorkspace}
                       onOpenLocalFolder={() => void registerProject("existing")}
+                      onNewOnlineProject={newOnlineProject}
                     />
                   ) : null}
                 </div>
@@ -1396,6 +1550,16 @@ export function AppFrame(props: AppFrameProps) {
             <ProjectContextMenu
               menu={projectContextMenu}
               project={state.agent.projects.find((project) => project.id === projectContextMenu.projectId) ?? null}
+              onOpenOnlineBoard={(onlineProjectId) => {
+                setProjectContextMenu(null);
+                openOnlineProject(onlineProjectId);
+              }}
+              onDeleteOnlineProject={(onlineProjectId) => {
+                setProjectContextMenu(null);
+                setDeleteOnlineProjectId(onlineProjectId);
+              }}
+              // Removing the local project of an online project would leave the shared project without a home.
+              canRemove={!boundLocalProjectIds.has(projectContextMenu.projectId)}
               archiveTaskCount={countProjectTasksToArchive(state.agent.tasks, projectContextMenu.projectId)}
               onClose={() => setProjectContextMenu(null)}
               onPin={(project) => {
@@ -1581,6 +1745,19 @@ export function AppFrame(props: AppFrameProps) {
         {props.sidePanel}
       </main>
       </div>
+      <ConfirmDialog
+        open={deleteOnlineProjectId != null}
+        title={t("appFrame.project.deleteSharedTitle")}
+        message={t("appFrame.project.deleteSharedMessage", {
+          name: collabSnapshot.projects?.find((project) => project.id === deleteOnlineProjectId)?.name ?? ""
+        })}
+        cancelLabel={t("common.cancel")}
+        confirmLabel={t("appFrame.project.deleteSharedConfirm")}
+        confirmVariant="danger"
+        icon={null}
+        onCancel={() => setDeleteOnlineProjectId(null)}
+        onConfirm={() => void deleteOnlineProject()}
+      />
       <ConfirmDialog
         open={removeProject != null}
         title={t("appFrame.project.remove")}
@@ -1937,6 +2114,11 @@ function ProjectTreeSection(props: {
   groupKey: string;
   collapsedGroups: Record<string, boolean>;
   projects: ProjectSidebarNode[];
+  /** The online project whose board is open, so its row is highlighted. */
+  selectedOnlineProjectId?: string | null;
+  onOpenOnlineProject?: (projectId: string) => void;
+  /** Online projects still without a local project: they open their board but hold no tasks yet. */
+  pendingOnlineProjects?: { id: string; name: string }[];
   tasks: AgentTaskView[];
   currentSessionKey: string | null;
   selectedProjectId: string | null;
@@ -1963,7 +2145,7 @@ function ProjectTreeSection(props: {
   onCancelArchiveConfirm: () => void;
   onUnarchiveTask: (task: AgentTaskView) => void;
   onDeleteArchivedTask: (task: AgentTaskView) => void;
-  onProjectContextMenu: (event: MouseEvent, projectId: string) => void;
+  onProjectContextMenu: (event: MouseEvent, projectId: string, onlineProjectId?: string) => void;
   onNewProjectTask: (projectId: string) => void;
 }) {
   const { t } = useTranslation();
@@ -2036,6 +2218,26 @@ function ProjectTreeSection(props: {
         <div className="app-frame-collapsible__inner">
           <div className="app-frame-task-section-body">
             {props.tasks.map((task) => renderTask(task))}
+            {props.pendingOnlineProjects?.map((project) => (
+              <div key={project.id} className="app-frame-project-node">
+                <div className={`app-frame-project-row${props.selectedOnlineProjectId === project.id ? " app-frame-project-row--selected" : ""}`}>
+                  <button
+                    type="button"
+                    className="app-frame-project-row__main"
+                    title={project.name}
+                    onClick={(event) => {
+                      props.onOpenOnlineProject?.(project.id);
+                      event.currentTarget.blur();
+                    }}
+                  >
+                    <span className="app-frame-project-row__folder-stack" aria-hidden="true">
+                      <Cloud size={16} className="app-frame-project-row__folder is-active" />
+                    </span>
+                    <SidebarMarqueeText text={project.name} className="app-frame-project-title" />
+                  </button>
+                </div>
+              </div>
+            ))}
             {props.projects.map((node) => {
               const projectKey = `project:${node.project.id}`;
               const projectCollapsed = Boolean(props.collapsedGroups[projectKey]);
@@ -2046,14 +2248,25 @@ function ProjectTreeSection(props: {
               const hiddenTaskCount = node.tasks.length - visibleTasks.length;
               return (
                 <div key={node.project.id} className="app-frame-project-node">
-                  <ProjectRow
-                    project={node.project}
-                    collapsed={projectCollapsed}
-                    selected={props.selectedProjectId === node.project.id}
-                    onToggle={() => props.onToggleProject(projectKey)}
-                    onContextMenu={(event) => props.onProjectContextMenu(event, node.project.id)}
-                    onNewTask={() => props.onNewProjectTask(node.project.id)}
-                  />
+                  {node.online ? (
+                    <OnlineProjectRow
+                      name={node.online.name}
+                      collapsed={projectCollapsed}
+                      selected={props.selectedOnlineProjectId === node.online.id}
+                      onToggle={() => props.onToggleProject(projectKey)}
+                      onContextMenu={(event) => props.onProjectContextMenu(event, node.project.id, node.online!.id)}
+                      onNewTask={() => props.onNewProjectTask(node.project.id)}
+                    />
+                  ) : (
+                    <ProjectRow
+                      project={node.project}
+                      collapsed={projectCollapsed}
+                      selected={props.selectedProjectId === node.project.id}
+                      onToggle={() => props.onToggleProject(projectKey)}
+                      onContextMenu={(event) => props.onProjectContextMenu(event, node.project.id)}
+                      onNewTask={() => props.onNewProjectTask(node.project.id)}
+                    />
+                  )}
                   <div
                     className={`app-frame-collapsible${projectCollapsed ? " is-collapsed" : ""}`}
                     aria-hidden={projectCollapsed || undefined}
@@ -2093,7 +2306,7 @@ function ProjectTreeSection(props: {
                 </div>
               );
             })}
-            {!props.tasks.length && !props.projects.length && props.emptyText ? (
+            {!props.tasks.length && !props.projects.length && !props.pendingOnlineProjects?.length && props.emptyText ? (
               <div className="app-frame-task-empty">{props.emptyText}</div>
             ) : null}
           </div>
@@ -2262,6 +2475,53 @@ function ProjectRow(props: {
           tooltip={false}
           onClick={(event) => props.onContextMenu(event)}
         >
+          <MoreHorizontal size={14} />
+        </TaskIconButton>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * An online project's sidebar row. It behaves exactly like a local project's row — the icon turns into a
+ * chevron on hover and the row expands its tasks — and only the icon differs, so nobody has to learn two
+ * patterns. The board opens from the row's menu.
+ */
+function OnlineProjectRow(props: {
+  name: string;
+  collapsed: boolean;
+  selected: boolean;
+  onToggle: () => void;
+  onContextMenu: (event: MouseEvent) => void;
+  onNewTask: () => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <div className={`app-frame-project-row${props.selected ? " app-frame-project-row--selected" : ""}`} title={props.name}>
+      <button
+        type="button"
+        className="app-frame-project-row__main"
+        aria-expanded={!props.collapsed}
+        aria-label={props.collapsed ? t("appFrame.project.expand") : t("appFrame.project.collapse")}
+        onClick={(event) => {
+          props.onToggle();
+          // Avoid sticky :focus-within fill after mouse expand/collapse.
+          event.currentTarget.blur();
+        }}
+        onContextMenu={props.onContextMenu}
+      >
+        <span className="app-frame-project-row__folder-stack" aria-hidden="true">
+          <Cloud size={16} className="app-frame-project-row__folder is-active" />
+          <ChevronRight size={16} className={`app-frame-project-row__chevron${props.collapsed ? " is-active" : ""}`} />
+          <ChevronDown size={16} className={`app-frame-project-row__chevron${!props.collapsed ? " is-active" : ""}`} />
+        </span>
+        <SidebarMarqueeText text={props.name} className="app-frame-project-title" />
+      </button>
+      <div className="app-frame-project-row__actions">
+        <TaskIconButton label={t("appFrame.project.newTask")} tooltip={false} onClick={props.onNewTask}>
+          <MessageSquarePlus size={14} />
+        </TaskIconButton>
+        <TaskIconButton label={t("appFrame.project.actions")} tooltip={false} onClick={(event) => props.onContextMenu(event)}>
           <MoreHorizontal size={14} />
         </TaskIconButton>
       </div>
@@ -2593,6 +2853,12 @@ function InlineConfirmButton(props: {
   );
 }
 
+/** Whether two workspace paths point at the same folder, ignoring a trailing separator or a symlinked home. */
+export function sameWorkspacePath(left: string, right: string): boolean {
+  const normalize = (value: string) => value.replace(/\\/g, "/").replace(/\/+$/u, "");
+  return normalize(left) === normalize(right);
+}
+
 function formatSidebarWorkspacePath(rootPath: string): string {
   return rootPath
     .replace(/\\/g, "/")
@@ -2628,6 +2894,7 @@ function SidebarWorkspacePickerMenu(props: {
   registryState: "ready" | "corrupt";
   onSelectProject: (projectId: string) => void;
   onOpenLocalFolder: () => void;
+  onNewOnlineProject?: () => void;
 }) {
   const { t } = useTranslation();
   const [query, setQuery] = useState("");
@@ -2697,6 +2964,18 @@ function SidebarWorkspacePickerMenu(props: {
           <>
             <div className="home-project-picker__divider" role="separator" />
             <div className="home-project-picker__actions" role="presentation">
+              {props.onNewOnlineProject ? (
+                <button
+                  type="button"
+                  role="option"
+                  aria-selected="false"
+                  className="home-project-picker__option home-project-picker__option--action"
+                  onClick={props.onNewOnlineProject}
+                >
+                  <Cloud size={13} strokeWidth={1.75} className="shrink-0 home-project-picker__action-icon" aria-hidden="true" />
+                  <span>{t("collab.newProject")}</span>
+                </button>
+              ) : null}
               <button
                 type="button"
                 role="option"
@@ -2852,6 +3131,11 @@ function TaskContextMenu(props: {
 function ProjectContextMenu(props: {
   menu: ProjectContextMenuState;
   project: MemmyAgentProject | null;
+  onOpenOnlineBoard?: (onlineProjectId: string) => void;
+  /** Deletes the shared project in the cloud; the local project stays with its tasks. */
+  onDeleteOnlineProject?: (onlineProjectId: string) => void;
+  /** False for an online project, whose shared record would outlive a local removal. */
+  canRemove?: boolean;
   archiveTaskCount: number;
   onPin: (project: MemmyAgentProject) => void;
   onReveal: (project: MemmyAgentProject) => void;
@@ -2881,6 +3165,16 @@ function ProjectContextMenu(props: {
       style={overlayStyle}
       onClick={(event) => event.stopPropagation()}
     >
+      {props.menu.onlineProjectId && props.onOpenOnlineBoard ? (
+        <>
+          <MenuButton
+            icon={<LayoutPanelLeft size={13} />}
+            label={t("appFrame.project.openBoard")}
+            onClick={() => run(() => props.onOpenOnlineBoard!(props.menu.onlineProjectId!))}
+          />
+          <div className="app-frame-sidebar-menu__divider" role="separator" />
+        </>
+      ) : null}
       <MenuButton
         icon={<Pin size={13} />}
         label={project.pinned ? t("appFrame.project.unpin") : t("appFrame.project.pin")}
@@ -2902,12 +3196,25 @@ function ProjectContextMenu(props: {
         disabled={props.archiveTaskCount === 0}
         onClick={() => run(() => props.onArchive(project))}
       />
-      <MenuButton
-        icon={<Trash2 size={13} />}
-        label={t("appFrame.project.remove")}
-        danger
-        onClick={() => run(() => props.onRemove(project))}
-      />
+      {props.menu.onlineProjectId && props.onDeleteOnlineProject ? (
+        <>
+          <div className="app-frame-sidebar-menu__divider" role="separator" />
+          <MenuButton
+            icon={<Trash2 size={13} />}
+            label={t("appFrame.project.deleteShared")}
+            danger
+            onClick={() => run(() => props.onDeleteOnlineProject!(props.menu.onlineProjectId!))}
+          />
+        </>
+      ) : null}
+      {props.canRemove === false ? null : (
+        <MenuButton
+          icon={<Trash2 size={13} />}
+          label={t("appFrame.project.remove")}
+          danger
+          onClick={() => run(() => props.onRemove(project))}
+        />
+      )}
     </div>
   );
   return createPortal(menu, document.body);

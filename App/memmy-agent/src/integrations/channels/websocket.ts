@@ -1664,10 +1664,11 @@ export class WebSocketChannel extends BaseChannel {
       const body = this.parseProjectBody(request);
       const keys = Object.keys(body);
       if (
-        keys.some((key) => !["mode", "path", "name"].includes(key))
+        keys.some((key) => !["mode", "path", "name", "allowShared"].includes(key))
         || typeof body.path !== "string"
         || (body.mode !== "blank" && body.mode !== "existing")
         || (body.name != null && typeof body.name !== "string")
+        || (body.allowShared != null && typeof body.allowShared !== "boolean")
       ) {
         throw new WebuiProjectError("project_request_invalid", 400);
       }
@@ -1680,7 +1681,9 @@ export class WebSocketChannel extends BaseChannel {
           return false;
         }
       });
-      const project = this.requireProjectStore().add(body.path, body.mode, body.name);
+      const project = this.requireProjectStore().add(body.path, body.mode, body.name, {
+        allowShared: body.allowShared === true
+      });
       return httpJsonResponse(
         { project, snapshot: this.webuiSessionSnapshot() },
         { status: existing ? 200 : 201 },

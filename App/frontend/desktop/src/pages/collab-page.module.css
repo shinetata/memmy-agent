@@ -1,0 +1,908 @@
+/* Dialogs and the toast mount on the body, outside .page, so they declare the palette too. */
+.page,
+.createModal,
+.pickModal,
+.toast {
+  --collab-ink: var(--color-text-ink, #111d1c);
+  --collab-ink-2: #2a3a37;
+  --collab-muted: #5f716c;
+  --collab-ter: #8a9a96;
+  --collab-line: color-mix(in srgb, var(--color-border-stone, #d6dfdc) 80%, transparent);
+  --collab-line-soft: color-mix(in srgb, var(--color-border-stone, #d6dfdc) 45%, transparent);
+  --collab-surface: color-mix(in srgb, var(--color-canvas-oat, #f4f7f6) 60%, transparent);
+  --collab-active: var(--color-nav-active-bg, #e3f4f1);
+  --collab-accent: var(--color-accent-mint, #5cbfae);
+  --collab-accent-deep: var(--color-accent-deep, #2f8f7f);
+}
+
+.page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  color: var(--collab-ink);
+  font-family: var(--font-sans);
+}
+
+.scroller {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.wrap {
+  max-width: 920px;
+  margin: 0 auto;
+  padding: 18px 40px 40px;
+}
+
+.boardHeader {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding-top: 6px;
+}
+
+.boardIcon {
+  display: grid;
+  flex: 0 0 46px;
+  place-items: center;
+  height: 46px;
+  border-radius: 14px;
+  background: linear-gradient(145deg, #e9f6f2, #d8efe8);
+  color: var(--collab-accent-deep);
+  box-shadow: inset 0 0 0 1px rgba(47, 125, 105, 0.12);
+}
+
+.boardName {
+  margin: 0;
+  font-size: 24px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+}
+
+.tabs {
+  display: flex;
+  gap: 26px;
+  margin-top: 22px;
+  border-bottom: 1px solid var(--collab-line);
+}
+
+.tab {
+  padding: 10px 0;
+  margin-bottom: -1px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--collab-ter);
+  font: inherit;
+  font-size: 14.5px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.tab:hover {
+  color: var(--collab-ink-2);
+}
+
+.tabOn,
+.tabOn:hover {
+  color: var(--collab-ink);
+  border-bottom-color: var(--collab-ink);
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 18px;
+}
+
+.grow {
+  flex: 1;
+  min-width: 0;
+}
+
+
+/* 关联会话的进度条：后台同步时显示，会话随上传进度逐条出现 */
+.syncStrip {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin-top: 12px;
+  padding: 10px 14px;
+  border: 1px solid var(--collab-line);
+  border-radius: 12px;
+  background: var(--collab-active);
+}
+
+.syncText {
+  color: var(--collab-accent-deep);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.syncBar {
+  display: block;
+  height: 4px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--collab-accent-deep) 18%, transparent);
+  overflow: hidden;
+}
+
+.syncBarFill {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--collab-accent-deep);
+  transition: width 320ms ease;
+}
+
+/* 会话行出现时的淡入，让后台同步来的会话自然进入列表 */
+@keyframes collabRowIn {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.list {
+  margin: 14px 0 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--collab-line);
+  border-radius: 14px;
+  background: var(--color-background-paper, #fff);
+  overflow: visible;
+}
+
+.row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 15px 20px;
+  animation: collabRowIn 220ms ease-out;
+}
+
+.row + .row {
+  border-top: 1px solid var(--collab-line-soft);
+}
+
+.row:first-child {
+  border-radius: 13px 13px 0 0;
+}
+
+.row:last-child {
+  border-radius: 0 0 13px 13px;
+}
+
+.row:only-child {
+  border-radius: 13px;
+}
+
+.avatar {
+  display: inline-grid;
+  flex: 0 0 30px;
+  place-items: center;
+  height: 30px;
+  border-radius: 50%;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.rowText {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.rowTitle,
+.rowSummary {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rowTitle {
+  color: var(--collab-ink);
+  font-size: 14px;
+  font-weight: 750;
+}
+
+.rowSummary {
+  color: var(--collab-muted);
+  font-size: 13px;
+  font-weight: 400;
+}
+
+.meta {
+  flex: none;
+  color: var(--collab-ter);
+  font-size: 12.5px;
+  white-space: nowrap;
+}
+
+.moreButton {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  margin: -4px -8px -4px -6px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--collab-ter);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 120ms ease, background 120ms ease;
+}
+
+.row:hover .moreButton,
+.row:focus-within .moreButton,
+.rowMenuOpen .moreButton {
+  opacity: 1;
+}
+
+.moreButton:hover {
+  background: color-mix(in srgb, var(--collab-ink) 6%, transparent);
+  color: var(--collab-ink);
+}
+
+.menuScrim {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  border: 0;
+  background: transparent;
+  cursor: default;
+}
+
+.menu,
+.pickerMenu {
+  position: absolute;
+  z-index: 21;
+  min-width: 148px;
+  padding: 5px;
+  border-radius: 10px;
+  background: var(--color-background-paper, #fff);
+  box-shadow: 0 14px 34px rgba(15, 26, 25, 0.16), 0 0 0 1px var(--collab-line);
+}
+
+.menu {
+  top: 44px;
+  right: 14px;
+}
+
+.menuItem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--collab-ink);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.menuItem:hover {
+  background: var(--collab-surface);
+}
+
+.menuItemDanger {
+  color: #c4433a;
+}
+
+.menuSeparator {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--collab-line-soft);
+}
+
+.pickerWrap {
+  position: relative;
+}
+
+.picker {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 11px;
+  border: 1px solid var(--collab-line);
+  border-radius: 10px;
+  background: var(--color-background-paper, #fff);
+  color: var(--collab-ink-2);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.picker:hover {
+  background: var(--collab-surface);
+}
+
+.pickerLabel {
+  white-space: nowrap;
+}
+
+.pickerMenu {
+  top: 38px;
+  left: 0;
+  right: auto;
+  min-width: 160px;
+}
+
+/* 空项目：说明这个标签页收集什么、能做什么 */
+.guide {
+  margin-top: 14px;
+  padding: 24px 26px 20px;
+  border: 1px solid var(--collab-line);
+  border-radius: 14px;
+  background: var(--color-background-paper, #fff);
+}
+
+.guideTitle {
+  display: block;
+  color: var(--collab-ink);
+  font-size: 15px;
+  font-weight: 800;
+}
+
+.guideLead {
+  margin: 8px 0 0;
+  max-width: 640px;
+  color: var(--collab-muted);
+  font-size: 13px;
+  line-height: 1.75;
+}
+
+.guideList {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin: 18px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.guideItem {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+}
+
+.guideIcon {
+  display: grid;
+  flex: 0 0 28px;
+  place-items: center;
+  height: 28px;
+  border-radius: 8px;
+  background: var(--collab-active);
+  color: var(--collab-accent-deep);
+}
+
+.guideText {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.guideText b {
+  color: var(--collab-ink-2);
+  font-size: 13.5px;
+  font-weight: 700;
+}
+
+.guideText span {
+  color: var(--collab-muted);
+  font-size: 12.5px;
+  line-height: 1.7;
+}
+
+.searchBox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 240px;
+  padding: 6px 10px;
+  border: 1px solid var(--collab-line);
+  border-radius: 10px;
+  background: var(--color-background-paper, #fff);
+  color: var(--collab-ter);
+}
+
+.searchIcon {
+  flex: none;
+}
+
+.searchBox input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--collab-ink);
+  font: inherit;
+  font-size: 13px;
+  outline: none;
+}
+
+.searchGo {
+  flex: none;
+  border: 0;
+  border-radius: 6px;
+  padding: 3px 8px;
+  background: var(--collab-active);
+  color: var(--collab-accent-deep);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.pager {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.pagerInfo {
+  margin: 8px 0 0;
+  color: var(--collab-ter);
+  font-size: 12px;
+}
+
+.rowOpenable {
+  cursor: pointer;
+}
+
+.rowOpenable:hover {
+  background: var(--collab-surface);
+}
+
+.readerModal {
+  width: min(760px, calc(100vw - 32px));
+}
+
+.readerBody {
+  max-height: min(56vh, 560px);
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.readerMeta {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.readerAvatar {
+  display: inline-grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.readerTurn {
+  padding: 14px 0;
+  border-bottom: 1px solid var(--collab-line-soft);
+}
+
+.readerTurn:last-child {
+  border-bottom: 0;
+}
+
+.readerTurnIndex {
+  display: block;
+  margin-bottom: 8px;
+  color: var(--collab-ter);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.readerQuestion,
+.readerReply {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 10px;
+}
+
+.readerReply {
+  margin-bottom: 0;
+}
+
+.readerSpeaker {
+  color: var(--collab-ter);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.readerQuestion p,
+.readerReply p {
+  margin: 0;
+  color: var(--collab-ink-2);
+  font-size: 13.5px;
+  line-height: 1.75;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.readerSteps {
+  margin: 10px 0 0;
+  color: var(--collab-ter);
+  font-size: 12.5px;
+}
+
+.readerFoot {
+  color: var(--collab-ter);
+  font-size: 12px;
+}
+
+.noMatch {
+  padding: 40px 0;
+  color: var(--collab-muted);
+  font-size: 13px;
+  text-align: center;
+}
+
+.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 72px 24px;
+  text-align: center;
+}
+
+.empty b {
+  font-size: 15px;
+  font-weight: 800;
+}
+
+.empty p {
+  margin: 0 0 8px;
+  max-width: 440px;
+  color: var(--collab-muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.loading {
+  margin: 24px 0;
+  color: var(--collab-muted);
+  font-size: 13px;
+}
+
+.createModal {
+  width: min(540px, calc(100vw - 32px));
+}
+
+.pickModal {
+  width: min(880px, calc(100vw - 32px));
+}
+
+.footerButtons {
+  display: flex;
+  gap: 8px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin-top: 18px;
+}
+
+.field > span {
+  color: var(--collab-ink-2);
+  font-size: 12.5px;
+  font-weight: 700;
+}
+
+.field input {
+  min-height: 42px;
+  padding: 8px 12px;
+  border: 1px solid var(--collab-line);
+  border-radius: 10px;
+  background: var(--color-background-paper, #fff);
+  color: inherit;
+  font: inherit;
+  font-size: 13.5px;
+}
+
+.fieldHint {
+  color: var(--collab-ter);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.dirField {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 42px;
+  padding: 4px 4px 4px 12px;
+  border: 1px solid var(--collab-line);
+  border-radius: 10px;
+  background: var(--color-background-paper, #fff);
+  font-size: 13.5px;
+}
+
+.dirIcon {
+  flex: none;
+  color: var(--collab-muted);
+}
+
+.dirPath {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dirPlaceholder {
+  color: var(--collab-ter);
+}
+
+.error {
+  margin: 8px 0 0;
+  color: var(--color-status-error, #c4413b);
+  font-size: 12.5px;
+}
+
+/* 关联其他 Agent 的会话 */
+.pickBody {
+  display: flex;
+  height: min(460px, 58vh);
+  border: 1px solid var(--collab-line);
+  border-radius: 14px;
+  overflow: hidden;
+}
+
+.agentList {
+  flex: 0 0 206px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px;
+  border-right: 1px solid var(--collab-line);
+  background: var(--collab-surface);
+  overflow-y: auto;
+}
+
+.agentItem {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 10px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.agentItem:hover {
+  background: color-mix(in srgb, var(--collab-ink) 4%, transparent);
+}
+
+.agentItemActive,
+.agentItemActive:hover {
+  background: var(--color-background-paper, #fff);
+  box-shadow: 0 1px 3px rgba(15, 26, 25, 0.08), 0 0 0 1px var(--collab-line);
+}
+
+.agentText {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.agentName {
+  font-size: 13.5px;
+  font-weight: 700;
+}
+
+.agentHint {
+  color: var(--collab-ter);
+  font-size: 11.5px;
+}
+
+.agentDot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--collab-accent);
+}
+
+.agentLogo {
+  display: grid;
+  flex: 0 0 30px;
+  place-items: center;
+  height: 30px;
+  border-radius: 8px;
+  background: var(--color-background-paper, #fff);
+  box-shadow: inset 0 0 0 1px var(--collab-line);
+}
+
+.agentLogo img {
+  width: 18px;
+  height: 18px;
+  object-fit: contain;
+}
+
+.pickMain {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 6px 18px 0;
+}
+
+.search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 2px;
+  border-bottom: 1px solid var(--collab-line-soft);
+  color: var(--collab-ter);
+}
+
+.search input {
+  flex: 1;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--collab-ink);
+  font: inherit;
+  font-size: 13px;
+  outline: none;
+}
+
+.pickList {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 0 12px;
+}
+
+.pickSection {
+  margin: 16px 2px 4px;
+  color: var(--collab-ter);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.groupBlock {
+  border-bottom: 1px solid var(--collab-line-soft);
+}
+
+.groupRow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 2px;
+}
+
+.groupToggle {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--collab-ter);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.groupIcon {
+  display: grid;
+  flex: 0 0 28px;
+  place-items: center;
+  height: 28px;
+  border-radius: 8px;
+  background: var(--collab-surface);
+  color: var(--collab-muted);
+  box-shadow: inset 0 0 0 1px var(--collab-line);
+}
+
+.groupText {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.groupName {
+  overflow: hidden;
+  color: var(--collab-ink);
+  font-size: 14px;
+  font-weight: 750;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.groupHint {
+  color: var(--collab-accent-deep);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.pickRow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 2px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.pickRow:hover {
+  background: var(--collab-surface);
+}
+
+.pickRowNested {
+  padding-left: 41px;
+}
+
+.pickTitle {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 13.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pickTitleExcluded {
+  color: var(--collab-ter);
+  text-decoration: line-through;
+}
+
+.toast {
+  position: fixed;
+  left: 50%;
+  top: 24px;
+  z-index: 60;
+  transform: translateX(-50%);
+  padding: 9px 16px;
+  border-radius: 10px;
+  background: var(--collab-ink);
+  color: #fff;
+  font-size: 13px;
+  pointer-events: none;
+}

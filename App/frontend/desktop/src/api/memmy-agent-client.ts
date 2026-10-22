@@ -819,7 +819,11 @@ export interface MemmyAgentClient {
     options?: MemmyAgentRequestOptions
   ): Promise<MemmyAgentSidebarState>;
   createProject(
-    input: { mode: "blank" | "existing"; path: string; name?: string },
+    /**
+     * `allowShared` registers a project over a directory another project already uses: a shared project runs its
+     * tasks in the same folder as a local project while keeping its own sessions.
+     */
+    input: { mode: "blank" | "existing"; path: string; name?: string; allowShared?: boolean },
     options?: MemmyAgentRequestOptions
   ): Promise<MemmyAgentProjectMutationResult>;
   updateProject(
@@ -1384,7 +1388,7 @@ class HttpMemmyAgentClient implements MemmyAgentClient {
   }
 
   async createProject(
-    input: { mode: "blank" | "existing"; path: string; name?: string },
+    input: { mode: "blank" | "existing"; path: string; name?: string; allowShared?: boolean },
     options: MemmyAgentRequestOptions = {}
   ): Promise<MemmyAgentProjectMutationResult> {
     return this.request("/api/projects", ProjectMutationResponseSchema, {

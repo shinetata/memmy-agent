@@ -1077,6 +1077,24 @@ describe("AppFrame", () => {
     expect(stylesSource).toContain("padding-left: var(--sidebar-title-inset);");
   });
 
+  it("opens a local project's menu without touching the online project id", () => {
+    const appFrameSource = readFileSync(resolve(__dirname, "..", "app-frame.tsx"), "utf8");
+    // The online row passes its online id so the menu can offer the board; the local row must not, or the click
+    // throws on a project that has no online counterpart and the menu never opens.
+    const localRowBlock = appFrameSource.slice(
+      appFrameSource.indexOf("<ProjectRow"),
+      appFrameSource.indexOf("/>", appFrameSource.indexOf("<ProjectRow"))
+    );
+    const onlineRowBlock = appFrameSource.slice(
+      appFrameSource.indexOf("<OnlineProjectRow"),
+      appFrameSource.indexOf("/>", appFrameSource.indexOf("<OnlineProjectRow"))
+    );
+
+    expect(localRowBlock).toContain("onProjectContextMenu(event, node.project.id)");
+    expect(localRowBlock).not.toContain("node.online");
+    expect(onlineRowBlock).toContain("node.online!.id");
+  });
+
   it("uses one font size and hover-only top-level disclosure icons", () => {
     const stylesSource = readFileSync(resolve(__dirname, "..", "..", "styles.css"), "utf8");
     const typographyBlock = stylesSource.slice(

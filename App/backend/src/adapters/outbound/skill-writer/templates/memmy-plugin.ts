@@ -1,4 +1,5 @@
 import type { SkillManifest } from "../types.js";
+import { onlineProjectSessionLines } from "./online-project-sessions.js";
 
 const MEMMY_MARKER = "<!-- memmy:start v=1 -->";
 
@@ -15,6 +16,8 @@ function renderMemmyPluginContent(source: string): string {
     "# Memmy Memory",
     "",
     "A Memmy Memory Hook or plugin is installed for this agent.",
+    "",
+    ...onlineProjectSessionLines(),
     "",
     "## Automatic Memory",
     "",
@@ -34,6 +37,6 @@ function renderMemmyPluginContent(source: string): string {
     `memmy-memory get "$MEMORY_ID" --source ${source}`,
     "```",
     "",
-    "Search only when prior preferences, project decisions, recurring issues, or reusable procedures are likely relevant. Read a specific memory only when search results or injected context provide its id and more detail is needed."
+    "Search only when prior preferences, project decisions, recurring issues, or reusable procedures are likely relevant. Read a specific memory only when search results or injected context provide its id and more detail is needed.",
   ].join("\n");
 }
