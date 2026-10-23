@@ -2448,6 +2448,51 @@ export class WebSocketChannel extends BaseChannel {
       .sort();
   }
 
+  /**
+   * Moves every session of one project to another project that runs in the same folder. Used when a shared
+   * project is deleted: its sessions become ordinary local tasks of the local project already using that folder.
+   */
+  async handleSessionReassignProject(request: HttpRequestLike): Promise<HttpLikeResponse> {
+    if (!this.checkApiToken(request)) return httpError(401, "Unauthorized");
+    if ((request.method ?? "GET").toUpperCase() !== "POST") return httpError(405, "method not allowed");
+    try {
+      const body = this.parseProjectBody(request);
+      const keys = Object.keys(body);
+      if (
+        keys.some((key) => !["fromProjectId", "toProjectId"].includes(key))
+        || typeof body.fromProjectId !== "string"
+        || typeof body.toProjectId !== "string"
+        || body.fromProjectId === body.toProjectId
+      ) {
+        throw new WebuiProjectError("project_request_invalid", 400);
+      }
+      const store = this.requireProjectStore();
+      const from = store.getActive(body.fromProjectId);
+      const to = store.getActive(body.toProjectId);
+      if (!from || !to) throw new WebuiProjectError("project_not_found", 404);
+      // A session records the folder it ran in, so it can only move to a project on the same folder.
+      if (from.rootPath !== to.rootPath) throw new WebuiProjectError("project_request_invalid", 400);
+      if (!this.sessionManager) return httpError(503, "session services unavailable");
+
+      const moved: string[] = [];
+      for (const key of this.projectSessionKeys(from.id)) {
+        const session = this.sessionManager.get(key) as Session | null;
+        if (!session) continue;
+        session.metadata = { ...session.metadata, webuiProjectId: to.id, webuiWorkspaceCwd: to.rootPath };
+        this.sessionManager.save(session, { fsync: true });
+        try {
+          this.queueGlobalSessionUpdated(toGuiChatId(key), "metadata");
+        } catch {
+          // A key the GUI cannot project is still moved on disk.
+        }
+        moved.push(key);
+      }
+      return httpJsonResponse({ moved: moved.length, project: to });
+    } catch (error) {
+      return this.projectErrorResponse(error);
+    }
+  }
+
   private async removeProjectSessions(projectId: string): Promise<string[]> {
     if (!this.sessionDeletionServices) {
       throw new WebuiProjectError(
@@ -2922,6 +2967,7 @@ export class WebSocketChannel extends BaseChannel {
     channelAdminMatch = got.match(/^\/api\/channels\/feishu\/login\/([^/]+)$/);
     if (channelAdminMatch) return this.handleChannelAdmin(request, "feishu-login-poll", decodeURIComponent(channelAdminMatch[1]));
     if (got === "/api/sessions") return this.handleSessionsList(request);
+    if (got === "/api/sessions/reassign-project") return this.handleSessionReassignProject(request);
     if (got === "/api/projects") return this.handleProjectCreate(request);
     if (got === "/api/settings") return this.handleSettings(request);
     if (got === "/api/commands") return this.handleCommands(request);

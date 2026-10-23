@@ -836,6 +836,15 @@ export interface MemmyAgentClient {
     projectId: string,
     options?: MemmyAgentRequestOptions
   ): Promise<MemmyAgentProjectDeleteResult>;
+  /**
+   * Moves every session of one project to another project running in the same folder. Used when a shared
+   * project is deleted so its sessions continue as local tasks.
+   */
+  reassignProjectSessions(
+    fromProjectId: string,
+    toProjectId: string,
+    options?: MemmyAgentRequestOptions
+  ): Promise<{ moved: number }>;
   readWebuiThread(sessionKey: string): Promise<MemmyAgentWebuiThread>;
   seedWebuiChat(input: {
     userText: string;
@@ -1424,6 +1433,18 @@ class HttpMemmyAgentClient implements MemmyAgentClient {
     return this.request(`/api/projects/${encodeURIComponent(projectId)}`, ProjectDeleteResponseSchema, {
       ...options,
       method: "DELETE"
+    });
+  }
+
+  async reassignProjectSessions(
+    fromProjectId: string,
+    toProjectId: string,
+    options: MemmyAgentRequestOptions = {}
+  ): Promise<{ moved: number }> {
+    return this.request("/api/sessions/reassign-project", z.object({ moved: z.number() }), {
+      ...options,
+      method: "POST",
+      body: { fromProjectId, toProjectId }
     });
   }
 

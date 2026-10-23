@@ -2,6 +2,7 @@
 .page,
 .createModal,
 .pickModal,
+.backdrop,
 .toast {
   --collab-ink: var(--color-text-ink, #111d1c);
   --collab-ink-2: #2a3a37;
@@ -594,6 +595,16 @@
   margin: 24px 0;
   color: var(--collab-muted);
   font-size: 13px;
+}
+
+/*
+ * One dialog over the main window, so the window background stays the reference: a light scrim and no blur.
+ * The default .modal-backdrop blurs 8px and dims 32%, which reads as a separate page rather than the current one.
+ */
+.backdrop {
+  background: rgba(17, 29, 28, 0.12);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
 }
 
 .createModal {
