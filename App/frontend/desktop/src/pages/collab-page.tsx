@@ -16,7 +16,7 @@ import {
 } from "../api/collab-client.js";
 import {
   addCollabProject,
-  consumeCreateCollabProjectRequest,
+  requestCreateCollabProject,
   getCollabProjectsSnapshot,
   loadCollabProjects,
   markCollabProjectBound,
@@ -174,7 +174,6 @@ export function CollabPage() {
   const [pageIndex, setPageIndex] = useState(0);
   const [reading, setReading] = useState<{ session: CollabProjectSession; turns: CollabSessionTurn[] } | null>(null);
   const [readingId, setReadingId] = useState<string | null>(null);
-  const [createOpen, setCreateOpen] = useState(false);
   const [pickOpen, setPickOpen] = useState(false);
   const [deleting, setDeleting] = useState<CollabProjectSession | null>(null);
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
@@ -305,14 +304,6 @@ export function CollabPage() {
     if (toastTimer.current) clearTimeout(toastTimer.current);
   }, []);
 
-  // The sidebar's new-project menu navigates here and asks for the dialog; the flag is consumed so a later
-  // visit to the board does not reopen it.
-  const createPending = snapshot.createPending;
-  useEffect(() => {
-    if (!createPending) return;
-    setCreateOpen(true);
-    consumeCreateCollabProjectRequest();
-  }, [createPending]);
 
   const sessions = page?.sessions ?? null;
   const filtering = Boolean(query) || member !== "all";
@@ -389,7 +380,7 @@ export function CollabPage() {
           <div className={styles.empty}>
             <b>{t("collab.empty.title")}</b>
             <p>{t("collab.empty.body")}</p>
-            <Button variant="primary" size="sm" onClick={() => setCreateOpen(true)}>{t("collab.newProject")}</Button>
+            <Button variant="primary" size="sm" onClick={() => requestCreateCollabProject()}>{t("collab.newProject")}</Button>
           </div>
         ) : (
           <>
@@ -617,19 +608,6 @@ export function CollabPage() {
 
       {/* Overlays mount on the body, like the app's other menus and dialogs, so the sidebar never covers them. */}
       {typeof document === "undefined" ? null : createPortal(<>
-      {collab ? (
-        <CreateProjectModal
-          open={createOpen}
-          collab={collab}
-          onClose={() => setCreateOpen(false)}
-          onCreated={(project) => {
-            setCreateOpen(false);
-            addCollabProject(project);
-          }}
-          onBound={(projectId, localProjectId) => markCollabProjectBound(projectId, localProjectId)}
-          onBindFailed={(reason) => showToast(t("collab.create.bindFailedWith", { reason }))}
-        />
-      ) : null}
       {collab && selected ? (
         <AssociateSessionsModal
           open={pickOpen}
@@ -806,127 +784,6 @@ export function summarizeSteps(steps: readonly string[]): string {
 }
 
 /** 新建项目: an online project (default) or a local one, per the prototype. */
-function CreateProjectModal(props: {
-  open: boolean;
-  collab: CollabClient;
-  onClose: () => void;
-  onCreated: (project: CollabProject) => void;
-  onBound: (projectId: string, localProjectId: string) => void;
-  onBindFailed: (reason: string) => void;
-}) {
-  const { t } = useTranslation();
-  const bridge = useOptionalAgentRuntimeBridge();
-  const [name, setName] = useState("");
-  const [directory, setDirectory] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const inputRef = useRef<HTMLInputElement | null>(null);
-  const trimmed = name.trim();
-  const valid = trimmed.length > 0 && Array.from(trimmed).length <= MAX_PROJECT_NAME_CHARS;
-
-  useEffect(() => {
-    if (props.open) {
-      setName("");
-      setDirectory(null);
-      setError(null);
-    }
-  }, [props.open]);
-
-  async function chooseDirectory() {
-    // Any existing folder is fine here: the project's tasks run in it, it does not have to be empty.
-    const picked = await window.memmy?.selectProjectDirectory?.().catch(() => null);
-    if (picked && !picked.canceled) setDirectory(picked.path);
-  }
-
-  async function submit() {
-    if (!valid || busy) return;
-    setBusy(true);
-    setError(null);
-    try {
-      const created = await props.collab.createProject(trimmed, directory ?? undefined);
-      // The project exists in the cloud now, so it opens whether or not the local part succeeds.
-      props.onCreated(created.project);
-      if (!created.localDirectory) {
-        // An older backend does not prepare a working directory; tasks could not run in the project.
-        props.onBindFailed(t("collab.create.needsRestart"));
-        return;
-      }
-      try {
-        const outcome = await bridge?.taskStateCoordinator.mutateProject({
-          kind: "create",
-          // Always its own record: sharing a folder with an existing local project must not merge the two,
-          // because their sessions have to stay apart.
-          input: { mode: directory ? "existing" : "blank", path: created.localDirectory, name: trimmed, allowShared: true }
-        });
-        const localProjectId = outcome?.status === "committed" ? outcome.project?.id : undefined;
-        if (!localProjectId) throw new Error(t("collab.create.bindFailed"));
-        await props.collab.bindLocalProject(created.project.id, localProjectId);
-        props.onBound(created.project.id, localProjectId);
-      } catch (cause) {
-        // Without the local project the board still works; tasks and the sidebar list stay empty.
-        props.onBindFailed(messageOf(cause));
-      }
-    } catch (cause) {
-      setError(messageOf(cause));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  // The entry already says "online project", so the dialog only asks for what a project still needs.
-  return (
-    <Modal
-      open={props.open}
-      title={t("collab.create.title")}
-      subtitle={t("collab.create.subtitle")}
-      onClose={props.onClose}
-      closeLabel={t("common.close")}
-      closeContent={<X size={16} aria-hidden="true" />}
-      initialFocusRef={inputRef}
-      className={styles.createModal}
-      footer={(
-        <>
-          <span />
-          <span className={styles.footerButtons}>
-            <Button variant="ghost" onClick={props.onClose}>{t("collab.cancel")}</Button>
-            <Button variant="primary" disabled={!valid || busy} onClick={() => void submit()}>
-              {t("collab.create.submit")}
-            </Button>
-          </span>
-        </>
-      )}
-    >
-      <label className={styles.field}>
-        <span>{t("collab.create.name")}</span>
-        <input
-          ref={inputRef}
-          value={name}
-          maxLength={40}
-          placeholder={t("collab.create.namePlaceholder")}
-          onChange={(event) => setName(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") void submit();
-          }}
-        />
-      </label>
-      <div className={styles.field}>
-        <span>{t("collab.create.dirOptional")}</span>
-        <div className={styles.dirField}>
-          <Folder size={15} aria-hidden="true" className={styles.dirIcon} />
-          <span className={`${styles.dirPath} ${directory ? "" : styles.dirPlaceholder}`}>
-            {directory ?? t("collab.create.dirUnset")}
-          </span>
-          <Button size="sm" variant="ghost" onClick={() => void chooseDirectory()}>
-            {directory ? t("collab.create.dirChange") : t("collab.create.dirPick")}
-          </Button>
-        </div>
-        <small className={styles.fieldHint}>{t("collab.create.dirHint")}</small>
-      </div>
-      {error ? <p className={styles.error} role="alert">{error}</p> : null}
-    </Modal>
-  );
-}
-
 function AssociateSessionsModal(props: {
   open: boolean;
   collab: CollabClient;
@@ -1030,6 +887,7 @@ function AssociateSessionsModal(props: {
       closeLabel={t("common.close")}
       closeContent={<X size={16} aria-hidden="true" />}
       className={styles.pickModal}
+      backdropClassName={styles.backdrop}
       footer={(
         <>
           {error ? <span className={styles.error} role="alert">{error}</span> : <span />}

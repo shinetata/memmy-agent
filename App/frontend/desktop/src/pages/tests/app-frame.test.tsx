@@ -12,7 +12,7 @@ import { appActions } from "../../state/app-actions.js";
 import { appReducer, createInitialAppState } from "../../state/app-reducer.js";
 import type { AgentTaskView } from "../../state/agent-chat-slice.js";
 import { mockBootstrap } from "./fixtures/bootstrap.js";
-import { AppFrame, TaskArchiveInlineAction, TaskRow, countProjectTasksToArchive, deriveSidebarPlacement, deriveVisibleSidebarPlacement, groupAgentTasks, groupTasksByTime, resolveSidebarAccountSummary, resolveSidebarContextMenuPlacement, resolveSidebarMenuOverlayStyle, resolveSidebarUpdateAction, resolveTaskAncestorGroupKeys, shouldCreateNewAgentDraft, truncateAccountDisplayText } from "../app-frame.js";
+import { AppFrame, TaskArchiveInlineAction, TaskRow, countProjectTasksToArchive, deriveSidebarPlacement, deriveVisibleSidebarPlacement, sameWorkspacePath, groupAgentTasks, groupTasksByTime, resolveSidebarAccountSummary, resolveSidebarContextMenuPlacement, resolveSidebarMenuOverlayStyle, resolveSidebarUpdateAction, resolveTaskAncestorGroupKeys, shouldCreateNewAgentDraft, truncateAccountDisplayText } from "../app-frame.js";
 
 describe("AppFrame", () => {
   it("使用原型 MainLayout 的侧栏图标与导航文案", () => {
@@ -771,6 +771,34 @@ describe("AppFrame", () => {
     )).toEqual({ left: 1096, top: 560 });
   });
 
+  it("opens the new shared-project dialog without changing the page behind it", () => {
+    const source = readFileSync(resolve(__dirname, "..", "app-frame.tsx"), "utf8");
+    const createBlock = source.slice(
+      source.indexOf("function newOnlineProject()"),
+      source.indexOf("async function registerProject")
+    );
+    // Creating a project used to jump to the board first, so the window behind the dialog belonged to some
+    // other shared project. The dialog is a dialog; it must not move the page.
+    expect(createBlock).toContain("requestCreateCollabProject()");
+    expect(createBlock).not.toContain("navigate(");
+    expect(createBlock).not.toContain("/collab");
+  });
+
+  it("keeps a taller project menu inside the window as well", () => {
+    // A shared project's menu has two more items than a local one, so it is taller than the size the clamp
+    // was written for; the placement must still keep the last item reachable.
+    const short = { width: 240, height: 196, margin: 8, gap: 4 };
+    const tall = { ...short, height: 292 };
+    const viewport = { width: 1280, height: 700 };
+    const point = { x: 120, y: 640 };
+
+    // With the estimate the menu's bottom would sit below the window.
+    expect(resolveSidebarContextMenuPlacement(point, viewport, short).top).toBe(496);
+    // With its real height it moves up so the whole menu stays visible.
+    expect(resolveSidebarContextMenuPlacement(point, viewport, tall).top).toBe(400);
+    expect(400 + tall.height + tall.margin).toBeLessThanOrEqual(viewport.height);
+  });
+
   it("keeps project mutations pending until the backend commits", () => {
     const source = readFileSync(resolve(__dirname, "..", "app-frame.tsx"), "utf8");
     const updateBlock = source.slice(
@@ -1075,6 +1103,22 @@ describe("AppFrame", () => {
     expect(taskRowBlock).toContain('depth === 1 ? "app-frame-task-row--depth-1" : ""');
     expect(stylesSource).toContain(".app-frame-task-row--depth-1 .app-frame-task-row__main {");
     expect(stylesSource).toContain("padding-left: var(--sidebar-title-inset);");
+  });
+
+  it("finds the local project that takes over a deleted shared project's sessions", () => {
+    // Deleting a shared project must keep its sessions as local tasks. When another local project already runs
+    // in the same folder, those sessions belong there; otherwise the carrier itself stays as the local project.
+    const carrier = { id: "carrier", name: "MemOS产品", rootPath: "/Users/me/MemOS-WorkSpace", pinned: false, createdAt: "2026-01-01T00:00:00.000Z" };
+    const neighbour = { id: "local", name: "MemOS-WorkSpace", rootPath: "/Users/me/MemOS-WorkSpace/", pinned: false, createdAt: "2026-02-01T00:00:00.000Z" };
+    const elsewhere = { id: "other", name: "other", rootPath: "/Users/me/elsewhere", pinned: false, createdAt: "2026-03-01T00:00:00.000Z" };
+    const pick = (projects: typeof carrier[]) => projects.find((project) => (
+      project.id !== carrier.id && sameWorkspacePath(project.rootPath, carrier.rootPath)
+    )) ?? null;
+
+    expect(pick([carrier, neighbour, elsewhere])?.id).toBe("local");
+    // Same folder, so a trailing separator must not hide it.
+    expect(pick([carrier])).toBeNull();
+    expect(pick([carrier, elsewhere])).toBeNull();
   });
 
   it("opens a local project's menu without touching the online project id", () => {

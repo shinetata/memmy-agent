@@ -21,6 +21,8 @@ import {
 import { useOptionalApiClients } from "../app/providers.js";
 import { createHttpCollabClient } from "../api/collab-client.js";
 import {
+  addCollabProject,
+  consumeCreateCollabProjectRequest,
   getCollabProjectsSnapshot,
   loadCollabProjects,
   markCollabProjectBound,
@@ -50,6 +52,7 @@ import { openExternalUrl } from "../utils/open-url.js";
 import { isWindowsDesktopPlatform } from "../utils/window-fullscreen.js";
 import { isComposingKeyboardEvent } from "../utils/keyboard.js";
 import { ImChannelTitleIcon, imChannelTitleDisplay } from "../integrations/integration-meta.js";
+import { CollabCreateProjectDialog } from "./collab-create-project-dialog.js";
 import { ImprovementProgramModal } from "./improvement-program-modal.js";
 import { writeMemorySubPage } from "./memory-sub-page-storage.js";
 import { SearchPalette } from "../components/search-palette.js";
@@ -346,6 +349,14 @@ export function AppFrame(props: AppFrameProps) {
   }, [collabClient, collabSnapshot.projects, taskStateCoordinator]);
 
   const [searchPaletteOpen, setSearchPaletteOpen] = useState(false);
+  const [createCollabOpen, setCreateCollabOpen] = useState(false);
+  // The sidebar, the board's empty state and the board header all ask for this dialog through one flag.
+  const createPending = collabSnapshot.createPending;
+  useEffect(() => {
+    if (!createPending) return;
+    setCreateCollabOpen(true);
+    consumeCreateCollabProjectRequest();
+  }, [createPending]);
   const [taskListMenuAnchor, setTaskListMenuAnchor] = useState<SidebarMenuAnchor | null>(null);
   const [sortMenuOpen, setSortMenuOpen] = useState(false);
   const [taskContextMenu, setTaskContextMenu] = useState<TaskContextMenuState | null>(null);
@@ -833,10 +844,22 @@ export function AppFrame(props: AppFrameProps) {
     if (!projectId || !collabClient || deletingOnlineProject) return;
     setDeletingOnlineProject(true);
     try {
+      const carrier = carrierOf(projectId);
+      const successor = carrier ? siblingProjectOnSameFolder(carrier) : null;
       await collabClient.deleteProject(projectId);
       setDeleteOnlineProjectId(null);
+      // Sessions must survive as local tasks. When another local project already runs in the same folder they
+      // move there, so the person ends up with one project per folder and every session still reachable. With
+      // no such project the carrier itself becomes the local project; only an empty one is removed.
+      if (carrier && clients?.memmyAgent) {
+        if (successor) {
+          await clients.memmyAgent.reassignProjectSessions(carrier.id, successor.id).catch(() => undefined);
+          await taskStateCoordinator.mutateProject({ kind: "delete", projectId: carrier.id });
+        } else if (!state.agent.tasks.some((task) => task.projectId === carrier.id)) {
+          await taskStateCoordinator.mutateProject({ kind: "delete", projectId: carrier.id });
+        }
+      }
       await loadCollabProjects(collabClient);
-      // The local project stays; the sidebar shows it as a plain local project again.
       void refreshAgentTasks();
     } catch (error) {
       showProjectOperationError(error);
@@ -846,12 +869,28 @@ export function AppFrame(props: AppFrameProps) {
     }
   }
 
-  /** The sidebar asks for the new-project dialog; the board owns the dialog itself. */
+  /** Another local project already using the carrier's folder, which can take over its sessions. */
+  function siblingProjectOnSameFolder(carrier: MemmyAgentProject): MemmyAgentProject | null {
+    return state.agent.projects.find((project) => (
+      project.id !== carrier.id && sameWorkspacePath(project.rootPath, carrier.rootPath)
+    )) ?? null;
+  }
+
+  /** The local project a shared project runs its tasks in, as this computer records it. */
+  function carrierOf(onlineProjectId: string): MemmyAgentProject | null {
+    const localProjectId = collabSnapshot.projects?.find((project) => project.id === onlineProjectId)?.localProjectId;
+    if (!localProjectId) return null;
+    return state.agent.projects.find((project) => project.id === localProjectId) ?? null;
+  }
+
+  /**
+   * Opens the new shared-project dialog over the current page. Creating must not first switch the window to a
+   * project board: the background the person sees would change before they have decided anything.
+   */
   function newOnlineProject() {
     setProjectCreateMenuAnchor(null);
     handleFirstSidebarInteraction();
     requestCreateCollabProject();
-    dispatch(appActions.navigate("/collab"));
   }
 
   async function registerProject(mode: "blank" | "existing") {
@@ -1748,9 +1787,12 @@ export function AppFrame(props: AppFrameProps) {
       <ConfirmDialog
         open={deleteOnlineProjectId != null}
         title={t("appFrame.project.deleteSharedTitle")}
-        message={t("appFrame.project.deleteSharedMessage", {
-          name: collabSnapshot.projects?.find((project) => project.id === deleteOnlineProjectId)?.name ?? ""
-        })}
+        message={t(
+          deleteOnlineProjectId && carrierOf(deleteOnlineProjectId)
+            ? "appFrame.project.deleteSharedMessageKeepsTasks"
+            : "appFrame.project.deleteSharedProjectOnlyMessage",
+          { name: collabSnapshot.projects?.find((project) => project.id === deleteOnlineProjectId)?.name ?? "" }
+        )}
         cancelLabel={t("common.cancel")}
         confirmLabel={t("appFrame.project.deleteSharedConfirm")}
         confirmVariant="danger"
@@ -1802,6 +1844,25 @@ export function AppFrame(props: AppFrameProps) {
         confirmVariant="danger"
         onCancel={() => setDeleteConfirmTask(null)}
         onConfirm={() => void confirmDeleteArchivedTask()}
+      />
+      <CollabCreateProjectDialog
+        open={createCollabOpen}
+        onClose={() => setCreateCollabOpen(false)}
+        onCreated={(project) => {
+          setCreateCollabOpen(false);
+          addCollabProject(project);
+          // Only now, once the project exists, does the window move to its board.
+          dispatch(appActions.navigate("/collab"));
+        }}
+        onBound={(projectId, localProjectId) => markCollabProjectBound(projectId, localProjectId)}
+        onBindFailed={(reason) => {
+          // The project exists; only its local project is missing, so the reason is logged rather than shown raw.
+          console.warn(`Shared project created without a local project: ${reason}`);
+          dispatch(agentActions.operationFailed("sidebar", createAgentOperationError({
+            source: "sidebar",
+            message: "collab.create.bindFailed"
+          })));
+        }}
       />
       {deferredGuidanceStep === "improvement" && state.bootstrap?.app.userMode !== "byok" && state.bootstrap?.onboarding.improvementProgram === "unset" && guidanceWorkspaceReady && (
         <ImprovementProgramModal
@@ -3146,6 +3207,18 @@ function ProjectContextMenu(props: {
 }) {
   const { t } = useTranslation();
   const project = props.project;
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  const [menuSize, setMenuSize] = useState<SidebarMenuSize>(projectContextMenuSize);
+  useLayoutEffect(() => {
+    const element = menuRef.current;
+    if (!element) return;
+    const rect = element.getBoundingClientRect();
+    if (!rect.width || !rect.height) return;
+    // Width and height are only used for the math, never applied, so the measured size is stable.
+    if (Math.abs(rect.height - menuSize.height) > 0.5 || Math.abs(rect.width - menuSize.width) > 0.5) {
+      setMenuSize({ ...menuSize, width: rect.width, height: rect.height });
+    }
+  });
   if (!project) return null;
   const run = (action: () => void) => {
     action();
@@ -3154,13 +3227,21 @@ function ProjectContextMenu(props: {
   if (typeof document === "undefined" || typeof window === "undefined") {
     return null;
   }
-  const overlayStyle = resolveSidebarContextMenuOverlayStyle(
-    props.menu.placement,
-    { width: window.innerWidth, height: window.innerHeight },
-    projectContextMenuSize
-  );
+  // The menu grows with its items — a shared project has two more than a local one — so the clamp must use the
+  // size that was actually rendered. The estimate alone let the last item land outside the window.
+  const overlayStyle = {
+    ...resolveSidebarContextMenuOverlayStyle(
+      props.menu.placement,
+      { width: window.innerWidth, height: window.innerHeight },
+      menuSize
+    ),
+    // A menu taller than the window scrolls instead of being cut off.
+    maxHeight: Math.max(0, window.innerHeight - projectContextMenuSize.margin * 2),
+    overflowY: "auto" as const
+  };
   const menu = (
     <div
+      ref={menuRef}
       className="app-frame-sidebar-menu app-frame-sidebar-menu--project"
       style={overlayStyle}
       onClick={(event) => event.stopPropagation()}
