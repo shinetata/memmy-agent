@@ -2,10 +2,10 @@
  * The @ menu in a task input: the online project sessions a message can reference. Typing @ lists the most
  * recent sessions the person can reach; typing after it matches titles, questions and members.
  */
-import { Search } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { CollabClient, CollabProjectSession } from "../api/collab-client.js";
 import { useTranslation } from "../i18n/use-translation.js";
+import { memberColor } from "./collab-member-color.js";
 
 /** How many sessions the menu lists before the person types anything. */
 export const MENTION_DEFAULT_LIMIT = 5;
@@ -100,6 +100,14 @@ export function mentionEmptyLabelKey(
     : { key: "home.mention.empty", values: { project: input.projectName } };
 }
 
+/**
+ * The second line of a row: who started the session, then what it was about. The project is left out because the
+ * menu only ever offers sessions of the project the task already belongs to, so it would repeat on every row.
+ */
+export function mentionSessionLine(input: { memberName: string; lastQuestion: string }): string {
+  return [input.memberName, input.lastQuestion].filter(Boolean).join(" · ");
+}
+
 /** The @ menu itself: one row per session, keyboard selection included. */
 export function CollabSessionMentionMenu(props: {
   sessions: CollabProjectSession[];
@@ -128,6 +136,7 @@ export function CollabSessionMentionMenu(props: {
           <p className="px-2.5 py-3 text-xs text-text-ink/45">{props.emptyLabel}</p>
         ) : props.sessions.map((session, index) => {
           const name = session.memberName || (session.mine ? t("collab.session.you") : "");
+          const line = mentionSessionLine({ memberName: name, lastQuestion: session.lastQuestion });
           const selected = index === props.selectedIndex;
           return (
             <button
@@ -135,17 +144,25 @@ export function CollabSessionMentionMenu(props: {
               type="button"
               role="option"
               aria-selected={selected}
+              title={[session.title, line].filter(Boolean).join("\n")}
               onClick={() => props.onSelect(session)}
-              className={`w-full rounded-btn px-2.5 py-2 text-left cursor-pointer transition-colors flex items-center gap-2.5 ${selected ? "bg-canvas-oat/80" : "hover:bg-canvas-oat/50"}`}
+              className={`w-full rounded-btn px-2.5 py-2 text-left cursor-pointer transition-colors flex items-start gap-2.5 ${selected ? "bg-canvas-oat/80" : "hover:bg-canvas-oat/50"}`}
             >
-              <Search size={13} className="shrink-0 text-text-ink/35" aria-hidden="true" />
+              {/* Same mark as the project board's session list, so one member keeps one colour across the app. */}
+              <span
+                className="mt-[1px] grid h-[22px] w-[22px] shrink-0 place-items-center rounded-full text-[11px] font-bold leading-none"
+                style={{ background: memberColor(name), color: "#fff" }}
+                aria-hidden="true"
+              >
+                {Array.from(name)[0] ?? "?"}
+              </span>
               <span className="min-w-0 flex-1">
                 <span className="block truncate text-[13px] text-text-ink">{session.title}</span>
-                <span className="mt-0.5 block truncate text-[11px] text-text-ink/45">
-                  {[name, session.projectName].filter(Boolean).join(" · ")}
-                </span>
+                {line ? (
+                  <span className="mt-0.5 block truncate text-[11px] text-text-ink/45">{line}</span>
+                ) : null}
               </span>
-              <span className="shrink-0 text-[11px] text-text-ink/40">{dayLabel(session.lastActiveAt)}</span>
+              <span className="mt-[1px] shrink-0 text-[11px] text-text-ink/40">{dayLabel(session.lastActiveAt)}</span>
             </button>
           );
         })}

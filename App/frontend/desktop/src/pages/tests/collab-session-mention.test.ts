@@ -1,6 +1,6 @@
 /** The @ menu's text logic: when it opens, what it inserts, and what the agent is told. */
 import { describe, expect, it } from "vitest";
-import { applyMention, mentionEmptyLabelKey, mentionQueryFromInput } from "../collab-session-mention.js";
+import { applyMention, mentionEmptyLabelKey, mentionQueryFromInput, mentionSessionLine } from "../collab-session-mention.js";
 
 describe("mention query", () => {
   it("opens on an @ that starts a word", () => {
@@ -28,6 +28,16 @@ describe("what the menu says when it has nothing to offer", () => {
 
   it("explains that the task is outside an online project", () => {
     expect(mentionEmptyLabelKey({ projectName: null })).toEqual({ key: "home.mention.noProject" });
+  });
+});
+
+describe("what a row tells the person", () => {
+  it("names the member before the session's opening question", () => {
+    expect(mentionSessionLine({ memberName: "快乐团子", lastQuestion: "竞品有没有做类似项目记忆的？" })).toBe("快乐团子 · 竞品有没有做类似项目记忆的？");
+  });
+
+  it("leaves the project out, since every offer is already in the task's project", () => {
+    expect(mentionSessionLine({ memberName: "快乐团子", lastQuestion: "" })).toBe("快乐团子");
   });
 });
 

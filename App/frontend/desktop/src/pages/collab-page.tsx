@@ -32,7 +32,10 @@ import type { MessageKey } from "../i18n/messages.js";
 import { useTranslation } from "../i18n/use-translation.js";
 import { agentSourceDisplayName, agentSourceLogoUrl } from "./agent-source-logos.js";
 import { AppFrame } from "./app-frame.js";
+import { memberColor } from "./collab-member-color.js";
 import styles from "./collab-page.module.css";
+
+export { memberColor };
 
 const TOAST_MS = 1_800;
 /** The board shows ten sessions at a time, so a long project stays scannable. */
@@ -150,14 +153,6 @@ export function formatSessionTime(value: string | null): string {
 /** Key that identifies a local session across agents. */
 export function localSessionKey(session: { sourceId: string; conversationId: string }): string {
   return `${session.sourceId}\u0000${session.conversationId}`;
-}
-
-/** Avatar tint, stable per member name so a member keeps one colour across the board. */
-export function memberColor(name: string): string {
-  const palette = ["#7c6bd6", "#4b9fd0", "#d98b4a", "#3f9c8a", "#c2698f", "#5b8f4e", "#b0793f", "#5f7bd0"];
-  let hash = 0;
-  for (const char of name) hash = (hash * 31 + char.codePointAt(0)!) % 100_000;
-  return palette[hash % palette.length]!;
 }
 
 /** The whole board of one online project: the header, the two tabs, the session list and the link dialog. */
