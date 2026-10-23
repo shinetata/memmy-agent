@@ -182,6 +182,7 @@ function toConversationMessage(
     workspacePath: target.workspacePath,
     gitRoot: target.gitRoot,
     ordinal: rawMessage.ordinal,
+    ...(rawMessage.sessionTitle ? { sessionTitle: rawMessage.sessionTitle } : {}),
     rawMeta: Object.freeze({
       ...rawMessage.rawMeta,
       cursorStorageHash: target.storageHash

@@ -163,7 +163,7 @@ export async function readRecentSessions(adapter: SourceAdapter, limit: number):
     for await (const message of adapter.scan({ order: "recent_first", maxScanTargets: limit, maxConversations: limit, fullHistory: true })) {
       let builder = builders.get(message.conversationId);
       if (!builder) {
-        builder = { workspacePath: null, updatedAt: "", turns: [] };
+        builder = { workspacePath: null, updatedAt: "", turns: [], nativeTitle: "" };
         builders.set(message.conversationId, builder);
       }
       appendMessage(builder, message);
@@ -183,7 +183,7 @@ async function readOneSession(adapter: SourceAdapter, conversationId: string, re
       return null;
     }
     for (const limit of [recentLimit, WIDE_SESSIONS_PER_SOURCE]) {
-      const builder: SessionBuilder = { workspacePath: null, updatedAt: "", turns: [] };
+      const builder: SessionBuilder = { workspacePath: null, updatedAt: "", turns: [], nativeTitle: "" };
       let seen = false;
       for await (const message of adapter.scan({ order: "recent_first", maxScanTargets: limit, maxConversations: limit, fullHistory: true })) {
         if (message.conversationId !== conversationId) {
@@ -206,12 +206,18 @@ interface SessionBuilder {
   workspacePath: string | null;
   updatedAt: string;
   turns: LocalSessionTurn[];
+  /** The title the agent generated; the last one seen wins, since an agent may retitle as the work changes. */
+  nativeTitle: string;
 }
 
 function appendMessage(builder: SessionBuilder, message: ConversationMessage): void {
   builder.workspacePath ??= message.workspacePath;
   if (message.createdAt > builder.updatedAt) {
     builder.updatedAt = message.createdAt;
+  }
+  const nativeTitle = message.sessionTitle?.trim();
+  if (nativeTitle) {
+    builder.nativeTitle = nativeTitle;
   }
   if (message.role === "system") {
     return;
@@ -245,7 +251,7 @@ function finishSession(adapter: SourceAdapter, grouper: SessionGrouper, conversa
     sourceId: adapter.descriptor.sourceId,
     agentName: adapter.descriptor.displayName,
     conversationId,
-    title: pickTitle(questions, adapter, builder.workspacePath, builder.updatedAt),
+    title: builder.nativeTitle ? oneLine(builder.nativeTitle, TITLE_MAX_CHARS) : pickTitle(questions, adapter, builder.workspacePath, builder.updatedAt),
     lastQuestion: oneLine(questions.at(-1) ?? asked.at(-1)!.question, 120),
     workspacePath: builder.workspacePath,
     group: grouper({ workspacePath: builder.workspacePath, conversationId }),
@@ -262,6 +268,9 @@ export function cleanQuestion(text: string): string {
   let value = text;
   // 宿主注入的整块内容：已知标签 + 任意带属性/无属性的成对标签
   value = value.replace(/<(recommended_plugins|environment_context|user_instructions|system[_-]reminder|pasted_content|local-command-[a-z]+)(?:\s[^>]*)?>[\s\S]*?<\/\1>/giu, " ");
+  // HTML 注释与引用前缀：Agent 之间互相引用会话时留下 `<!-- reply 2 --> > 原话` 这类排版标记，不该出现在标题里
+  value = value.replace(/<!--[\s\S]*?-->/gu, " ");
+  value = value.replace(/(^|[\n。！？；：])\s*>\s*/gu, "$1 ");
   // 自动任务：只保留任务名，去掉 ID 与 memory 路径
   const automation = /^Automation:\s*([^\n]+?)\s*(?:Automation ID|$)/iu.exec(value.trim());
   if (automation) {
@@ -269,6 +278,8 @@ export function cleanQuestion(text: string): string {
   }
   const lines = value
     .split("\n")
+    // 引用前缀 `> ` 只是排版，去掉后才是原话
+    .map((line) => line.replace(/^\s*>\s?/u, ""))
     // markdown 标题式的文件说明、文件清单头、代码围栏
     .filter((line) => {
       const trimmed = line.trim();

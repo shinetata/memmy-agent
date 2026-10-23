@@ -24,6 +24,11 @@ export interface ConversationMessage {
   gitRoot: string | null;
   rawMeta: Readonly<Record<string, unknown>>;
   ordinal?: number;
+  /**
+   * The title the agent itself generated for this conversation, when its store keeps one.
+   * Sources that only keep messages leave it out, and the caller falls back to a title it derives.
+   */
+  sessionTitle?: string;
 }
 
 export interface SourceDescriptor {

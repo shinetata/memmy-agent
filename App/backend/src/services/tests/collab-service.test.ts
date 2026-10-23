@@ -166,6 +166,41 @@ describe("collab service", () => {
     expect(calls.find((call) => call.url.endsWith("/agent-sessions/available"))?.body).not.toMatchObject({ fresh: true });
   });
 
+  it("re-uploads a session whose title changed, even when its turns did not", async () => {
+    const local: LocalAgentSession[] = [
+      { ...localSession("claude_code", "a1", "/repo", "2026-10-22T01:00:00.000Z"), title: "关于MemOS项目记忆这部分内容，算法这边提出了疑问" }
+    ];
+    // The upload rereads the session, so its title is the same one the listing reported.
+    let readTitle = "关于MemOS项目记忆这部分内容，算法这边提出了疑问";
+    const { fetcher, calls } = fakeFetch({
+      "POST /api/v1/agent-sessions/available": () => ({ sessions: local, refreshing: false }),
+      "POST /api/v1/agent-sessions/read": () => ({
+        session: { title: readTitle, updatedAt: "2026-10-22T01:00:00.000Z", turns: [{ question: "问", reply: "答", steps: [], startedAt: "" }] }
+      }),
+      "PUT /api/collab/projects/p-1/sessions": (call) => {
+        const upload = (call.body as { sessions: Array<{ sourceSessionId: string }> }).sessions[0]!;
+        return { code: 0, data: { sessions: [{ id: `id-${upload.sourceSessionId}` }] } };
+      }
+    });
+    const svc = service(fetcher);
+    await svc.saveLinks("p-1", { groups: [{ sourceId: "claude_code", groupId: "/repo", excluded: [] }], sessions: [] });
+    await waitForUploads(svc, "p-1");
+    expect(uploadedIds(calls)).toEqual(["a1"]);
+
+    // The agent finally names the conversation; nothing else about the session changed.
+    calls.length = 0;
+    readTitle = "Memmy项目协作记忆方案";
+    local[0] = { ...local[0]!, title: "Memmy项目协作记忆方案" };
+    expect(await svc.syncLinkedSessions()).toEqual({ uploaded: 1, removed: 0, failed: 0 });
+    expect(uploadedIds(calls)).toEqual(["a1"]);
+    expect(uploadedTitles(calls)).toEqual(["Memmy项目协作记忆方案"]);
+
+    // Once the cloud has that title, the next sync has nothing left to do.
+    calls.length = 0;
+    expect(await svc.syncLinkedSessions()).toEqual({ uploaded: 0, removed: 0, failed: 0 });
+    expect(uploadedIds(calls)).toEqual([]);
+  });
+
   it("removes only what the person unchecked, and never uploads a deleted session again", async () => {
     const local: LocalAgentSession[] = [
       localSession("claude_code", "a1", "/repo", "2026-10-22T01:00:00.000Z"),
@@ -477,6 +512,12 @@ function uploadedIds(calls: Call[]): string[] {
   return calls
     .filter((call) => call.method === "PUT")
     .map((call) => (call.body as { sessions: Array<{ sourceSessionId: string }> }).sessions[0]!.sourceSessionId);
+}
+
+function uploadedTitles(calls: Call[]): string[] {
+  return calls
+    .filter((call) => call.method === "PUT")
+    .map((call) => (call.body as { sessions: Array<{ title: string }> }).sessions[0]!.title);
 }
 
 /** Writes a Memmy task session file: a metadata line first, then the records of each turn. */

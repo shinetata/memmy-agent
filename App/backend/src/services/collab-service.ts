@@ -181,6 +181,18 @@ export interface CollabSyncProgress {
   failed: number;
 }
 
+/** What one upload put in the cloud, and when. */
+interface SyncedSession {
+  cloudSessionId: string;
+  updatedAt: string;
+  groupId: string | null;
+  /**
+   * The title the listing reported when this session was uploaded. Absent on records written before titles came
+   * from the agent itself, which is what makes the next sync refresh them.
+   */
+  title?: string;
+}
+
 interface StoredLinks extends CollabLinks {
   projectId: string;
   accountId: string;
@@ -191,7 +203,7 @@ interface StoredLinks extends CollabLinks {
   /** Where this project's tasks run when the person picked no folder; named after the project. */
   workingDirectory: string | null;
   /** Last upload of each session, by session key. */
-  synced: Record<string, { cloudSessionId: string; updatedAt: string; groupId: string | null }>;
+  synced: Record<string, SyncedSession>;
 }
 
 export interface CollabSessionReference {
@@ -414,7 +426,8 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
       const inProject = session.sourceId === MEMMY_SOURCE_ID
         ? !stored.removedSessions.includes(session.conversationId)
         : covered.has(key);
-      return inProject && (!synced || isNewer(session.updatedAt, synced.updatedAt));
+      // A retitled session needs a new upload even when its turns did not change: the board shows the title.
+      return inProject && (!synced || isNewer(session.updatedAt, synced.updatedAt) || session.title !== synced.title);
     });
   }
 
@@ -441,7 +454,9 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
           stored.synced[sessionKey(session)] = {
             cloudSessionId,
             updatedAt: session.updatedAt,
-            groupId: session.group?.id ?? null
+            groupId: session.group?.id ?? null,
+            // The listed title is what the next sync compares against, so a retitled session uploads once more.
+            title: session.title
           };
           result.uploaded += 1;
         } catch (error) {
@@ -1012,7 +1027,12 @@ function parseStoredLinks(content: string): StoredLinks | null {
   for (const [key, value] of Object.entries(record(raw.synced))) {
     const entry = record(value);
     if (text(entry.cloudSessionId)) {
-      synced[key] = { cloudSessionId: text(entry.cloudSessionId), updatedAt: text(entry.updatedAt), groupId: nullableText(entry.groupId) };
+      synced[key] = {
+        cloudSessionId: text(entry.cloudSessionId),
+        updatedAt: text(entry.updatedAt),
+        groupId: nullableText(entry.groupId),
+        ...(nullableText(entry.title) === null ? {} : { title: text(entry.title) })
+      };
     }
   }
   return {

@@ -103,6 +103,33 @@ describe("local session reader", () => {
   it("strips host-injected blocks and automation ids from titles", () => {
     expect(cleanQuestion("<environment_context>cwd</environment_context>帮我拉起服务")).toBe("帮我拉起服务");
     expect(cleanQuestion("Automation: MemOS 社区周报 Automation ID: abc")).toBe("MemOS 社区周报");
+    // 会话之间互相引用时留下的注释与引用前缀，不该出现在标题里
+    expect(cleanQuestion("<!-- reply 2 --> > conversation_id 写入项目记忆时还是必填？ <!-- reply --> > 否"))
+      .toBe("conversation_id 写入项目记忆时还是必填？ 否");
+  });
+
+  it("uses the title the agent generated, not the first sentence the person typed", async () => {
+    const reader = readerWith([fakeAdapter("claude_code", "Claude Code", [
+      message("claude_code", "s-1", "user", "关于MemOS项目记忆这部分内容，算法这边提出了疑问，也是我心中的疑问", "2026-10-21T07:00:00.000Z", "/repo"),
+      message("claude_code", "s-1", "assistant", "先看写入时机。", "2026-10-21T07:00:04.000Z", "/repo", {}, "Memmy项目协作记忆方案"),
+      message("claude_code", "s-1", "user", "那 conversation_id 呢？", "2026-10-21T07:05:00.000Z", "/repo", {}, "Memmy项目协作记忆方案")
+    ])]);
+
+    const listed = (await reader.available({})).sessions;
+    expect(listed[0]?.title).toBe("Memmy项目协作记忆方案");
+    expect((await reader.read({ sourceId: "claude_code", conversationId: "s-1" })).title).toBe("Memmy项目协作记忆方案");
+  });
+
+  it("keeps the last title the agent wrote, and falls back when it wrote none", async () => {
+    const reader = readerWith([fakeAdapter("codex", "Codex", [
+      message("codex", "retitled", "user", "调研记忆产品", "2026-10-21T07:00:00.000Z", "/repo", {}, "旧标题"),
+      message("codex", "retitled", "user", "继续", "2026-10-21T07:05:00.000Z", "/repo", {}, "调研三款记忆产品商业版"),
+      message("codex", "untitled", "user", "没有原生标题的首问", "2026-10-21T08:00:00.000Z", "/repo")
+    ])]);
+
+    const titles = new Map((await reader.available({})).sessions.map((session) => [session.conversationId, session.title]));
+    expect(titles.get("retitled")).toBe("调研三款记忆产品商业版");
+    expect(titles.get("untitled")).toBe("没有原生标题的首问");
   });
 });
 
@@ -127,7 +154,19 @@ function message(
   content: string,
   createdAt: string,
   workspacePath: string | null,
-  rawMeta: Record<string, unknown> = {}
+  rawMeta: Record<string, unknown> = {},
+  sessionTitle?: string
 ): ConversationMessage {
-  return { messageId: `${conversationId}:${createdAt}`, sourceId, conversationId, role, content, createdAt, workspacePath, gitRoot: null, rawMeta };
+  return {
+    messageId: `${conversationId}:${createdAt}`,
+    sourceId,
+    conversationId,
+    role,
+    content,
+    createdAt,
+    workspacePath,
+    gitRoot: null,
+    rawMeta,
+    ...(sessionTitle ? { sessionTitle } : {})
+  };
 }

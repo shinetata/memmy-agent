@@ -40,8 +40,21 @@ async function* readComposers(source: CursorVscdbSource | null, signal?: AbortSi
   if (!source) return;
   for (const composerId of source.mainComposerIds()) {
     signal?.throwIfAborted();
-    yield* readCursorComposer(source, composerId, signal);
+    // Cursor names a chat in its composer data; that name is what the chat list shows.
+    const sessionTitle = composerTitle(source.composerData(composerId));
+    for await (const message of readCursorComposer(source, composerId, signal)) {
+      yield sessionTitle ? { ...message, sessionTitle } : message;
+    }
   }
+}
+
+/** `composerData.name` holds the generated chat name; it is blank until Cursor has named the chat. */
+function composerTitle(data: unknown): string | null {
+  if (typeof data !== "object" || data === null) return null;
+  const name = (data as { name?: unknown }).name;
+  if (typeof name !== "string") return null;
+  const title = name.replace(/\s+/gu, " ").trim();
+  return title.length > 0 ? title : null;
 }
 
 /** A workspace database without the chat tables is not a conversation store. */
