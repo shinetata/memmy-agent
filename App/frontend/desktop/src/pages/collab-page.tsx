@@ -551,8 +551,20 @@ export function CollabPage() {
                               </button>
                               {menuOpen ? (
                                 <>
-                                  <button type="button" className={styles.menuScrim} aria-label={t("collab.cancel")} onClick={() => setOpenMenuId(null)} />
-                                  <div className={styles.menu} role="menu">
+                                  {/*
+                                   * The row itself opens the session reader. Every click that belongs to the menu has to
+                                   * stop here, or copying a link also opens the session behind the toast.
+                                   */}
+                                  <button
+                                    type="button"
+                                    className={styles.menuScrim}
+                                    aria-label={t("collab.cancel")}
+                                    onClick={(event) => {
+                                      event.stopPropagation();
+                                      setOpenMenuId(null);
+                                    }}
+                                  />
+                                  <div className={styles.menu} role="menu" onClick={(event) => event.stopPropagation()}>
                                     <button type="button" role="menuitem" className={styles.menuItem} onClick={() => { setOpenMenuId(null); void copyLink(session); }}>
                                       {t("collab.session.copyLink")}
                                     </button>
