@@ -479,7 +479,12 @@
   background: var(--collab-surface);
 }
 
-.readerModal {
+/*
+ * Widths, on the shared .modal default of 440px.
+ * styles.css is imported last by main.tsx, so the plain .modal rule lands after this module in the bundle and wins
+ * on equal specificity; each of these dialogs carries its own .modal-prefixed class so the width survives.
+ */
+:global(.modal).readerModal {
   width: min(760px, calc(100vw - 32px));
 }
 
@@ -607,11 +612,11 @@
   -webkit-backdrop-filter: none;
 }
 
-.createModal {
+:global(.modal).createModal {
   width: min(540px, calc(100vw - 32px));
 }
 
-.pickModal {
+:global(.modal).pickModal {
   width: min(880px, calc(100vw - 32px));
 }
 
