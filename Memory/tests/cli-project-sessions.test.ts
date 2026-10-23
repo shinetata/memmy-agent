@@ -38,7 +38,7 @@ describe("memmy-memory sessions", () => {
     expect(calls[0]).toEqual({
       url: "http://127.0.0.1:62315/api/collab/sessions/read",
       headers: { "x-memmy-local-token": "local-token", "content-type": "application/json" },
-      body: { reference: "https://memmy.example/s/abc-123" }
+      body: { reference: "https://memmy.example/s/abc-123", view: {} }
     });
   });
 
@@ -56,7 +56,52 @@ describe("memmy-memory sessions", () => {
     const url = new URL(lastUrl);
     expect(url.pathname).toBe("/api/collab/sessions/search");
     expect(Object.fromEntries(url.searchParams)).toEqual({ q: "重复分享", member: "用户C", limit: "3" });
-    expect(await run(["search", "nothing"], { fetch: fetcher, runtimeConfigPath })).toBe("没有匹配的会话。");
+    expect(await run(["search", "nothing"], { fetch: fetcher, runtimeConfigPath })).toMatch(/^没有匹配的会话。/u);
+  });
+
+  it("names every project a merged result is shared to and passes --since through", async () => {
+    let lastUrl = "";
+    const sessions = [{
+      id: "a",
+      title: "Memmy项目协作记忆方案",
+      projectName: "Markdown事项验证",
+      projectNames: ["Markdown事项验证", "测试"],
+      memberName: "用户C",
+      mine: false,
+      lastActiveAt: null
+    }];
+    const fetcher = (async (input: string | URL) => {
+      lastUrl = String(input);
+      return new Response(JSON.stringify({ sessions }), { status: 200 });
+    }) as typeof fetch;
+    const runtimeConfigPath = runtimeFile({ baseUrl: "http://127.0.0.1:62315", localToken: "t" });
+
+    expect(await run(["search", "项目", "记忆", "--since", "30d"], { fetch: fetcher, runtimeConfigPath }))
+      .toBe("a  Memmy项目协作记忆方案  Markdown事项验证、测试 · 用户C");
+    expect(Object.fromEntries(new URL(lastUrl).searchParams)).toEqual({ q: "项目 记忆", since: "30d" });
+  });
+
+  it("sends the read range the agent asked for, one at a time", async () => {
+    const bodies: unknown[] = [];
+    const fetcher = (async (_input: string | URL, init?: RequestInit) => {
+      bodies.push(JSON.parse(String(init?.body)));
+      return new Response(JSON.stringify({ text: "ok" }), { status: 200 });
+    }) as typeof fetch;
+    const runtimeConfigPath = runtimeFile({ baseUrl: "http://127.0.0.1:62315", localToken: "t" });
+
+    await run(["read", "abc", "--around", "12"], { fetch: fetcher, runtimeConfigPath });
+    await run(["read", "abc", "--turns", "8-3"], { fetch: fetcher, runtimeConfigPath });
+    await run(["read", "abc", "--find", "云端先校验版本"], { fetch: fetcher, runtimeConfigPath });
+    await run(["read", "abc", "--all"], { fetch: fetcher, runtimeConfigPath });
+    expect(bodies.map((body) => (body as { view: unknown }).view)).toEqual([
+      { around: 12 },
+      { turns: { from: 3, to: 8 } },
+      { find: "云端先校验版本" },
+      { all: true }
+    ]);
+    await expect(run(["read", "abc", "--around", "2", "--all"], { fetch: fetcher, runtimeConfigPath })).rejects.toThrow(/只能指定一种读取范围/u);
+    await expect(run(["read", "abc", "--turns", "a-b"], { fetch: fetcher, runtimeConfigPath })).rejects.toThrow(/--turns/u);
+    await expect(run(["read", "abc", "--around", "0"], { fetch: fetcher, runtimeConfigPath })).rejects.toThrow(/--around/u);
   });
 
   it("tells the agent to open Memmy when the desktop app is not running, and relays API errors", async () => {

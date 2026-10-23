@@ -117,6 +117,96 @@ describe("collab service", () => {
     expect(reference.text).toContain("回答与该会话相关的问题前，先读取此文件。");
   });
 
+  it("prints the turns a read view asks for and keeps the whole record in the file", async () => {
+    // The cloud keeps the latest 12 of 18 turns, so the first one it returns is turn 7.
+    const turns = Array.from({ length: 12 }, (_, index) => ({
+      question: `第 ${index + 7} 个问题`,
+      reply: index === 3 ? "定案：云端先校验版本，冲突时提示并展示最新内容。" : `第 ${index + 7} 个回复`,
+      steps: [],
+      startedAt: ""
+    }));
+    const { fetcher } = fakeFetch({
+      [`GET /api/collab/sessions/${cloudSession.id}`]: () => ({ code: 0, data: { session: { ...cloudSession, turns } } })
+    });
+    const svc = service(fetcher);
+    const read = (view: Parameters<typeof svc.readSession>[1]) => svc.readSession(cloudSession.id, view).then((reference) => reference.text);
+
+    const overview = await read({});
+    expect(overview).toContain("已读取用户C的会话「重复分享返回 409」");
+    expect(overview).toContain("共 18 轮，云端保留最近 12 轮。");
+    expect(overview).toContain("- 第 7 轮：第 7 个问题");
+    expect(overview).toContain("- 第 13 轮：第 13 个问题");
+    expect(overview).not.toContain("### 第 13 轮");
+    expect(overview).toContain("### 第 14 轮\n用户C：第 14 个问题\n回复：第 14 个回复");
+    expect(overview).toContain("### 第 18 轮");
+
+    // Punctuation differs from the record, as it does when the sentence is read off a screenshot.
+    const found = await read({ find: "云端先校验版本 冲突时提示" });
+    expect(found).toContain("出现在第 10 轮");
+    expect(found).toMatch(/### 第 8 轮[\s\S]*### 第 12 轮\n[\s\S]*……（略去第 13–15 轮）[\s\S]*### 第 16 轮/u);
+    expect(found).not.toContain("### 第 7 轮");
+
+    const missing = await read({ find: "重复分享改为 404" });
+    expect(missing).toContain("这个会话中没有找到「重复分享改为 404」");
+    expect(missing).toContain("- 第 7 轮：第 7 个问题");
+    expect(missing).not.toContain("### ");
+
+    expect(await read({ turns: { from: 1, to: 8 } })).toMatch(/以下为第 7–8 轮。\n\n### 第 7 轮[\s\S]*### 第 8 轮[^#]*$/u);
+    expect(await read({ around: 3 })).toContain("第 3 轮不在记录中，记录中为第 7–18 轮。");
+    expect((await read({ all: true })).match(/### 第/gu)).toHaveLength(12);
+    // The @ menu sends no view and still gets the pointer to the file.
+    expect((await svc.readSession(cloudSession.id)).text).toContain("回答与该会话相关的问题前，先读取此文件。");
+  });
+
+  it("lists a session shared to several projects once, keeps sinceMs, and trims to the limit", async () => {
+    const shared = { ...cloudSession, title: "Memmy项目协作记忆方案", lastActiveAt: "2026-10-22T03:11:17.861Z" };
+    const { fetcher, calls } = fakeFetch({
+      "GET /api/collab/sessions/search": () => ({
+        code: 0,
+        data: {
+          sessions: [
+            { ...shared, id: "a", projectName: "Markdown事项验证" },
+            { ...shared, id: "b", projectName: "测试" },
+            { ...cloudSession, id: "c", projectName: "测试", lastActiveAt: "2026-10-21T00:00:00.000Z" },
+            { ...cloudSession, id: "d", title: "九月的旧会话", lastActiveAt: "2026-09-01T00:00:00.000Z" }
+          ]
+        }
+      })
+    });
+    const svc = service(fetcher);
+
+    const { sessions } = await svc.searchSessions({ query: "项目 记忆", member: "用户C", sinceMs: 30 * 86_400_000 });
+    expect(sessions.map((session) => [session.id, session.projectNames])).toEqual([
+      ["a", ["Markdown事项验证", "测试"]],
+      ["c", ["测试"]]
+    ]);
+    // The cloud is asked for its full page: merging and the window are applied after it answers.
+    expect(Object.fromEntries(new URL(calls[0]!.url).searchParams)).toMatchObject({ member: "用户C", limit: "20" });
+    expect((await svc.searchSessions({ query: "项目", limit: 1 })).sessions).toHaveLength(1);
+  });
+
+  it("reads the person's own nickname as their sessions, since the cloud stores another name for them", async () => {
+    const mine = { ...cloudSession, id: "m", title: "Memmy项目协作记忆方案", memberName: "我", mine: true };
+    const theirs = { ...cloudSession, id: "t", title: "项目协作的另一条线" };
+    const { fetcher, calls } = fakeFetch({
+      "GET /api/collab/sessions/search": () => ({ code: 0, data: { sessions: [theirs, mine] } })
+    });
+    const svc = service(fetcher, { getAccount: () => ({ accountId: "u-b", credential: "uuid-b", memberName: "快乐团子" }) });
+    const params = () => Object.fromEntries(new URL(calls[calls.length - 1]!.url).searchParams);
+
+    const byMember = await svc.searchSessions({ query: "项目协作记忆", member: "快乐团子" });
+    expect(byMember.sessions.map((session) => [session.id, session.memberName])).toEqual([["m", "快乐团子"]]);
+    expect(params()).not.toHaveProperty("member");
+
+    const byWord = await svc.searchSessions({ query: "快乐团子 项目协作" });
+    expect(byWord.sessions.map((session) => session.id)).toEqual(["m"]);
+    expect(params().q).toBe("项目协作");
+
+    // A teammate named as the member keeps the search on that teammate.
+    await svc.searchSessions({ query: "快乐团子 项目协作", member: "用户C" });
+    expect(params()).toMatchObject({ q: "项目协作", member: "用户C" });
+  });
+
   it("covers a whole group except its excluded sessions, plus sessions linked on their own", () => {
     const candidates = [
       { sourceId: "claude_code", conversationId: "a1", groupId: "/repo" },

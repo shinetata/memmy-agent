@@ -1,25 +1,65 @@
 /**
- * The skill section that teaches an agent to read online project sessions from a pasted Memmy session link.
- * Every skill manifest includes it — hook, plugin, and skill-only agents alike — so a member can reference a
- * session from whichever agent they already use.
+ * The skill section that teaches an agent to find and read the sessions of the person's shared Memmy projects:
+ * from a pasted Memmy session link, from a description of a teammate's work, from a screenshot of another agent's
+ * conversation, or before a project task that teammates may already have worked on. Every skill manifest includes
+ * it — hook, plugin, and skill-only agents alike — so a member can reach project sessions from whichever agent
+ * they already use. Searching is the agent's call: nothing here runs it on every turn.
  */
 export function onlineProjectSessionLines(): string[] {
   return [
     "## Online Project Sessions",
     "",
-    "Members of a Memmy online project can reference each other's sessions. A copied session looks like `【Memmy】<title> https://<host>/s/<session-id>`.",
+    "Members of a shared Memmy project can read each other's sessions. These sessions are the record of what teammates decided, did, and where their work stands. A copied session looks like `【Memmy】<title> https://<host>/s/<session-id>`.",
     "",
-    "**The link is not a web page.** Do not open it with curl, a browser, or any web-fetch tool. It is read through the Memmy CLI:",
+    "**The link is not a web page.** Do not open it with curl, a browser, or any web-fetch tool. Sessions are read through the Memmy CLI:",
     "",
     "```bash",
-    "memmy-memory sessions read \"<session link or id>\"",
-    "memmy-memory sessions search \"keywords\" [--member <name>] [--project <name>]",
+    "memmy-memory sessions search \"keywords\" [--member <name>] [--project <project name>] [--since 30d]",
+    "memmy-memory sessions read \"<session link or id>\" [--turns <from>-<to>] [--around <turn>] [--find \"<sentence>\"] [--all]",
     "```",
     "",
-    "- When the message contains a Memmy session link, run `sessions read` with that link before anything else. It downloads the session and prints the path of a Markdown file; read that file before answering.",
-    "- If fetching the link returned 401, 404, JSON or HTML, the link was opened directly. Do not investigate the URL or the port: run `sessions read` instead.",
-    "- When the user refers to a project member's session or work without a link, run `sessions search`. If several results fit and you cannot tell which one, list their titles and ask the user to choose.",
-    "- In your answer, name the session title and the member you relied on.",
+    "Project sessions are not memory: `memmy-memory search` finds the user's own remembered context, while `sessions search` finds what teammates did in shared projects. For a teammate's work, use `sessions search`.",
+    "",
+    "### When to search",
+    "",
+    "Check project sessions first, before web search, IM search or chat-history search, when:",
+    "",
+    "- The message contains a Memmy session link: run `sessions read` with that link before anything else.",
+    "- The user asks what someone did or decided, or how far their work got, such as 「看看张三在事项编辑上的最新进展」 or 「这个当时是怎么定的」.",
+    "- The user shares a screenshot of another agent's conversation to build on (see \"Screenshots\").",
+    "- The task belongs to a shared Memmy project and touches a feature, module, API or document teammates may already have worked on.",
+    "",
+    "Skip it for local work that has nothing to do with teammates, such as editing one function or running tests.",
+    "",
+    "### How to search",
+    "",
+    "- Put a person's name only in `--member`, and two to four short topic words, separated by spaces, in the query. Add `--since 30d` for recent progress. Example: 「看看张三在事项编辑权限上是怎么定的」 → `memmy-memory sessions search \"事项 编辑 权限\" --member 张三`.",
+    "- `--project` takes a project name as the results show it after the session title, never a session title.",
+    "- Nothing found: drop `--since`, then `--member`, then try other words, such as words from a likely session title. After three searches without a match, stop: say nothing was found and suggest asking the teammate to copy the session's link in Memmy.",
+    "- If several results fit and you cannot tell which one, list their titles and ask the user to choose.",
+    "",
+    "### How to read",
+    "",
+    "- `sessions read` prints an overview: where the session comes from, its latest turns in full, and one line per earlier turn. Latest progress is usually in it.",
+    "- Expand with `--turns 3-8`, or `--around 12` for one turn and its neighbours. Do not open the cached file it names; use `--all` only when you need everything.",
+    "- Read at most two sessions per turn unless the user asks for more.",
+    "",
+    "### Where to stop",
+    "",
+    "A teammate's work is what their shared sessions say. Do not look for it in other agents' local histories, code repositories, the web or IM unless the user asks. If the sessions do not answer the question, say so.",
+    "",
+    "### Screenshots",
+    "",
+    "1. From the screenshot, take the session title, one or two sentences you can read exactly, and the teammate's name if it is shown.",
+    "2. Search by the title; without a title, search by short keywords from those sentences.",
+    "3. Check the match with `sessions read <id> --find \"<an exact sentence>\"`. If the sentence is not in the session, try the next candidate or ask the user.",
+    "4. If nothing matches, say the session may not be shared to a Memmy project yet, and suggest asking the teammate to copy its link in Memmy.",
+    "",
+    "### Answering",
+    "",
+    "- Name the session title, the teammate and the last activity time you relied on. Refer to teammates by name, not by a guessed pronoun.",
+    "- If the screenshot shows turns the shared session does not have yet, say so: the teammate's computer may not have synced them.",
+    "- If fetching a link returned 401, 404, JSON or HTML, the link was opened directly. Do not investigate the URL or the port: run `sessions read` instead.",
     "- If a command fails, tell the user the reason it printed. Never guess what a session contains."
   ];
 }

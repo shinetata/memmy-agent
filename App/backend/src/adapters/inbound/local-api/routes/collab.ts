@@ -2,7 +2,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import type { CollabItemsService } from "../../../../services/collab-items-service.js";
-import type { CollabService } from "../../../../services/collab-service.js";
+import { sinceWindowMs, type CollabService } from "../../../../services/collab-service.js";
 import { withErrorEnvelope } from "../../../../services/error-envelope.js";
 
 export interface RegisterCollabRoutesOptions {
@@ -59,9 +59,19 @@ const SearchSchema = z.object({
   q: z.string().max(200).optional(),
   member: z.string().max(100).optional(),
   project: z.string().max(100).optional(),
-  limit: z.coerce.number().int().min(1).max(20).optional()
+  limit: z.coerce.number().int().min(1).max(20).optional(),
+  since: z.string().max(10).optional()
+    .refine((value) => value === undefined || sinceWindowMs(value) !== null, "--since 的写法如 7d、24h 或 2w")
 });
-const ReadSchema = z.object({ reference: z.string().trim().min(1).max(2_000) }).strict();
+const TurnNumberSchema = z.number().int().min(1).max(100_000);
+/** What `sessions read` prints inline; the CLI always sends one, the @ menu never does. */
+const ReadViewSchema = z.object({
+  turns: z.object({ from: TurnNumberSchema, to: TurnNumberSchema }).strict().optional(),
+  around: TurnNumberSchema.optional(),
+  find: z.string().trim().min(1).max(500).optional(),
+  all: z.boolean().optional()
+}).strict().refine((view) => Object.keys(view).length <= 1, "只能指定一种读取范围");
+const ReadSchema = z.object({ reference: z.string().trim().min(1).max(2_000), view: ReadViewSchema.optional() }).strict();
 const ItemIdSchema = z.string().regex(/^[A-Za-z0-9_-]{1,64}$/u, "事项 ID 无效");
 const ProjectTasksSchema = z.object({
   /** Conversation ids of the project's Memmy sessions that members may read. */
@@ -171,13 +181,14 @@ export function registerCollabRoutes(app: FastifyInstance, options: RegisterColl
       ...(input.q === undefined ? {} : { query: input.q }),
       ...(input.member === undefined ? {} : { member: input.member }),
       ...(input.project === undefined ? {} : { project: input.project }),
-      ...(input.limit === undefined ? {} : { limit: input.limit })
+      ...(input.limit === undefined ? {} : { limit: input.limit }),
+      ...(input.since === undefined ? {} : { sinceMs: sinceWindowMs(input.since) ?? undefined })
     }));
   }));
 
   app.post("/api/collab/sessions/read", guard, withErrorEnvelope(async (request, reply) => {
     const input = ReadSchema.parse(request.body ?? {});
-    return reply.send(await options.collab.readSession(input.reference));
+    return reply.send(await options.collab.readSession(input.reference, input.view));
   }));
 
   const items = options.items;

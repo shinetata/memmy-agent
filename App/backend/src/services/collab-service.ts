@@ -43,6 +43,24 @@ const SESSION_ID_PATTERN = /^[A-Za-z0-9-]{1,36}$/u;
 export const MEMMY_SOURCE_ID = "memmy";
 /** The ID ends at the path, the query, or whatever the person typed after pasting the link. */
 const SESSION_LINK_PATTERN = /\/s\/([A-Za-z0-9-]{1,36})(?=[/?#\s]|$)/u;
+/** Turns `sessions read` prints in full by default; earlier turns are listed by their question. */
+const OVERVIEW_TURNS = 5;
+/** Turns printed on each side of the one asked for with `around`, or the first one `find` hits. */
+const NEIGHBOUR_TURNS = 2;
+/** Latest turns added after an excerpt from the middle, so the agent also sees where the session ended up. */
+const EXCERPT_LATEST_TURNS = 3;
+/** Turns of one `find` printed in full; the rest are only named. */
+const MAX_FIND_TURNS = 5;
+/** Earlier turns listed one line each; a longer session says how many more there are. */
+const OUTLINE_LIMIT = 30;
+const OUTLINE_QUESTION_CHARS = 80;
+/**
+ * The cloud returns at most this many. A search always asks for all of them: the same session shared to several
+ * projects comes back once per project, and `since` filters afterwards, so a smaller page could come up short.
+ */
+const CLOUD_SEARCH_LIMIT = 20;
+const DEFAULT_SEARCH_RESULTS = 5;
+const SINCE_UNITS_MS: Record<string, number> = { h: 3_600_000, d: 86_400_000, w: 604_800_000 };
 
 export class CollabError extends Error {
   constructor(readonly code: ApiErrorCode, message: string) {
@@ -235,8 +253,24 @@ type PreloadedSession = Record<string, unknown> | "missing" | null;
 export interface CollabSessionReference {
   session: CollabProjectSession;
   path: string;
-  /** Source and file path handed to the agent; the same text the Memmy reference uses. */
+  /**
+   * Handed to the agent. Without a view: source and file path, the same text the Memmy reference uses. With one:
+   * source, file path and the turns the view asks for.
+   */
   text: string;
+}
+
+/**
+ * Which turns `sessions read` prints inline. An empty view is the overview: the latest turns in full and one line
+ * per earlier turn. At most one field is set; turn numbers are the ones the saved file shows.
+ */
+export interface SessionView {
+  turns?: { from: number; to: number };
+  /** One turn with its neighbours, plus the latest turns. */
+  around?: number;
+  /** Turns containing this text, to check a screenshot against the session. */
+  find?: string;
+  all?: boolean;
 }
 
 export interface CollabService {
@@ -299,8 +333,26 @@ export interface CollabService {
    */
   syncProjectTasks(projectId?: string): Promise<CollabSyncResult>;
   removeSession(projectId: string, sessionId: string): Promise<{ ok: true }>;
-  searchSessions(input: { query?: string; member?: string; project?: string; limit?: number }): Promise<{ sessions: CollabProjectSession[] }>;
-  readSession(reference: string): Promise<CollabSessionReference>;
+  /**
+   * Sessions of every project the person is in that match an agent's keywords. A session shared to several
+   * projects is listed once with all their names; `sinceMs` keeps the ones active within that window.
+   */
+  searchSessions(input: SessionSearchInput): Promise<{ sessions: SessionSearchHit[] }>;
+  /** Downloads the session into the project cache; a `view` also prints the turns it asks for. */
+  readSession(reference: string, view?: SessionView): Promise<CollabSessionReference>;
+}
+
+export interface SessionSearchInput {
+  query?: string;
+  member?: string;
+  project?: string;
+  limit?: number;
+  sinceMs?: number;
+}
+
+/** A search result: one session, with every project it is shared to. */
+export interface SessionSearchHit extends CollabProjectSession {
+  projectNames: string[];
 }
 
 /** One Memmy session of a project's local folder, as the sync picker lists it. */
@@ -1059,16 +1111,22 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
     },
 
     async searchSessions(input) {
+      const { words, mineOnly, member } = ownNameAsFilter(input, options.getAccount()?.memberName);
       const query = new URLSearchParams();
-      query.set("q", input.query ?? "");
-      if (input.member) query.set("member", input.member);
+      query.set("q", searchKeywords(words.join(" ")).join(" "));
+      if (member) query.set("member", member);
       if (input.project) query.set("project", input.project);
-      if (input.limit !== undefined) query.set("limit", String(input.limit));
+      query.set("limit", String(CLOUD_SEARCH_LIMIT));
       const data = await cloud(`/sessions/search?${query.toString()}`);
-      return { sessions: list(data.sessions).map(withLink) };
+      const found = list(data.sessions).map(withLink).filter((session) => !mineOnly || session.mine);
+      const cutoff = input.sinceMs === undefined ? null : now().getTime() - input.sinceMs;
+      const recent = cutoff === null
+        ? found
+        : found.filter((session) => session.lastActiveAt !== null && Date.parse(session.lastActiveAt) >= cutoff);
+      return { sessions: mergeShared(recent).slice(0, input.limit ?? DEFAULT_SEARCH_RESULTS) };
     },
 
-    async readSession(reference) {
+    async readSession(reference, view) {
       const id = parseSessionReference(reference);
       if (!id) {
         throw new CollabError("invalid_argument", "无法识别的会话链接。请从 Memmy 中重新复制链接。");
@@ -1076,12 +1134,17 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
       // The cloud returns one `session` that also carries this session's `turns`.
       const data = record((await cloud(`/sessions/${encodeURIComponent(id)}`)).session);
       const session = withLink(data);
+      const turns = list(data.turns).map(toTurn);
       const downloadedAt = now();
       const directory = join(projectsDir, safeSegment(session.projectId), "sessions");
       const path = join(directory, `${safeSegment(session.id)}.md`);
       await mkdir(directory, { recursive: true });
-      await writeFile(path, renderSessionMarkdown(session, list(data.turns).map(toTurn), downloadedAt), "utf8");
-      return { session, path, text: referenceText(session, path, downloadedAt) };
+      // The file always holds the whole record, so a view never needs a second download to expand.
+      await writeFile(path, renderSessionMarkdown(session, turns, downloadedAt), "utf8");
+      const text = view
+        ? renderSessionView(session, turns, path, downloadedAt, view)
+        : referenceText(session, path, downloadedAt);
+      return { session, path, text };
     }
   };
 }
@@ -1121,10 +1184,61 @@ export function referenceText(session: CollabProjectSession, path: string, downl
   ].join("\n");
 }
 
+/**
+ * Turns an agent's words into the keywords the cloud matches. The cloud lists a session when any keyword is a
+ * substring of its title, last question, member or project name, ranks by how many keywords hit, and keeps the
+ * first 10 distinct keywords. The skill asks agents for short words separated by spaces, so spaces are the split.
+ */
+export function searchKeywords(query: string): string[] {
+  return query.trim().split(/\s+/u).filter(Boolean);
+}
+
+/**
+ * The person's own sessions show their nickname here, but the cloud matches the name it stores for them, which
+ * may differ. Their nickname, given as the member or as one of the words, therefore means "my sessions" and is
+ * applied on this side: it leaves the cloud query, and only the person's own sessions are kept.
+ */
+export function ownNameAsFilter(
+  input: Pick<SessionSearchInput, "query" | "member">,
+  nickname: string | undefined
+): { words: string[]; mineOnly: boolean; member: string | undefined } {
+  const words = (input.query ?? "").trim().split(/\s+/u).filter(Boolean);
+  const own = nickname?.trim().toLowerCase() ?? "";
+  if (!own) return { words, member: input.member, mineOnly: false };
+  const memberIsMe = input.member?.trim().toLowerCase() === own;
+  const topicWords = words.filter((word) => word.toLowerCase() !== own);
+  // Another member named alongside the person's nickname keeps the search on that member.
+  const nameInWords = topicWords.length < words.length && !input.member;
+  return { words: topicWords, member: memberIsMe ? undefined : input.member, mineOnly: memberIsMe || nameInWords };
+}
+
+/** `30d`, `24h` or `2w` as milliseconds; null when the text is none of these. */
+export function sinceWindowMs(value: string): number | null {
+  const match = /^(\d{1,4})([hdw])$/u.exec(value.trim());
+  return match ? Number(match[1]) * (SINCE_UNITS_MS[match[2] ?? ""] ?? 0) : null;
+}
+
+/**
+ * A session shared to several projects comes back once per project with a different ID; the copies have the same
+ * member, title and last activity. One hit names all its projects, so copies do not crowd out other results.
+ */
+function mergeShared(sessions: readonly CollabProjectSession[]): SessionSearchHit[] {
+  const merged = new Map<string, SessionSearchHit>();
+  for (const session of sessions) {
+    const key = [session.memberName, session.mine, session.title, session.lastActiveAt ?? ""].join("\u0000");
+    const existing = merged.get(key);
+    if (!existing) {
+      merged.set(key, { ...session, projectNames: session.projectName ? [session.projectName] : [] });
+    } else if (session.projectName && !existing.projectNames.includes(session.projectName)) {
+      existing.projectNames.push(session.projectName);
+    }
+  }
+  return [...merged.values()];
+}
+
 /** Renders a downloaded project session as the file an agent reads. */
 export function renderSessionMarkdown(session: CollabProjectSession, turns: CollabSessionTurn[], downloadedAt: Date): string {
-  // The file is shared reading: name the member, since "you" means nothing to a later reader.
-  const speaker = session.memberName || (session.mine ? "你" : "");
+  const speaker = sessionSpeaker(session);
   const lines = [
     `# ${session.title}`,
     "",
@@ -1135,14 +1249,145 @@ export function renderSessionMarkdown(session: CollabProjectSession, turns: Coll
     "",
     `## 会话记录（共 ${session.turnCount || turns.length} 轮${turns.length < session.turnCount ? `，保留最近 ${turns.length} 轮` : ""}）`
   ];
-  const offset = Math.max(0, (session.turnCount || turns.length) - turns.length);
-  turns.forEach((turn, index) => {
-    lines.push("", `### 第 ${offset + index + 1} 轮`);
-    if (turn.question) lines.push(`${speaker}：${turn.question}`);
-    if (turn.reply) lines.push(`回复：${turn.reply}`);
-    if (turn.steps.length) lines.push(`执行步骤：${summarizeSteps(turn.steps)}`);
-  });
+  for (const entry of numberTurns(session, turns)) lines.push("", ...turnLines(entry, speaker));
   return `${lines.join("\n")}\n`;
+}
+
+/**
+ * What `sessions read` prints: where the session comes from, then the turns the view asks for in full. The
+ * overview lists earlier turns one line each, so an agent expands only the part it needs.
+ */
+export function renderSessionView(
+  session: CollabProjectSession,
+  turns: readonly CollabSessionTurn[],
+  path: string,
+  downloadedAt: Date,
+  view: SessionView
+): string {
+  const speaker = sessionSpeaker(session);
+  const numbered = numberTurns(session, turns);
+  const total = session.turnCount || turns.length;
+  const activity = session.lastActiveAt ? `最近交互 ${formatTime(new Date(session.lastActiveAt))}，` : "";
+  const lines = [
+    `已读取${speaker}的会话「${session.title}」（${session.projectName}，${activity}下载于 ${formatTime(downloadedAt)}）。`,
+    `完整记录：${path}`,
+    `共 ${total} 轮${turns.length < total ? `，云端保留最近 ${turns.length} 轮` : ""}。`
+  ];
+  if (!numbered.length) {
+    lines.push("这个会话还没有可显示的轮次。");
+    return lines.join("\n");
+  }
+  const { shown, note, outline } = selectTurns(numbered, view);
+  lines.push(note);
+  if (outline) {
+    const rest = numbered.filter((entry) => !shown.has(entry.number));
+    const listed = rest.slice(-OUTLINE_LIMIT);
+    lines.push("");
+    if (rest.length > listed.length) lines.push(`（更早的 ${rest.length - listed.length} 轮未列出）`);
+    for (const entry of listed) lines.push(`- 第 ${entry.number} 轮：${oneLine(entry.turn.question, OUTLINE_QUESTION_CHARS) || "（无提问）"}`);
+  }
+  let previous: number | null = null;
+  for (const entry of numbered) {
+    if (!shown.has(entry.number)) continue;
+    if (previous !== null && entry.number > previous + 1) lines.push("", `……（略去第 ${previous + 1}–${entry.number - 1} 轮）`);
+    lines.push("", ...turnLines(entry, speaker));
+    previous = entry.number;
+  }
+  return lines.join("\n");
+}
+
+interface NumberedTurn {
+  number: number;
+  turn: CollabSessionTurn;
+}
+
+/** The turns a view prints in full, the line that says which they are, and whether the others are listed. */
+function selectTurns(numbered: readonly NumberedTurn[], view: SessionView): { shown: Set<number>; note: string; outline: boolean } {
+  const first = numbered[0]!.number;
+  const last = numbered[numbered.length - 1]!.number;
+  const range = (from: number, to: number) => numbered.map((entry) => entry.number).filter((number) => number >= from && number <= to);
+  const latest = (count: number) => range(last - count + 1, last);
+  const absent = (asked: string) => ({
+    shown: new Set<number>(),
+    outline: true,
+    note: `第 ${asked} 轮不在记录中，记录中为第 ${first}–${last} 轮。以下只列各轮提问。`
+  });
+
+  if (view.all) {
+    return { shown: new Set(range(first, last)), outline: false, note: "以下为全部轮次。" };
+  }
+  if (view.find !== undefined) {
+    // Punctuation and spacing differ between a screenshot and the record, so only the words are compared.
+    const needle = squash(view.find);
+    const hits = needle
+      ? numbered.filter((entry) => squash(`${entry.turn.question}\n${entry.turn.reply}`).includes(needle)).map((entry) => entry.number)
+      : [];
+    const quoted = oneLine(view.find, 30);
+    if (!hits.length) {
+      return {
+        shown: new Set<number>(),
+        outline: true,
+        note: `这个会话中没有找到「${quoted}」：它可能不是要找的会话，或这部分内容还没有同步。以下只列各轮提问。`
+      };
+    }
+    const at = hits[0]!;
+    const named = hits.length > MAX_FIND_TURNS ? `${hits.slice(0, MAX_FIND_TURNS).join("、")} 等 ${hits.length} 轮` : `${hits.join("、")} 轮`;
+    return {
+      shown: new Set([...range(at - NEIGHBOUR_TURNS, at + NEIGHBOUR_TURNS), ...hits.slice(0, MAX_FIND_TURNS), ...latest(EXCERPT_LATEST_TURNS)]),
+      outline: false,
+      note: `「${quoted}」出现在第 ${named}。以下为第 ${at} 轮前后、其余命中的轮次与最近 ${EXCERPT_LATEST_TURNS} 轮。`
+    };
+  }
+  if (view.around !== undefined) {
+    const around = range(view.around - NEIGHBOUR_TURNS, view.around + NEIGHBOUR_TURNS);
+    if (!around.includes(view.around)) return absent(String(view.around));
+    return {
+      shown: new Set([...around, ...latest(EXCERPT_LATEST_TURNS)]),
+      outline: false,
+      note: `以下为第 ${around[0]}–${around[around.length - 1]} 轮与最近 ${EXCERPT_LATEST_TURNS} 轮。`
+    };
+  }
+  if (view.turns) {
+    const asked = range(view.turns.from, view.turns.to);
+    if (!asked.length) return absent(`${view.turns.from}–${view.turns.to}`);
+    return { shown: new Set(asked), outline: false, note: `以下为第 ${asked[0]}–${asked[asked.length - 1]} 轮。` };
+  }
+  const recent = latest(OVERVIEW_TURNS);
+  if (recent.length === numbered.length) {
+    return { shown: new Set(recent), outline: false, note: "以下为全部轮次。" };
+  }
+  return {
+    shown: new Set(recent),
+    outline: true,
+    note: `以下为最近 ${recent.length} 轮全文；更早的轮次只列提问，展开用 --turns <起>-<止>。`
+  };
+}
+
+/** The file is shared reading: name the member, since "you" means nothing to a later reader. */
+function sessionSpeaker(session: CollabProjectSession): string {
+  return session.memberName || (session.mine ? "你" : "");
+}
+
+/** Numbers turns as the session counts them; the cloud keeps only the latest ones of a long session. */
+function numberTurns(session: CollabProjectSession, turns: readonly CollabSessionTurn[]): NumberedTurn[] {
+  const offset = Math.max(0, (session.turnCount || turns.length) - turns.length);
+  return turns.map((turn, index) => ({ number: offset + index + 1, turn }));
+}
+
+function turnLines({ number, turn }: NumberedTurn, speaker: string): string[] {
+  const lines = [`### 第 ${number} 轮`];
+  if (turn.question) lines.push(`${speaker}：${turn.question}`);
+  if (turn.reply) lines.push(`回复：${turn.reply}`);
+  if (turn.steps.length) lines.push(`执行步骤：${summarizeSteps(turn.steps)}`);
+  return lines;
+}
+
+function squash(value: string): string {
+  return value.toLowerCase().replace(/[\s\p{P}\p{S}]/gu, "");
+}
+
+function oneLine(value: string, maxChars: number): string {
+  return clip(value.replace(/\s+/gu, " ").trim(), maxChars);
 }
 
 /** Listed sessions with their current group, plus uploaded ones that dropped out of the list with the group they had. */
