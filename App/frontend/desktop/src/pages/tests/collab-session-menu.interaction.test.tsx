@@ -31,6 +31,19 @@ vi.mock("../../app/providers.js", () => ({
   useApiClients: () => ({ clients: { runtimeConfig: {} }, setClients: vi.fn() })
 }));
 
+// The board's subject is a project on this computer; sharing only adds its cloud record.
+vi.mock("../../state/app-state.js", () => ({
+  useOptionalAppState: () => ({
+    state: {
+      agent: {
+        projects: [{ id: "local-1", name: "Memmy项目协作记忆", rootPath: "/tmp/memmy", pinned: false, createdAt: "2026-10-21T03:00:00.000Z" }],
+        tasks: []
+      }
+    },
+    dispatch: vi.fn()
+  })
+}));
+
 // The frame is the app chrome around the board; these tests only need the board.
 vi.mock("../app-frame.js", () => ({
   AppFrame: (props: { children: ReactNode }) => <div>{props.children}</div>
@@ -45,7 +58,7 @@ const project = {
   memberCount: 2,
   sessionCount: 1,
   createdAt: "2026-10-21T03:00:00.000Z",
-  localProjectId: null
+  localProjectId: "local-1"
 };
 
 const session = {

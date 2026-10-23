@@ -11688,19 +11688,40 @@ body.memmy-platform-windows :is(
   --sidebar-row-bg: color-mix(in srgb, var(--color-action-sky) 16%, var(--color-sidebar-bg));
 }
 
+/* The icon is its own hit area: it expands the project's sessions, the rest of the row opens the board. */
+.app-frame-project-row__toggle {
+  display: flex;
+  flex: none;
+  align-items: center;
+  align-self: stretch;
+  padding: var(--sidebar-rail-pad-y) 0 var(--sidebar-rail-pad-y) var(--sidebar-rail-pad-x);
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
 .app-frame-project-row__main {
   display: flex;
   min-width: 0;
   flex: 1;
   align-items: center;
   gap: var(--sidebar-rail-gap);
-  padding: var(--sidebar-rail-pad-y) var(--sidebar-rail-pad-x);
+  padding: var(--sidebar-rail-pad-y) var(--sidebar-rail-pad-x) var(--sidebar-rail-pad-y) var(--sidebar-rail-gap);
   border: 0;
   background: transparent;
   color: inherit;
   text-align: left;
   cursor: pointer;
   transition: padding-right var(--duration-fast);
+}
+
+/* A shared project keeps the same row; a small cloud mark says members can read its sessions. */
+.app-frame-project-row__shared {
+  display: flex;
+  flex: none;
+  align-items: center;
+  color: color-mix(in srgb, var(--color-text-ink) 38%, transparent);
 }
 
 .app-frame-project-row:hover .app-frame-project-row__main,

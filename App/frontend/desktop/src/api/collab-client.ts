@@ -83,6 +83,17 @@ const SyncProgressSchema = z.object({
   completed: z.number(),
   failed: z.number()
 });
+/** One Memmy session of the project's local folder, as the sync picker lists it. */
+const ProjectTaskSchema = z.object({
+  conversationId: z.string(),
+  title: z.string(),
+  lastQuestion: z.string(),
+  updatedAt: z.string(),
+  turnCount: z.number(),
+  included: z.boolean(),
+  synced: z.boolean()
+});
+const ProjectTasksResponseSchema = z.object({ tasks: z.array(ProjectTaskSchema) });
 const OkResponseSchema = z.object({ ok: z.literal(true) });
 const ItemSchema = z.object({
   id: z.string(),
@@ -128,6 +139,8 @@ export interface CollabSessionPage {
   total: number;
 }
 export type CollabSyncProgress = z.infer<typeof SyncProgressSchema>;
+/** A Memmy session of this project's local folder, and whether the project includes it. */
+export type CollabProjectTask = z.infer<typeof ProjectTaskSchema>;
 /** A work item: one Markdown file in the project's knowledge base, indexed by the cloud. */
 export type CollabItem = z.infer<typeof ItemSchema>;
 export type CollabItemsView = z.infer<typeof ItemsResponseSchema>;
@@ -161,13 +174,18 @@ export interface CollabClient {
   getLinks(projectId: string): Promise<CollabLinks>;
   /** Saves the selection and queues the upload; it returns before the sessions arrive. */
   saveLinks(projectId: string, links: CollabLinks): Promise<CollabSyncResult>;
+  /** The Memmy sessions of the project's local folder, each saying whether the project includes it. */
+  listProjectTasks(projectId: string): Promise<CollabProjectTask[]>;
+  /** Keeps only the listed sessions in the project and queues what is missing. */
+  saveProjectTasks(projectId: string, included: readonly string[]): Promise<CollabSyncResult>;
   getSyncProgress(projectId: string): Promise<CollabSyncProgress>;
   removeSession(projectId: string, sessionId: string): Promise<void>;
   /**
    * Uploads newly finished Memmy tasks. `tasks` keeps it to those, which needs no agent scan and is what a board
-   * opening can afford; the full sync also covers sessions associated from other agents.
+   * opening can afford; the full sync also covers sessions associated from other agents. `projectId` limits the
+   * task sync to one project, so opening a board never waits for the others.
    */
-  syncSessions(options?: { tasksOnly?: boolean }): Promise<CollabSyncResult>;
+  syncSessions(options?: { tasksOnly?: boolean; projectId?: string }): Promise<CollabSyncResult>;
   /** The project's work items, most recently updated first. */
   listItems(projectId: string): Promise<CollabItemsView>;
   /** One item with its current Markdown, to edit it. */
@@ -286,12 +304,32 @@ export function createHttpCollabClient(config: RuntimeConfig): CollabClient {
       });
     },
 
+    async listProjectTasks(projectId) {
+      return (await requestJson({
+        config,
+        path: `/api/collab/projects/${encodeURIComponent(projectId)}/tasks`,
+        schema: ProjectTasksResponseSchema
+      })).tasks;
+    },
+
+    async saveProjectTasks(projectId, included) {
+      return requestJson({
+        config,
+        path: `/api/collab/projects/${encodeURIComponent(projectId)}/tasks`,
+        schema: SyncResponseSchema,
+        body: { included },
+        init: { method: "PUT" }
+      });
+    },
+
     async syncSessions(options) {
       return requestJson({
         config,
         path: "/api/collab/sync",
         schema: SyncResponseSchema,
-        body: options?.tasksOnly ? { tasks: true } : {},
+        body: options?.tasksOnly
+          ? { tasks: true, ...(options.projectId ? { projectId: options.projectId } : {}) }
+          : {},
         init: { method: "POST" }
       });
     },

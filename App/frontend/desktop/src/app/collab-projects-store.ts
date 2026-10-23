@@ -1,17 +1,24 @@
 /**
- * Online projects shared between the sidebar and the project board. The sidebar lists them next to local
- * projects and the board reads the same list, so one store keeps a single selected project and a single fetch.
+ * Cloud sharing state for projects. A project is a local Memmy project; a cloud project is attached to it and
+ * names the project's shared record. The sidebar lists local projects and the board reads the same store, so one
+ * store keeps a single open project — named by the local project id — and a single fetch of the cloud list.
  */
 import type { CollabClient, CollabProject } from "../api/collab-client.js";
 
 export interface CollabProjectsSnapshot {
   /** Null until the first load finishes, so the sidebar can tell "none" from "not loaded yet". */
   projects: CollabProject[] | null;
+  /** The local project whose board is open; the cloud project, if any, is derived from it. */
   selectedId: string | null;
   loading: boolean;
   error: string | null;
-  /** Set when the sidebar asks for the new-project dialog; the board opens it once and clears the flag. */
+  /** Set when the sidebar asks for the new-project dialog; the frame opens it once and clears the flag. */
   createPending: boolean;
+  /**
+   * A local project whose Memmy sessions should be chosen right after sharing started. The board opens that picker
+   * once and clears the flag, so a project that was just shared asks which of its own sessions go to the cloud.
+   */
+  taskPickerFor: string | null;
 }
 
 let snapshot: CollabProjectsSnapshot = {
@@ -19,7 +26,8 @@ let snapshot: CollabProjectsSnapshot = {
   selectedId: null,
   loading: false,
   error: null,
-  createPending: false
+  createPending: false,
+  taskPickerFor: null
 };
 const listeners = new Set<() => void>();
 
@@ -39,36 +47,64 @@ export function getCollabProjectsSnapshot(): CollabProjectsSnapshot {
   return snapshot;
 }
 
-/** Loads the list once; a second caller while a load runs joins the running one. */
+/** The cloud project a local project is shared through, or null while it is only on this computer. */
+export function sharedProjectFor(
+  projects: CollabProject[] | null | undefined,
+  localProjectId: string | null | undefined
+): CollabProject | null {
+  if (!projects || !localProjectId) return null;
+  return projects.find((project) => project.localProjectId === localProjectId) ?? null;
+}
+
+/** The load in flight, so a caller that arrives during one waits for it instead of reading a stale list. */
+let inFlight: Promise<void> | null = null;
+
+/**
+ * Reloads the shared list. A second caller while a load runs waits for it and then loads again: dropping that
+ * reload is what left the sidebar showing a project whose cloud record had already been deleted.
+ */
 export async function loadCollabProjects(client: CollabClient): Promise<void> {
-  if (snapshot.loading) return;
-  update({ loading: true, error: null });
+  if (inFlight) await inFlight.catch(() => undefined);
+  const run = (async () => {
+    update({ loading: true, error: null });
+    try {
+      const projects = await client.listProjects();
+      // The open project is local, so a reload must not move the board: only a vanished project clears it.
+      update({ projects, loading: false, error: null });
+    } catch (cause) {
+      update({ projects: [], loading: false, error: messageOf(cause) });
+    }
+  })();
+  inFlight = run;
   try {
-    const projects = await client.listProjects();
-    const selectedId = snapshot.selectedId && projects.some((project) => project.id === snapshot.selectedId)
-      ? snapshot.selectedId
-      : projects[0]?.id ?? null;
-    update({ projects, selectedId, loading: false, error: null });
-  } catch (cause) {
-    update({ projects: [], loading: false, error: messageOf(cause) });
+    await run;
+  } finally {
+    if (inFlight === run) inFlight = null;
   }
 }
 
-export function selectCollabProject(projectId: string | null): void {
-  if (snapshot.selectedId === projectId) return;
-  update({ selectedId: projectId });
+/** Opens one project's board, named by its local project id. */
+export function selectCollabProject(localProjectId: string | null): void {
+  if (snapshot.selectedId === localProjectId) return;
+  update({ selectedId: localProjectId });
 }
 
-/** After creating a project: it leads the list and opens. */
+/** After sharing a project: its cloud record leads the list. Opening the board is the caller's decision. */
 export function addCollabProject(project: CollabProject): void {
   const rest = (snapshot.projects ?? []).filter((current) => current.id !== project.id);
-  update({ projects: [project, ...rest], selectedId: project.id });
+  update({ projects: [project, ...rest] });
 }
 
 /** Keeps the sidebar name and member count current after the board reloads a project. */
 export function replaceCollabProject(project: CollabProject): void {
   if (!snapshot.projects) return;
   update({ projects: snapshot.projects.map((current) => (current.id === project.id ? project : current)) });
+}
+
+/** Drops a project's cloud record after sharing was turned off; the local project stays. */
+export function removeCollabProject(projectId: string): void {
+  if (!snapshot.projects) return;
+  update({ projects: snapshot.projects.filter((project) => project.id !== projectId) });
 }
 
 /**
@@ -84,18 +120,36 @@ export function markCollabProjectBound(projectId: string, localProjectId: string
   });
 }
 
-export function requestCreateCollabProject(): void {
+export function requestCreateProject(): void {
   update({ createPending: true });
 }
 
-/** Clears the request the board just acted on, so navigating back does not reopen the dialog. */
-export function consumeCreateCollabProjectRequest(): void {
+/** Clears the request the frame just acted on, so navigating back does not reopen the dialog. */
+export function consumeCreateProjectRequest(): void {
   if (snapshot.createPending) update({ createPending: false });
+}
+
+/** Asks the board to open the project-session picker for a project whose sharing just started. */
+export function requestTaskPicker(localProjectId: string): void {
+  update({ taskPickerFor: localProjectId });
+}
+
+/** Clears the picker request the board just acted on. */
+export function consumeTaskPickerRequest(): void {
+  if (snapshot.taskPickerFor) update({ taskPickerFor: null });
 }
 
 /** Test seam: drops every listener and returns the store to its first state. */
 export function resetCollabProjectsStore(): void {
-  snapshot = { projects: null, selectedId: null, loading: false, error: null, createPending: false };
+  inFlight = null;
+  snapshot = {
+    projects: null,
+    selectedId: null,
+    loading: false,
+    error: null,
+    createPending: false,
+    taskPickerFor: null
+  };
   listeners.clear();
 }
 

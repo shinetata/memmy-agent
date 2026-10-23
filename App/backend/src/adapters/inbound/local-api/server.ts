@@ -8,6 +8,7 @@ import type { PermissionManager } from "../../../permission/index.js";
 import type { BackendServices } from "../../../services/index.js";
 import type { CollabService } from "../../../services/collab-service.js";
 import type { CollabItemsService } from "../../../services/collab-items-service.js";
+import type { ProjectDirectoryService } from "../../../services/project-directory-service.js";
 import { registerAccountRoutes } from "./routes/account.js";
 import { registerCollabRoutes } from "./routes/collab.js";
 import { registerTokenQuotaRoutes } from "./routes/token-quota.js";
@@ -21,6 +22,7 @@ import { registerComposioMcpRoutes } from "./routes/composio-mcp.js";
 import { registerIntegrationRoutes } from "./routes/integrations.js";
 import { registerLocalDataRoutes } from "./routes/local-data.js";
 import { registerOnboardingInsightRoutes } from "./routes/onboarding-insight.js";
+import { registerProjectRoutes } from "./routes/projects.js";
 
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 15_000;
 const LOCAL_API_SERVICE_NAME = "memmy-local-api";
@@ -37,6 +39,8 @@ export interface CreateLocalApiServerOptions {
   collab?: CollabService;
   /** Work items distilled from an online project's memory, shown on its board. */
   collabItems?: CollabItemsService;
+  /** The managed folder a project created by name alone runs its tasks in. */
+  projectDirectory?: ProjectDirectoryService;
   permissionManager: PermissionManager;
   services: BackendServices;
   /** Configured agent timezone. Renderer headers are used only when absent. */
@@ -136,6 +140,9 @@ export function createLocalApiServer(options: CreateLocalApiServerOptions): Fast
   });
   if (options.collab) {
     registerCollabRoutes(app, { collab: options.collab, items: options.collabItems, authenticateRuntimeToken });
+  }
+  if (options.projectDirectory) {
+    registerProjectRoutes(app, { projectDirectory: options.projectDirectory, authenticateRuntimeToken });
   }
   registerByokTokenUsageRoutes(app, {
     byokTokenUsage: options.services.byokTokenUsage,

@@ -1,31 +1,35 @@
-/** Online project store tests: the sidebar and the board read one list and one selection. */
+/** Project sharing store tests: the sidebar and the board read one cloud list and one open project. */
 import { beforeEach, describe, expect, it } from "vitest";
 import type { CollabClient, CollabProject } from "../../api/collab-client.js";
 import {
   addCollabProject,
-  consumeCreateCollabProjectRequest,
+  consumeCreateProjectRequest,
+  consumeTaskPickerRequest,
   getCollabProjectsSnapshot,
   loadCollabProjects,
+  removeCollabProject,
   replaceCollabProject,
-  requestCreateCollabProject,
+  requestCreateProject,
+  requestTaskPicker,
   resetCollabProjectsStore,
-  selectCollabProject
+  selectCollabProject,
+  sharedProjectFor
 } from "../collab-projects-store.js";
 
-function project(id: string, name = id): CollabProject {
-  return { id, name, role: "owner", memberCount: 1, sessionCount: 0, createdAt: null };
+function project(id: string, name = id, localProjectId: string | null = null): CollabProject {
+  return { id, name, role: "owner", memberCount: 1, sessionCount: 0, createdAt: null, localProjectId };
 }
 
 function clientWith(list: () => Promise<CollabProject[]>): CollabClient {
   return {
     listProjects: list,
-    createProject: async (name) => project("new", name),
-    listSessions: async () => ({ project: project("x"), sessions: [] }),
+    createProject: async (name) => ({ project: project("new", name) }),
+    listSessions: async () => ({ project: project("x"), sessions: [], total: 0 }),
     listLocalSessions: async () => ({ sessions: [], refreshing: false }),
     getLinks: async () => ({ groups: [], sessions: [] }),
     saveLinks: async () => ({ uploaded: 0, removed: 0, failed: 0 }),
     removeSession: async () => undefined
-  };
+  } as CollabClient;
 }
 
 beforeEach(() => {
@@ -33,35 +37,38 @@ beforeEach(() => {
 });
 
 describe("collab projects store", () => {
-  it("selects the first project once the list loads", async () => {
+  it("loads the shared projects without picking one", async () => {
     await loadCollabProjects(clientWith(async () => [project("a"), project("b")]));
 
     expect(getCollabProjectsSnapshot().projects?.map((item) => item.id)).toEqual(["a", "b"]);
-    expect(getCollabProjectsSnapshot().selectedId).toBe("a");
+    // The board's subject is a local project, so loading the cloud list must not move it.
+    expect(getCollabProjectsSnapshot().selectedId).toBeNull();
     expect(getCollabProjectsSnapshot().loading).toBe(false);
   });
 
-  it("keeps a selected project that is still listed", async () => {
-    await loadCollabProjects(clientWith(async () => [project("a"), project("b")]));
-    selectCollabProject("b");
+  it("keeps the open project across reloads", async () => {
+    await loadCollabProjects(clientWith(async () => [project("a", "a", "local-a")]));
+    selectCollabProject("local-a");
 
-    await loadCollabProjects(clientWith(async () => [project("a"), project("b")]));
+    await loadCollabProjects(clientWith(async () => [project("a", "a", "local-a")]));
 
-    expect(getCollabProjectsSnapshot().selectedId).toBe("b");
+    expect(getCollabProjectsSnapshot().selectedId).toBe("local-a");
   });
 
-  it("falls back to the first project when the selected one disappears", async () => {
-    await loadCollabProjects(clientWith(async () => [project("a"), project("b")]));
-    selectCollabProject("b");
+  it("keeps the open project when sharing stops", async () => {
+    await loadCollabProjects(clientWith(async () => [project("a", "a", "local-a")]));
+    selectCollabProject("local-a");
 
-    await loadCollabProjects(clientWith(async () => [project("a")]));
+    removeCollabProject("a");
 
-    expect(getCollabProjectsSnapshot().selectedId).toBe("a");
+    expect(getCollabProjectsSnapshot().projects).toEqual([]);
+    // The project is still on this computer; only its cloud record went away.
+    expect(getCollabProjectsSnapshot().selectedId).toBe("local-a");
   });
 
   it("keeps an empty list and the reason when loading fails", async () => {
     await loadCollabProjects(clientWith(async () => {
-      throw new Error("请先登录 Memmy 后使用在线项目");
+      throw new Error("请先登录 Memmy 后使用项目");
     }));
 
     expect(getCollabProjectsSnapshot().projects).toEqual([]);
@@ -69,13 +76,13 @@ describe("collab projects store", () => {
     expect(getCollabProjectsSnapshot().selectedId).toBeNull();
   });
 
-  it("opens a newly created project and puts it first", async () => {
+  it("puts a newly shared project first without moving the board", async () => {
     await loadCollabProjects(clientWith(async () => [project("a")]));
 
     addCollabProject(project("b"));
 
     expect(getCollabProjectsSnapshot().projects?.map((item) => item.id)).toEqual(["b", "a"]);
-    expect(getCollabProjectsSnapshot().selectedId).toBe("b");
+    expect(getCollabProjectsSnapshot().selectedId).toBeNull();
   });
 
   it("updates a project in place after the board reloads it", async () => {
@@ -86,11 +93,27 @@ describe("collab projects store", () => {
     expect(getCollabProjectsSnapshot().projects?.[0]?.name).toBe("更名为 A");
   });
 
-  it("hands one create request to the board, then clears it", () => {
-    requestCreateCollabProject();
+  it("finds the cloud record of a local project", () => {
+    const projects = [project("a", "a", "local-a"), project("b", "b", null)];
+
+    expect(sharedProjectFor(projects, "local-a")?.id).toBe("a");
+    expect(sharedProjectFor(projects, "local-b")).toBeNull();
+    expect(sharedProjectFor(null, "local-a")).toBeNull();
+  });
+
+  it("hands one create request to the frame, then clears it", () => {
+    requestCreateProject();
     expect(getCollabProjectsSnapshot().createPending).toBe(true);
 
-    consumeCreateCollabProjectRequest();
+    consumeCreateProjectRequest();
     expect(getCollabProjectsSnapshot().createPending).toBe(false);
+  });
+
+  it("asks the board for the session picker once, then clears it", () => {
+    requestTaskPicker("local-a");
+    expect(getCollabProjectsSnapshot().taskPickerFor).toBe("local-a");
+
+    consumeTaskPickerRequest();
+    expect(getCollabProjectsSnapshot().taskPickerFor).toBeNull();
   });
 });

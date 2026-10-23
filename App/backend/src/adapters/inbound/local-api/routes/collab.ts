@@ -23,7 +23,11 @@ const WorkingDirectorySchema = z.object({
   name: z.string().trim().min(1).max(200).optional(),
   directory: z.string().trim().min(1).max(4_000).optional()
 }).strict();
-const SyncSchema = z.object({ tasks: z.boolean().optional() }).strict();
+const SyncSchema = z.object({
+  tasks: z.boolean().optional(),
+  /** With `tasks`: only this project, which is what a board opening needs. */
+  projectId: ProjectIdSchema.optional()
+}).strict();
 const SessionListSchema = z.object({
   q: z.string().max(200).optional(),
   member: z.enum(["me", "others"]).optional(),
@@ -59,6 +63,10 @@ const SearchSchema = z.object({
 });
 const ReadSchema = z.object({ reference: z.string().trim().min(1).max(2_000) }).strict();
 const ItemIdSchema = z.string().regex(/^[A-Za-z0-9_-]{1,64}$/u, "事项 ID 无效");
+const ProjectTasksSchema = z.object({
+  /** Conversation ids of the project's Memmy sessions that members may read. */
+  included: z.array(ConversationIdSchema).max(500)
+}).strict();
 const SaveItemSchema = z.object({
   markdown: z.string().trim().min(1, "事项内容不能为空").max(30_000, "事项内容过长"),
   baseVersion: z.number().int().min(0)
@@ -116,6 +124,16 @@ export function registerCollabRoutes(app: FastifyInstance, options: RegisterColl
     }));
   }));
 
+  // Sharing a project uploads the Memmy sessions chosen here; the rest stay on this computer.
+  app.get<{ Params: { projectId: string } }>("/api/collab/projects/:projectId/tasks", guard, withErrorEnvelope(async (request, reply) =>
+    reply.send(await options.collab.listProjectTasks(ProjectIdSchema.parse((request.params as { projectId: string }).projectId)))));
+
+  app.put<{ Params: { projectId: string } }>("/api/collab/projects/:projectId/tasks", guard, withErrorEnvelope(async (request, reply) => {
+    const projectId = ProjectIdSchema.parse((request.params as { projectId: string }).projectId);
+    const input = ProjectTasksSchema.parse(request.body ?? {});
+    return reply.send(await options.collab.saveProjectTasks(projectId, input.included));
+  }));
+
   app.get<{ Params: { projectId: string } }>("/api/collab/projects/:projectId/links", guard, withErrorEnvelope(async (request, reply) =>
     reply.send(await options.collab.getLinks(ProjectIdSchema.parse((request.params as { projectId: string }).projectId)))));
 
@@ -137,7 +155,9 @@ export function registerCollabRoutes(app: FastifyInstance, options: RegisterColl
   // `tasks` keeps it to Memmy's own tasks, which needs no agent scan and returns in milliseconds.
   app.post("/api/collab/sync", guard, withErrorEnvelope(async (request, reply) => {
     const input = SyncSchema.parse(request.body ?? {});
-    return reply.send(input.tasks ? await options.collab.syncProjectTasks() : await options.collab.syncLinkedSessions());
+    return reply.send(input.tasks
+      ? await options.collab.syncProjectTasks(input.projectId)
+      : await options.collab.syncLinkedSessions());
   }));
 
   app.post("/api/collab/local-sessions", guard, withErrorEnvelope(async (request, reply) => {

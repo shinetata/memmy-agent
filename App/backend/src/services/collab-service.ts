@@ -3,19 +3,13 @@
  * requests with the person's account, reads local agent sessions through the Memory service when they associate
  * one, and saves a session a person references as a Markdown file an agent can read.
  */
-import { mkdir, readdir, readFile, rename, stat, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rename, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { ApiErrorCode } from "./error-envelope.js";
+import { ensureDirectory, uniqueProjectDirectory } from "./project-directory.js";
 
 const CLOUD_TIMEOUT_MS = 20_000;
-/**
- * How long deleting waits for the links file to be rewritten. The cloud has already dropped the project; the rewrite
- * only stops this device from uploading into it again, and the periodic sync (which can spend a minute per session on
- * a slow Memory service) may be holding the write queue. The rewrite still runs later, in queue order, so it ends up
- * cleared either way.
- */
-const DELETE_LINKS_WAIT_MS = 2_000;
 /** A delete slower than this is worth a log line: the cloud call and the links write are the only things in it. */
 const SLOW_DELETE_MS = 2_000;
 const UPLOAD_TIMEOUT_MS = 60_000;
@@ -229,6 +223,12 @@ interface StoredLinks extends CollabLinks {
   linkedAt: Record<string, string>;
 }
 
+/** What one upload pass did: the counts, and the sessions it stored for the links file. */
+interface UploadOutcome {
+  result: CollabSyncResult;
+  synced: Record<string, SyncedSession>;
+}
+
 /** A session read ahead in its agent's batch: the record, gone from the agent, or not read ahead. */
 type PreloadedSession = Record<string, unknown> | "missing" | null;
 
@@ -276,6 +276,16 @@ export interface CollabService {
   /** How far the queued upload for this project has come. */
   getSyncProgress(projectId: string): Promise<CollabSyncProgress>;
   /**
+   * The Memmy sessions of the project's local folder, each saying whether the project includes it. Sharing a
+   * project uploads only the included ones; the rest stay on this computer.
+   */
+  listProjectTasks(projectId: string): Promise<{ tasks: ProjectTaskSession[] }>;
+  /**
+   * Saves which of those sessions the project includes and queues what is missing. Unchecked sessions are taken
+   * out of the project, both from the cloud and from later uploads.
+   */
+  saveProjectTasks(projectId: string, included: readonly string[]): Promise<CollabSyncResult>;
+  /**
    * Deletes the project in the cloud and drops this computer's binding. The local project is kept, so the tasks
    * that ran in it stay on this computer.
    */
@@ -284,12 +294,26 @@ export interface CollabService {
   syncLinkedSessions(): Promise<CollabSyncResult>;
   /**
    * Uploads only this computer's Memmy tasks, which need no agent scan. Opening a board uses this so the list
-   * appears at once, even while the Memory service is busy indexing other agents.
+   * appears at once, even while the Memory service is busy indexing other agents. `projectId` keeps it to the
+   * board being opened instead of every project this computer has.
    */
-  syncProjectTasks(): Promise<CollabSyncResult>;
+  syncProjectTasks(projectId?: string): Promise<CollabSyncResult>;
   removeSession(projectId: string, sessionId: string): Promise<{ ok: true }>;
   searchSessions(input: { query?: string; member?: string; project?: string; limit?: number }): Promise<{ sessions: CollabProjectSession[] }>;
   readSession(reference: string): Promise<CollabSessionReference>;
+}
+
+/** One Memmy session of a project's local folder, as the sync picker lists it. */
+export interface ProjectTaskSession {
+  conversationId: string;
+  title: string;
+  lastQuestion: string;
+  updatedAt: string;
+  turnCount: number;
+  /** Included in the project, so it is (or will be) on the board. */
+  included: boolean;
+  /** Already uploaded at least once. */
+  synced: boolean;
 }
 
 /** Identifies a local session across agents. */
@@ -456,11 +480,22 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
     uploadChains.set(projectId, next);
   }
 
-  /** Saving links and the periodic sync both write; one at a time keeps the file consistent. */
+  /** Saving links and reading them back take this lock; one at a time keeps the file consistent. */
   let queue: Promise<unknown> = Promise.resolve();
   function exclusive<T>(task: () => Promise<T>): Promise<T> {
     const run = queue.then(task, task);
     queue = run.catch(() => undefined);
+    return run;
+  }
+
+  /**
+   * Syncs take this lane instead of the lock: two of them would otherwise upload the same session twice. Uploads
+   * inside one sync still run in parallel, and the lock is only taken to read and to record results.
+   */
+  let syncLane: Promise<unknown> = Promise.resolve();
+  function serializedSync<T>(task: () => Promise<T>): Promise<T> {
+    const run = syncLane.then(task, task);
+    syncLane = run.catch(() => undefined);
     return run;
   }
 
@@ -480,12 +515,18 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
     });
   }
 
+  /**
+   * Uploads what the project still owes the cloud. The network part runs without the links lock and reports what
+   * it stored instead of writing it: a slow upload must not hold someone else's save, and merging the result into
+   * a fresh read keeps whatever that save changed.
+   */
   async function uploadPending(
     stored: StoredLinks,
     local: readonly LocalAgentSession[],
     onProgress?: (result: CollabSyncResult) => void
-  ): Promise<CollabSyncResult> {
+  ): Promise<UploadOutcome> {
     const result: CollabSyncResult = { uploaded: 0, removed: 0, failed: 0 };
+    const synced: Record<string, SyncedSession> = {};
     const pending = sessionsToUpload(stored, local);
     const preload = preloadSessions(pending);
     let next = 0;
@@ -501,7 +542,7 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
         const session = pending[index]!;
         try {
           const cloudSessionId = await uploadSession(stored.projectId, session, await preload(session), historyBoundary(stored, session));
-          stored.synced[sessionKey(session)] = {
+          synced[sessionKey(session)] = {
             cloudSessionId,
             updatedAt: session.updatedAt,
             groupId: session.group?.id ?? null,
@@ -521,7 +562,17 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
     });
     await Promise.all(workers);
     if (fatal) throw fatal;
-    return result;
+    return { result, synced };
+  }
+
+  /** Records what an upload stored, merged into a fresh read so a save made meanwhile is not lost. */
+  async function recordUploaded(projectId: string, accountId: string, synced: Record<string, SyncedSession>): Promise<void> {
+    if (!Object.keys(synced).length) return;
+    await exclusive(async () => {
+      const latest = await readLinks(projectId, accountId);
+      Object.assign(latest.synced, synced);
+      await writeLinks(latest);
+    });
   }
 
   /**
@@ -538,13 +589,12 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
     syncProgress.set(projectId, { running: true, total: pending.length, completed: 0, failed: 0 });
 
     try {
-      const result = await uploadPending(stored, candidates, (progress) => {
+      const { result, synced } = await uploadPending(stored, candidates, (progress) => {
         reportProgress(projectId, { completed: progress.uploaded + progress.failed, failed: progress.failed });
       });
       // Merge only what was uploaded: another save may have changed groups or exclusions in the meantime.
+      await recordUploaded(projectId, accountId, synced);
       const latest = await readLinks(projectId, accountId);
-      Object.assign(latest.synced, stored.synced);
-      await writeLinks(latest);
       // Still running only for sessions selected meanwhile; one that failed here waits for the next sync, and
       // counting it would leave the board showing an upload that is not happening.
       const attempted = new Set(pending.map(sessionKey));
@@ -857,6 +907,64 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
       return syncProgress.get(projectId) ?? { running: false, total: 0, completed: 0, failed: 0 };
     },
 
+    async listProjectTasks(projectId) {
+      const account = requireAccount();
+      const stored = await readLinks(projectId, account.accountId);
+      const tasks = await projectTaskSessions(stored);
+      return {
+        tasks: [...tasks]
+          .sort((left, right) => (right.updatedAt ?? "").localeCompare(left.updatedAt ?? ""))
+          .map((task) => ({
+            conversationId: task.conversationId,
+            title: task.title,
+            lastQuestion: task.lastQuestion,
+            updatedAt: task.updatedAt,
+            turnCount: task.turnCount,
+            // A session that was deleted from the board stays out until the person adds it back here.
+            included: !stored.removedSessions.includes(task.conversationId),
+            synced: Boolean(stored.synced[sessionKey(task)])
+          }))
+      };
+    },
+
+    saveProjectTasks(projectId, included) {
+      const account = requireAccount();
+      return exclusive(async () => {
+        const stored = await readLinks(projectId, account.accountId);
+        const tasks = await projectTaskSessions(stored);
+        const keep = new Set(included);
+        const onDisk = new Set(tasks.map((task) => task.conversationId));
+        // Exclusions for sessions that are gone stay as they were; the ones here follow this selection.
+        stored.removedSessions = [
+          ...stored.removedSessions.filter((conversationId) => !onDisk.has(conversationId)),
+          ...tasks.filter((task) => !keep.has(task.conversationId)).map((task) => task.conversationId)
+        ];
+
+        let removed = 0;
+        for (const task of tasks) {
+          if (keep.has(task.conversationId)) continue;
+          const key = sessionKey(task);
+          const synced = stored.synced[key];
+          if (!synced) continue;
+          // Members must stop seeing a session the person unchecked.
+          await deleteCloudSession(projectId, synced.cloudSessionId);
+          delete stored.synced[key];
+          removed += 1;
+        }
+
+        // Saved before any upload, so closing the board or the app never loses the choice.
+        const pending = sessionsToUpload(stored, tasks);
+        await writeLinks(stored);
+        if (!pending.length) {
+          syncProgress.delete(projectId);
+          return { uploaded: 0, removed, failed: 0 };
+        }
+        syncProgress.set(projectId, { running: true, total: pending.length, completed: 0, failed: 0 });
+        enqueueUpload(projectId, () => runUpload(projectId, account.accountId));
+        return { uploaded: 0, removed, failed: 0, started: pending.length };
+      });
+    },
+
     async deleteProject(projectId) {
       const account = requireAccount();
       const startedAt = now().getTime();
@@ -871,10 +979,11 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
       stored.synced = {};
       stored.linkedAt = {};
       stored.removedSessions = [];
-      const cleared = exclusive(() => writeLinks(stored)).catch((error: unknown) => {
+      // The cloud has already dropped the project, so the person should not wait for a local rewrite that can sit
+      // behind a long upload. Queue order keeps it ahead of any later sync, which is all it has to guarantee.
+      void exclusive(() => writeLinks(stored)).catch((error: unknown) => {
         console.warn(`Project links not cleared after delete: ${error instanceof Error ? error.message : String(error)}`);
       });
-      await Promise.race([cleared, sleep(DELETE_LINKS_WAIT_MS)]);
       const finishedAt = now().getTime();
       if (finishedAt - startedAt > SLOW_DELETE_MS) {
         console.warn(`Deleting project ${projectId} took ${finishedAt - startedAt}ms (cloud ${cloudDoneAt - startedAt}ms, links ${finishedAt - cloudDoneAt}ms)`);
@@ -882,17 +991,19 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
       return { ok: true };
     },
 
-    syncProjectTasks() {
-      return exclusive(async () => {
+    syncProjectTasks(projectId) {
+      return serializedSync(async () => {
         const account = options.getAccount();
         const total: CollabSyncResult = { uploaded: 0, removed: 0, failed: 0 };
         if (!account) return total;
         const projects = await readAllLinks(account.accountId);
-        for (const stored of projects) {
+        // One board only waits for its own project: syncing the others first is what made opening a board slow.
+        const scoped = projectId ? projects.filter((stored) => stored.projectId === projectId) : projects;
+        for (const stored of scoped) {
           const tasks = await projectTaskSessions(stored);
           if (!tasks.length) continue;
-          const result = await uploadPending(stored, tasks);
-          if (result.uploaded || result.failed) await writeLinks(stored);
+          const { result, synced } = await uploadPending(stored, tasks);
+          await recordUploaded(stored.projectId, account.accountId, synced);
           total.uploaded += result.uploaded;
           total.failed += result.failed;
         }
@@ -901,7 +1012,7 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
     },
 
     syncLinkedSessions() {
-      return exclusive(async () => {
+      return serializedSync(async () => {
         const account = options.getAccount();
         const total: CollabSyncResult = { uploaded: 0, removed: 0, failed: 0 };
         if (!account) return total;
@@ -913,8 +1024,8 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
           .then((listing) => listing.sessions)
           .catch(() => []);
         for (const stored of projects) {
-          const result = await uploadPending(stored, [...local, ...await projectTaskSessions(stored)]);
-          if (result.uploaded || result.failed) await writeLinks(stored);
+          const { result, synced } = await uploadPending(stored, [...local, ...await projectTaskSessions(stored)]);
+          await recordUploaded(stored.projectId, account.accountId, synced);
           total.uploaded += result.uploaded;
           total.failed += result.failed;
         }
@@ -1213,35 +1324,6 @@ function isNewer(updatedAt: string, uploadedAt: string): boolean {
   return Number.isNaN(local) || Number.isNaN(uploaded) || local > uploaded;
 }
 
-/** `~/…/online-projects/<name>`, suffixed with a short id only when another project already uses that name. */
-async function uniqueWorkingDirectory(root: string, name: string, projectId: string): Promise<string> {
-  const base = join(root, safeDirectoryName(name));
-  if (!(await pathExists(base))) return base;
-  return join(root, `${safeDirectoryName(name)}-${safeSegment(projectId).slice(0, 8)}`);
-}
-
-/**
- * A folder name people read in a task page and the project picker, so letters in any script survive; only
- * characters a filesystem or a shell would mind are replaced.
- */
-function safeDirectoryName(value: string): string {
-  const cleaned = value
-    .replace(/[/\\:*?"<>|\u0000-\u001f]+/gu, "_")
-    .replace(/^\.+/u, "")
-    .trim()
-    .slice(0, 60);
-  return cleaned || "project";
-}
-
-async function pathExists(target: string): Promise<boolean> {
-  try {
-    await stat(target);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 /**
  * The directory an online project's tasks run in: the folder the person picked, or a managed empty folder so a
  * task always has a working directory. Either way it is created before the local project is registered.
@@ -1256,14 +1338,8 @@ async function prepareWorkingDirectory(
   // falls back to the id when the name is already taken by another project.
   const target = directory?.trim()
     ? directory.trim()
-    : await uniqueWorkingDirectory(root, name, projectId);
-  try {
-    const info = await stat(target);
-    if (!info.isDirectory()) throw new Error("not a directory");
-  } catch {
-    await mkdir(target, { recursive: true });
-  }
-  return target;
+    : await uniqueProjectDirectory(root, name, projectId);
+  return ensureDirectory(target);
 }
 
 function toProject(raw: unknown): CollabProject {

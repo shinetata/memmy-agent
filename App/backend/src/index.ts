@@ -27,6 +27,7 @@ import { createBackendServices, createCatalogAgentTaskModelResolver, type Bootst
 import { createAgentModelCompleter } from "./services/agent-model.js";
 import { createCollabItemsService } from "./services/collab-items-service.js";
 import { createCollabCloudRequest, createCollabService } from "./services/collab-service.js";
+import { createProjectDirectoryService } from "./services/project-directory-service.js";
 import { resolveCloudClientConfig, type CloudClientConfig } from "./config/service-urls.js";
 import { resetAccountRuntimeForDesktopInstallChange } from "./services/desktop-install-state-service.js";
 import {
@@ -223,6 +224,7 @@ export async function createLocalBackend(options: CreateLocalBackendOptions): Pr
       },
       collab,
       collabItems,
+      projectDirectory: createProjectDirectoryService(),
       permissionManager,
       services,
       composioMcpToken,

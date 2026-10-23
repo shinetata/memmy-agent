@@ -377,11 +377,12 @@ describe("AppFrame", () => {
   });
 
   it("treats thread 404 as a history-open miss without a sidebar alert", () => {
-    const source = readFileSync(resolve(__dirname, "..", "app-frame.tsx"), "utf8");
+    // Opening a task moved to one module both the sidebar and a project board call.
+    const source = readFileSync(resolve(__dirname, "..", "..", "app", "open-agent-task.ts"), "utf8");
     const removedOpenErrorSetter = "setTaskOpen" + "ErrorKey";
     const removedOpenErrorState = "taskOpen" + "ErrorKey";
 
-    expect(source).toContain('import { MemmyAgentRequestError } from "../api/memmy-agent-client.js";');
+    expect(source).toContain('MemmyAgentRequestError');
     expect(source).toContain("error instanceof MemmyAgentRequestError && error.status === 404");
     expect(source).toContain("dispatch(agentActions.historyOpenMissing(task.sessionKey, chatId, requestId));");
     expect(source).not.toContain("dispatch(agentActions.transientSendFailed(chatId));");
@@ -771,15 +772,15 @@ describe("AppFrame", () => {
     )).toEqual({ left: 1096, top: 560 });
   });
 
-  it("opens the new shared-project dialog without changing the page behind it", () => {
+  it("opens the new-project dialog without changing the page behind it", () => {
     const source = readFileSync(resolve(__dirname, "..", "app-frame.tsx"), "utf8");
     const createBlock = source.slice(
-      source.indexOf("function newOnlineProject()"),
-      source.indexOf("async function registerProject")
+      source.indexOf("function newProject()"),
+      source.indexOf("async function updateProject(")
     );
     // Creating a project used to jump to the board first, so the window behind the dialog belonged to some
-    // other shared project. The dialog is a dialog; it must not move the page.
-    expect(createBlock).toContain("requestCreateCollabProject()");
+    // other project. The dialog is a dialog; it must not move the page.
+    expect(createBlock).toContain("requestCreateProject()");
     expect(createBlock).not.toContain("navigate(");
     expect(createBlock).not.toContain("/collab");
   });
@@ -1121,22 +1122,32 @@ describe("AppFrame", () => {
     expect(pick([carrier, elsewhere])).toBeNull();
   });
 
-  it("opens a local project's menu without touching the online project id", () => {
+  it("keeps a shared project's removal behind stopping the share", () => {
+    const source = readFileSync(resolve(__dirname, "..", "app-frame.tsx"), "utf8");
+
+    // The board opens by clicking the row, so the menu only carries project actions.
+    expect(source).not.toContain("appFrame.project.openBoard");
+    // Stopping sharing is the only way out of a shared project: removing it locally would orphan the cloud record.
+    expect(source).toContain('label={t("appFrame.project.stopSharing")}');
+    expect(source).toContain("canRemove={!sharedLocalProjectIds.has(projectContextMenu.projectId)}");
+  });
+
+  it("keeps one project row with separate expand and open hit areas", () => {
     const appFrameSource = readFileSync(resolve(__dirname, "..", "app-frame.tsx"), "utf8");
-    // The online row passes its online id so the menu can offer the board; the local row must not, or the click
-    // throws on a project that has no online counterpart and the menu never opens.
-    const localRowBlock = appFrameSource.slice(
-      appFrameSource.indexOf("<ProjectRow"),
-      appFrameSource.indexOf("/>", appFrameSource.indexOf("<ProjectRow"))
-    );
-    const onlineRowBlock = appFrameSource.slice(
-      appFrameSource.indexOf("<OnlineProjectRow"),
-      appFrameSource.indexOf("/>", appFrameSource.indexOf("<OnlineProjectRow"))
+    // Sharing is a property of a project, not a second kind of row: the cloud row is gone.
+    expect(appFrameSource).not.toContain("OnlineProjectRow");
+    const rowBlock = appFrameSource.slice(
+      appFrameSource.indexOf("function ProjectRow(props: {"),
+      appFrameSource.indexOf("function TaskSection(props: {")
     );
 
-    expect(localRowBlock).toContain("onProjectContextMenu(event, node.project.id)");
-    expect(localRowBlock).not.toContain("node.online");
-    expect(onlineRowBlock).toContain("node.online!.id");
+    // The arrow expands the project's sessions, and only the rest of the row opens the board.
+    expect(rowBlock).toContain("app-frame-project-row__toggle");
+    expect(rowBlock).toContain("props.onToggle()");
+    expect(rowBlock).toContain("props.onOpenBoard()");
+    expect(rowBlock).toContain("app-frame-project-row__main");
+    // A shared project keeps the same row with a small cloud mark.
+    expect(rowBlock).toContain("app-frame-project-row__shared");
   });
 
   it("uses one font size and hover-only top-level disclosure icons", () => {

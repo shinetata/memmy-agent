@@ -341,6 +341,96 @@ describe("collab service", () => {
     ]);
   });
 
+  it("syncs one project's tasks when a board asks for that project only", async () => {
+    const root = mkdtempSync(join(tmpdir(), "memmy-collab-home-"));
+    roots.push(root);
+    const agentSessions = join(root, "workspace", "sessions");
+    mkdirSync(agentSessions, { recursive: true });
+    for (const [taskId, projectId] of [["task-a", "local-9"], ["task-b", "local-8"]] as const) {
+      writeMemmyTask(agentSessions, taskId, projectId, `${projectId} 的会话`, [
+        { role: "user", content: "问题", timestamp: "2026-10-22T05:00:00.000Z" },
+        { role: "assistant", content: "回答", timestamp: "2026-10-22T05:00:01.000Z" }
+      ]);
+    }
+    const { fetcher, calls } = fakeFetch({
+      "GET /api/collab/projects": () => ({
+        code: 0,
+        data: {
+          projects: [
+            { id: "p-9", name: "项目 9", role: "owner", memberCount: 1, sessionCount: 0, createdAt: null },
+            { id: "p-8", name: "项目 8", role: "owner", memberCount: 1, sessionCount: 0, createdAt: null }
+          ]
+        }
+      }),
+      "PUT /api/collab/projects/p-9/sessions": (call) => {
+        const upload = (call.body as { sessions: Array<{ sourceSessionId: string }> }).sessions[0]!;
+        return { code: 0, data: { sessions: [{ id: `id-${upload.sourceSessionId}` }] } };
+      },
+      "PUT /api/collab/projects/p-8/sessions": (call) => {
+        const upload = (call.body as { sessions: Array<{ sourceSessionId: string }> }).sessions[0]!;
+        return { code: 0, data: { sessions: [{ id: `id-${upload.sourceSessionId}` }] } };
+      }
+    });
+    const svc = service(fetcher, { projectsDir: join(root, "projects"), agentSessionsDir: agentSessions });
+    await svc.bindLocalProject("p-9", "local-9");
+    await svc.bindLocalProject("p-8", "local-8");
+    calls.length = 0;
+
+    // Opening one board must not spend time (or uploads) on the other project.
+    expect(await svc.syncProjectTasks("p-9")).toEqual({ uploaded: 1, removed: 0, failed: 0 });
+    expect(calls.filter((call) => call.method === "PUT").map((call) => new URL(call.url).pathname))
+      .toEqual(["/api/collab/projects/p-9/sessions"]);
+  });
+
+  it("lists the project's Memmy sessions and uploads only the ones the person picked", async () => {
+    const root = mkdtempSync(join(tmpdir(), "memmy-collab-home-"));
+    roots.push(root);
+    const agentSessions = join(root, "workspace", "sessions");
+    mkdirSync(agentSessions, { recursive: true });
+    writeMemmyTask(agentSessions, "task-a", "local-9", "要分享的会话", [
+      { role: "user", content: "这条要分享", timestamp: "2026-10-22T05:00:00.000Z" },
+      { role: "assistant", content: "好", timestamp: "2026-10-22T05:00:01.000Z" }
+    ]);
+    writeMemmyTask(agentSessions, "task-b", "local-9", "只留本机的会话", [
+      { role: "user", content: "这条不上传", timestamp: "2026-10-22T04:00:00.000Z" },
+      { role: "assistant", content: "好", timestamp: "2026-10-22T04:00:01.000Z" }
+    ]);
+    const { fetcher, calls } = fakeFetch({
+      "GET /api/collab/projects": () => ({ code: 0, data: { projects: [{ id: "p-9", name: "Memmy 开发", role: "owner", memberCount: 1, sessionCount: 0, createdAt: null }] } }),
+      "PUT /api/collab/projects/p-9/sessions": (call) => {
+        const upload = (call.body as { sessions: Array<{ sourceSessionId: string }> }).sessions[0]!;
+        return { code: 0, data: { sessions: [{ id: `id-${upload.sourceSessionId}` }] } };
+      },
+      "DELETE /api/collab/projects/p-9/sessions/id-task-b": () => ({ code: 0, data: null })
+    });
+    const svc = service(fetcher, { projectsDir: join(root, "projects"), agentSessionsDir: agentSessions });
+
+    await svc.bindLocalProject("p-9", "local-9");
+    // Nothing is excluded before the person chooses, so both sessions count as included.
+    expect((await svc.listProjectTasks("p-9")).tasks).toMatchObject([
+      { conversationId: "task-a", title: "要分享的会话", included: true, synced: false },
+      { conversationId: "task-b", title: "只留本机的会话", included: true, synced: false }
+    ]);
+
+    calls.length = 0;
+    const saved = await svc.saveProjectTasks("p-9", ["task-a"]);
+    expect(saved).toMatchObject({ removed: 0, failed: 0, started: 1 });
+    await waitForUploads(svc, "p-9");
+
+    expect(uploadedIds(calls)).toEqual(["task-a"]);
+    expect((await svc.listProjectTasks("p-9")).tasks).toMatchObject([
+      { conversationId: "task-a", included: true, synced: true },
+      { conversationId: "task-b", included: false, synced: false }
+    ]);
+
+    // Unchecking an uploaded session takes it out of the project, so members stop seeing it.
+    calls.length = 0;
+    const narrowed = await svc.saveProjectTasks("p-9", []);
+    expect(narrowed).toMatchObject({ removed: 1 });
+    expect(calls.some((call) => call.method === "DELETE" && call.url.endsWith("/sessions/id-task-a"))).toBe(true);
+    expect((await svc.listProjectTasks("p-9")).tasks.every((task) => !task.included)).toBe(true);
+  });
+
   it("syncs a board opening from Memmy tasks alone, without asking the Memory service", async () => {
     const root = mkdtempSync(join(tmpdir(), "memmy-collab-home-"));
     roots.push(root);
@@ -529,9 +619,50 @@ describe("collab service", () => {
     await svc.deleteProject("p-1");
 
     expect(deleted).toEqual(["p-1"]);
-    // The binding is gone so the local project shows as a plain local project with its tasks.
+    // The binding is gone so the local project shows as a plain local project with its tasks. The rewrite is
+    // queued rather than awaited, so it lands right after the cloud call instead of holding the response.
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      const links = await svc.getLinks("p-1");
+      if (!links.groups.length && !links.sessions.length) break;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
     expect(await svc.getLinks("p-1")).toEqual({ groups: [], sessions: [] });
     expect((await svc.getSyncProgress("p-1")).running).toBe(false);
+  });
+
+  it("answers a save while a sync is still uploading", async () => {
+    const root = mkdtempSync(join(tmpdir(), "memmy-collab-home-"));
+    roots.push(root);
+    const agentSessions = join(root, "workspace", "sessions");
+    mkdirSync(agentSessions, { recursive: true });
+    writeMemmyTask(agentSessions, "task-a", "local-9", "会话", [
+      { role: "user", content: "问题", timestamp: "2026-10-22T05:00:00.000Z" },
+      { role: "assistant", content: "回答", timestamp: "2026-10-22T05:00:01.000Z" }
+    ]);
+    let release: (() => void) | null = null;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const { fetcher } = fakeFetch({
+      "GET /api/collab/projects": () => ({ code: 0, data: { projects: [{ id: "p-9", name: "项目 9", role: "owner", memberCount: 1, sessionCount: 0, createdAt: null }] } }),
+      "PUT /api/collab/projects/p-9/sessions": async () => {
+        await gate;
+        return { code: 0, data: { sessions: [{ id: "id-a" }] } };
+      }
+    });
+    const svc = service(fetcher, { projectsDir: join(root, "projects"), agentSessionsDir: agentSessions });
+    await svc.bindLocalProject("p-9", "local-9");
+
+    // The sync is stuck in its upload; a save must not wait behind it.
+    const syncing = svc.syncProjectTasks("p-9");
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    const startedAt = Date.now();
+    const saved = await svc.saveProjectTasks("p-9", ["task-a"]);
+    expect(Date.now() - startedAt).toBeLessThan(200);
+    expect(saved.started).toBe(1);
+
+    release?.();
+    await syncing;
   });
 
   // The periodic sync runs inside the write queue and can spend up to a minute per session on a slow Memory service.

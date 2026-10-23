@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronRight, Cloud, Folder, Layers, Link2, MessageSquarePlus, MoreHorizontal, Pencil, Quote, Search, Trash2, Users, X } from "lucide-react";
+import { ChevronDown, ChevronRight, Cloud, Folder, Layers, Link2, MessageSquarePlus, MoreHorizontal, Pencil, Quote, Search, Settings, Trash2, Users, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import {
@@ -9,6 +9,7 @@ import {
   type CollabLinks,
   type CollabProject,
   type CollabProjectSession,
+  type CollabProjectTask,
   type CollabSessionPage,
   type CollabSessionTurn,
   type CollabSyncProgress,
@@ -18,13 +19,22 @@ import {
 } from "../api/collab-client.js";
 import {
   addCollabProject,
-  requestCreateCollabProject,
+  consumeTaskPickerRequest,
   getCollabProjectsSnapshot,
   loadCollabProjects,
   markCollabProjectBound,
+  removeCollabProject,
   replaceCollabProject,
+  requestCreateProject,
+  requestTaskPicker,
+  selectCollabProject,
+  sharedProjectFor,
   subscribeCollabProjects
 } from "../app/collab-projects-store.js";
+import type { MemmyAgentProject } from "../api/memmy-agent-client.js";
+import { openAgentTaskInChat } from "../app/open-agent-task.js";
+import type { AgentTaskView } from "../state/agent-chat-slice.js";
+import { useOptionalAppState } from "../state/app-state.js";
 import { ApiRequestError } from "../api/http.js";
 import { useOptionalAgentRuntimeBridge } from "../app/agent-runtime-bridge.js";
 import { useApiClients } from "../app/providers.js";
@@ -159,9 +169,16 @@ export function localSessionKey(session: { sourceId: string; conversationId: str
   return `${session.sourceId}\u0000${session.conversationId}`;
 }
 
-/** The whole board of one online project: the header, the two tabs, the session list and the link dialog. */
+/**
+ * The board of one project: its header, the two tabs, and the session list. A project is local; when its sharing
+ * switch is on, the sessions come from the cloud and the list also carries members, references and items.
+ */
 export function CollabPage() {
   const { clients } = useApiClients();
+  // The board belongs to a project on this computer, so it reads the same project list the sidebar does.
+  const appState = useOptionalAppState();
+  const projects = appState?.state.agent.projects ?? [];
+  const tasks = appState?.state.agent.tasks ?? [];
   const { t } = useTranslation();
   const collab = useMemo(() => (clients ? createHttpCollabClient(clients.runtimeConfig) : null), [clients]);
   const snapshot = useSyncExternalStore(subscribeCollabProjects, getCollabProjectsSnapshot, getCollabProjectsSnapshot);
@@ -174,12 +191,17 @@ export function CollabPage() {
   const [reading, setReading] = useState<{ session: CollabProjectSession; turns: CollabSessionTurn[] } | null>(null);
   const [readingId, setReadingId] = useState<string | null>(null);
   const [pickOpen, setPickOpen] = useState(false);
+  /** Choosing which of the project's own Memmy sessions members may read. */
+  const [taskPickerOpen, setTaskPickerOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [deleting, setDeleting] = useState<CollabProjectSession | null>(null);
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   /** Upload progress of a queued association; the list grows while it runs. */
   const [progress, setProgress] = useState<CollabSyncProgress | null>(null);
   /** Bumped when an association is queued, so polling starts without waiting for a filter or page change. */
   const [pollKey, setPollKey] = useState(0);
+  /** Projects whose tasks were already uploaded for this opening, so filters do not re-upload them. */
+  const syncedProjectRef = useRef<Set<string>>(new Set());
   const [toast, setToast] = useState<string | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -193,12 +215,29 @@ export function CollabPage() {
     if (collab) void loadCollabProjects(collab);
   }, [collab]);
 
-  const selectedId = snapshot.selectedId;
-  const selected = snapshot.projects?.find((project) => project.id === selectedId) ?? null;
+  // The board belongs to a project on this computer. Sharing only adds a cloud record to it.
+  const project = projects.find((candidate) => candidate.id === snapshot.selectedId)
+    ?? projects[0]
+    ?? null;
+  useEffect(() => {
+    // A reload, or a project opened from a link, has no selection yet: the first project keeps the board usable.
+    if (project && snapshot.selectedId !== project.id) selectCollabProject(project.id);
+  }, [project, snapshot.selectedId]);
+  const shared = sharedProjectFor(snapshot.projects, project?.id);
+  const sharedId = shared?.id ?? null;
+  const projectId = project?.id ?? null;
+
+  // A project that just started sharing asks which of its own sessions go to the cloud.
+  useEffect(() => {
+    if (!projectId || snapshot.taskPickerFor !== projectId) return;
+    consumeTaskPickerRequest();
+    setSettingsOpen(false);
+    setTaskPickerOpen(true);
+  }, [projectId, snapshot.taskPickerFor]);
 
   // One request builds every page: the query and the member filter decide what `total` counts.
   useEffect(() => {
-    if (!collab || !selectedId) {
+    if (!collab || !sharedId) {
       setPage(null);
       return;
     }
@@ -208,11 +247,15 @@ export function CollabPage() {
     const load = async () => {
       try {
         // The list is read first: waiting for an upload that may be queued behind other work is what made the
-        // board sit on "loading". The upload starts in parallel and the next poll picks up what it adds.
-        if (pageIndex === 0) {
-          void collab.syncSessions({ tasksOnly: true }).then(() => refreshAfterUploadRef.current()).catch(() => undefined);
+        // board sit on "loading". The upload starts in parallel and the next poll picks up what it adds. It runs
+        // once per board opening and only for this project, so a search or a page change never re-uploads.
+        if (!syncedProjectRef.current.has(sharedId)) {
+          syncedProjectRef.current.add(sharedId);
+          void collab.syncSessions({ tasksOnly: true, projectId: sharedId })
+            .then(() => refreshAfterUploadRef.current())
+            .catch(() => undefined);
         }
-        const result = await collab.listSessions(selectedId, {
+        const result = await collab.listSessions(sharedId, {
           ...(query ? { query } : {}),
           ...(member === "all" ? {} : { member }),
           offset: pageIndex * SESSION_PAGE_SIZE,
@@ -229,7 +272,7 @@ export function CollabPage() {
     return () => {
       cancelled = true;
     };
-  }, [collab, selectedId, query, member, pageIndex, showToast]);
+  }, [collab, sharedId, query, member, pageIndex, showToast]);
 
   /**
    * Called once the background upload of this project's own tasks finishes, so a task finished moments ago shows
@@ -237,8 +280,8 @@ export function CollabPage() {
    */
   const refreshAfterUploadRef = useRef<() => void>(() => undefined);
   const refreshAfterUpload = useCallback(() => {
-    if (!collab || !selectedId) return;
-    void collab.listSessions(selectedId, {
+    if (!collab || !sharedId) return;
+    void collab.listSessions(sharedId, {
       ...(query ? { query } : {}),
       ...(member === "all" ? {} : { member }),
       offset: pageIndex * SESSION_PAGE_SIZE,
@@ -246,7 +289,7 @@ export function CollabPage() {
     })
       .then((result) => setPage(result))
       .catch(() => undefined);
-  }, [collab, selectedId, query, member, pageIndex]);
+  }, [collab, sharedId, query, member, pageIndex]);
   refreshAfterUploadRef.current = refreshAfterUpload;
 
   /** Re-reads the current page without blanking it, so rows arrive instead of the board flickering. */
@@ -268,14 +311,14 @@ export function CollabPage() {
 
   // While an association uploads in the background, poll its progress and the list so rows arrive one by one.
   useEffect(() => {
-    if (!collab || !selectedId) return;
+    if (!collab || !sharedId) return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
 
     const tick = async () => {
       const [next, listing] = await Promise.all([
-        collab.getSyncProgress(selectedId).catch(() => null),
-        collab.listSessions(selectedId, { ...(member === "all" ? {} : { member }), ...(query ? { query } : {}), offset: pageIndex * SESSION_PAGE_SIZE, limit: SESSION_PAGE_SIZE }).catch(() => null)
+        collab.getSyncProgress(sharedId).catch(() => null),
+        collab.listSessions(sharedId, { ...(member === "all" ? {} : { member }), ...(query ? { query } : {}), offset: pageIndex * SESSION_PAGE_SIZE, limit: SESSION_PAGE_SIZE }).catch(() => null)
       ]);
       if (cancelled) return;
       if (listing) {
@@ -287,7 +330,7 @@ export function CollabPage() {
     };
 
     // Opening the board also joins an upload that started before it (or before a reload).
-    void collab.getSyncProgress(selectedId)
+    void collab.getSyncProgress(sharedId)
       .then((current) => {
         if (cancelled) return;
         setProgress(current);
@@ -299,12 +342,11 @@ export function CollabPage() {
       cancelled = true;
       if (timer) clearTimeout(timer);
     };
-  }, [collab, selectedId, member, query, pageIndex, pollKey]);
+  }, [collab, sharedId, member, query, pageIndex, pollKey]);
 
   useEffect(() => () => {
     if (toastTimer.current) clearTimeout(toastTimer.current);
   }, []);
-
 
   const sessions = page?.sessions ?? null;
   const filtering = Boolean(query) || member !== "all";
@@ -320,12 +362,20 @@ export function CollabPage() {
   // A new query or member filter starts again from the first page.
   useEffect(() => {
     setPageIndex(0);
-  }, [query, member, selectedId]);
+  }, [query, member, sharedId]);
 
   // Keep the page in range when a deletion or a filter change leaves it past the end.
   useEffect(() => {
     if (pageIndex > 0 && pageIndex >= pageCount) setPageIndex(pageCount - 1);
   }, [pageCount, pageIndex]);
+
+  // Only this project's own tasks: nothing leaves the computer until sharing is on and sessions are chosen.
+  const localTasks = useMemo(() => {
+    if (!projectId) return [];
+    return tasks
+      .filter((task) => task.projectId === projectId && !task.archived)
+      .sort((left, right) => (right.updatedAt ?? "").localeCompare(left.updatedAt ?? ""));
+  }, [projectId, tasks]);
 
   async function openSession(session: CollabProjectSession) {
     if (!collab) return;
@@ -349,13 +399,13 @@ export function CollabPage() {
   }
 
   async function confirmDelete() {
-    if (!collab || !selectedId || !deleting) return;
+    if (!collab || !sharedId || !deleting) return;
     const session = deleting;
     setDeleting(null);
     try {
-      await collab.removeSession(selectedId, session.id);
+      await collab.removeSession(sharedId, session.id);
       showToast(t("collab.session.deleted"));
-      await refreshSessions(selectedId);
+      await refreshSessions(sharedId);
     } catch (cause) {
       showToast(messageOf(cause));
     }
@@ -368,7 +418,7 @@ export function CollabPage() {
   ];
 
   return (
-    <AppFrame title={t("nav.collab")}>
+    <AppFrame title={project?.name ?? t("nav.collab")}>
       <div className={styles.page}>
         {snapshot.error !== null ? (
           <div className={styles.empty} role="alert">
@@ -377,19 +427,36 @@ export function CollabPage() {
           </div>
         ) : snapshot.projects === null ? (
           <p className={styles.loading}>{t("collab.loading")}</p>
-        ) : !selected ? (
+        ) : !project ? (
           <div className={styles.empty}>
             <b>{t("collab.empty.title")}</b>
             <p>{t("collab.empty.body")}</p>
-            <Button variant="primary" size="sm" onClick={() => requestCreateCollabProject()}>{t("collab.newProject")}</Button>
+            <Button variant="primary" size="sm" onClick={() => requestCreateProject()}>{t("home.project.new")}</Button>
           </div>
         ) : (
           <>
             <div className={styles.scroller}>
               <div className={styles.wrap}>
                 <header className={styles.boardHeader}>
-                  <span className={styles.boardIcon} aria-hidden="true"><Cloud size={22} /></span>
-                  <h1 className={styles.boardName}>{selected.name}</h1>
+                  <span className={styles.boardIcon} aria-hidden="true">
+                    {shared ? <Cloud size={22} /> : <Folder size={22} />}
+                  </span>
+                  <h1 className={styles.boardName}>{project.name}</h1>
+                  <span className={styles.boardScope}>
+                    {shared
+                      ? t("collab.members", { count: String(shared.memberCount) })
+                      : t("collab.board.localOnly")}
+                  </span>
+                  <span className={styles.grow} />
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    aria-label={t("collab.settings.open")}
+                    title={t("collab.settings.open")}
+                    onClick={() => setSettingsOpen(true)}
+                  >
+                    <Settings size={15} aria-hidden="true" />
+                  </Button>
                 </header>
 
                 <div className={styles.tabs} role="tablist">
@@ -415,201 +482,216 @@ export function CollabPage() {
 
                 {tab === "sessions" ? (
                   <>
-                    <div className={styles.toolbar}>
-                      <MemberFilterPicker
-                        value={member}
-                        options={memberOptions}
-                        onChange={setMember}
-                      />
-                      <label className={styles.searchBox}>
-                        <Search size={14} aria-hidden="true" className={styles.searchIcon} />
-                        <input
-                          value={searchDraft}
-                          placeholder={t("collab.sessions.searchPlaceholder")}
-                          aria-label={t("collab.sessions.searchPlaceholder")}
-                          onChange={(event) => {
-                            const next = event.target.value;
-                            setSearchDraft(next);
-                            // Clearing shows everything again at once; typing waits for a pause.
-                            if (!next.trim()) setQuery("");
-                          }}
-                          onKeyDown={(event) => {
-                            if (event.key === "Enter") setQuery(searchDraft.trim());
-                            if (event.key === "Escape") {
-                              setSearchDraft("");
-                              setQuery("");
-                            }
-                          }}
-                        />
-                        {searchDraft && searchDraft !== query ? (
-                          <button type="button" className={styles.searchGo} onClick={() => setQuery(searchDraft.trim())}>
-                            {t("collab.sessions.searchGo")}
-                          </button>
-                        ) : null}
-                      </label>
-                      <span className={styles.grow} />
-                      <Button size="sm" onClick={() => setPickOpen(true)}>
-                        <Link2 size={14} aria-hidden="true" />
-                        {t("collab.associate")}
-                      </Button>
-                    </div>
-
-                    {progress?.running ? (
-                      <div className={styles.syncStrip} role="status" aria-live="polite">
-                        <span className={styles.syncText}>
-                          {t("collab.sync.progress", {
-                            completed: String(progress.completed),
-                            total: String(progress.total)
-                          })}
-                        </span>
-                        <span className={styles.syncBar} aria-hidden="true">
-                          <span
-                            className={styles.syncBarFill}
-                            style={{ width: `${progress.total ? Math.round((progress.completed / progress.total) * 100) : 0}%` }}
-                          />
-                        </span>
-                      </div>
-                    ) : null}
-                    {sessions === null ? (
-                      <p className={styles.loading}>{t("collab.loading")}</p>
-                    ) : sessions.length === 0 && filtering ? (
-                      // A filter with no hits is not an empty project: say what was searched and offer a way back.
-                      <div className={styles.empty}>
-                        <b>{t("collab.sessions.noMatch.title")}</b>
-                        <p>
-                          {query
-                            ? t("collab.sessions.noMatch.body", { query })
-                            : t("collab.sessions.noMatch.bodyMember")}
-                        </p>
-                        <Button size="sm" onClick={clearFilters}>{t("collab.sessions.noMatch.clear")}</Button>
-                      </div>
-                    ) : sessions.length === 0 ? (
-                      // An empty project is the one place to explain the tab: what it collects and what a
-                      // member can do with it. New projects start here, so it carries the first-run guidance.
-                      <section className={styles.guide} aria-label={t("collab.sessions.empty.title")}>
-                        <b className={styles.guideTitle}>{t("collab.sessions.empty.title")}</b>
-                        <p className={styles.guideLead}>{t("collab.sessions.empty.lead")}</p>
-                        <ul className={styles.guideList}>
-                          {([
-                            { key: "task", icon: <MessageSquarePlus size={15} aria-hidden="true" /> },
-                            { key: "associate", icon: <Link2 size={15} aria-hidden="true" /> },
-                            { key: "quote", icon: <Quote size={15} aria-hidden="true" /> },
-                            { key: "review", icon: <Users size={15} aria-hidden="true" /> }
-                          ] as const).map((item) => (
-                            <li key={item.key} className={styles.guideItem}>
-                              <span className={styles.guideIcon} aria-hidden="true">{item.icon}</span>
-                              <div className={styles.guideText}>
-                                <b>{t(`collab.sessions.empty.${item.key}.title` as MessageKey)}</b>
-                                <span>{t(`collab.sessions.empty.${item.key}.body` as MessageKey)}</span>
-                              </div>
-                            </li>
-                          ))}
-                        </ul>
-                      </section>
-                    ) : (
+                    {shared ? (
                       <>
-                      <ul className={styles.list}>
-                        {sessions.length === 0 ? (
-                          <li className={styles.noMatch}>
-                            {query ? t("collab.sessions.noMatch") : t("collab.sessions.empty.title")}
-                          </li>
-                        ) : sessions.map((session) => {
-                          // Members see this person's nickname in their own Memmy, so show the nickname here too.
-                          const name = session.memberName || (session.mine ? t("collab.session.you") : "");
-                          const menuOpen = openMenuId === session.id;
-                          return (
-                            <li
-                              key={session.id}
-                              className={`${styles.row} ${styles.rowOpenable} ${menuOpen ? styles.rowMenuOpen : ""}`}
-                              onClick={() => void openSession(session)}
-                            >
-                              <span
-                                className={styles.avatar}
-                                style={{ background: memberColor(session.memberName || (session.mine ? t("collab.session.you") : "")) }}
-                                aria-hidden="true"
-                              >
-                                {Array.from(name)[0] ?? "?"}
-                              </span>
-                              <div className={styles.rowText}>
-                                <span className={styles.rowTitle}>{session.title}</span>
-                                {session.lastQuestion ? <span className={styles.rowSummary}>{session.lastQuestion}</span> : null}
-                              </div>
-                              <span className={styles.meta}>
-                                {[name, formatSessionTime(session.lastActiveAt)].filter(Boolean).join(" · ")}
-                              </span>
-                              <button
-                                type="button"
-                                className={styles.moreButton}
-                                aria-label={t("collab.session.more")}
-                                title={t("collab.session.more")}
-                                aria-expanded={menuOpen}
-                                onClick={(event) => {
-                                  event.stopPropagation();
-                                  setOpenMenuId(menuOpen ? null : session.id);
-                                }}
-                              >
-                                <MoreHorizontal size={15} aria-hidden="true" />
+                        <div className={styles.toolbar}>
+                          <MemberFilterPicker
+                            value={member}
+                            options={memberOptions}
+                            onChange={setMember}
+                          />
+                          <label className={styles.searchBox}>
+                            <Search size={14} aria-hidden="true" className={styles.searchIcon} />
+                            <input
+                              value={searchDraft}
+                              placeholder={t("collab.sessions.searchPlaceholder")}
+                              aria-label={t("collab.sessions.searchPlaceholder")}
+                              onChange={(event) => {
+                                const next = event.target.value;
+                                setSearchDraft(next);
+                                // Clearing shows everything again at once; typing waits for a pause.
+                                if (!next.trim()) setQuery("");
+                              }}
+                              onKeyDown={(event) => {
+                                if (event.key === "Enter") setQuery(searchDraft.trim());
+                                if (event.key === "Escape") {
+                                  setSearchDraft("");
+                                  setQuery("");
+                                }
+                              }}
+                            />
+                            {searchDraft && searchDraft !== query ? (
+                              <button type="button" className={styles.searchGo} onClick={() => setQuery(searchDraft.trim())}>
+                                {t("collab.sessions.searchGo")}
                               </button>
-                              {menuOpen ? (
-                                <>
-                                  {/*
-                                   * The row itself opens the session reader. Every click that belongs to the menu has to
-                                   * stop here, or copying a link also opens the session behind the toast.
-                                   */}
+                            ) : null}
+                          </label>
+                          <span className={styles.grow} />
+                          <Button size="sm" onClick={() => setPickOpen(true)}>
+                            <Link2 size={14} aria-hidden="true" />
+                            {t("collab.associate")}
+                          </Button>
+                        </div>
+
+                        {progress?.running ? (
+                          <div className={styles.syncStrip} role="status" aria-live="polite">
+                            <span className={styles.syncText}>
+                              {t("collab.sync.progress", {
+                                completed: String(progress.completed),
+                                total: String(progress.total)
+                              })}
+                            </span>
+                            <span className={styles.syncBar} aria-hidden="true">
+                              <span
+                                className={styles.syncBarFill}
+                                style={{ width: `${progress.total ? Math.round((progress.completed / progress.total) * 100) : 0}%` }}
+                              />
+                            </span>
+                          </div>
+                        ) : null}
+                        {sessions === null ? (
+                          <p className={styles.loading}>{t("collab.loading")}</p>
+                        ) : sessions.length === 0 && filtering ? (
+                          // A filter with no hits is not an empty project: say what was searched and offer a way back.
+                          <div className={styles.empty}>
+                            <b>{t("collab.sessions.noMatch.title")}</b>
+                            <p>
+                              {query
+                                ? t("collab.sessions.noMatch.body", { query })
+                                : t("collab.sessions.noMatch.bodyMember")}
+                            </p>
+                            <Button size="sm" onClick={clearFilters}>{t("collab.sessions.noMatch.clear")}</Button>
+                          </div>
+                        ) : sessions.length === 0 ? (
+                          // An empty project is the one place to explain the tab: what it collects and what a
+                          // member can do with it. New projects start here, so it carries the first-run guidance.
+                          <section className={styles.guide} aria-label={t("collab.sessions.empty.title")}>
+                            <b className={styles.guideTitle}>{t("collab.sessions.empty.title")}</b>
+                            <p className={styles.guideLead}>{t("collab.sessions.empty.lead")}</p>
+                            <ul className={styles.guideList}>
+                              {([
+                                { key: "task", icon: <MessageSquarePlus size={15} aria-hidden="true" /> },
+                                { key: "associate", icon: <Link2 size={15} aria-hidden="true" /> },
+                                { key: "quote", icon: <Quote size={15} aria-hidden="true" /> },
+                                { key: "review", icon: <Users size={15} aria-hidden="true" /> }
+                              ] as const).map((item) => (
+                                <li key={item.key} className={styles.guideItem}>
+                                  <span className={styles.guideIcon} aria-hidden="true">{item.icon}</span>
+                                  <div className={styles.guideText}>
+                                    <b>{t(`collab.sessions.empty.${item.key}.title` as MessageKey)}</b>
+                                    <span>{t(`collab.sessions.empty.${item.key}.body` as MessageKey)}</span>
+                                  </div>
+                                </li>
+                              ))}
+                            </ul>
+                          </section>
+                        ) : (
+                          <>
+                          <ul className={styles.list}>
+                            {sessions.map((session) => {
+                              // Members see this person's nickname in their own Memmy, so show the nickname here too.
+                              const name = session.memberName || (session.mine ? t("collab.session.you") : "");
+                              const menuOpen = openMenuId === session.id;
+                              return (
+                                <li
+                                  key={session.id}
+                                  className={`${styles.row} ${styles.rowOpenable} ${menuOpen ? styles.rowMenuOpen : ""}`}
+                                  onClick={() => void openSession(session)}
+                                >
+                                  <span
+                                    className={styles.avatar}
+                                    style={{ background: memberColor(session.memberName || (session.mine ? t("collab.session.you") : "")) }}
+                                    aria-hidden="true"
+                                  >
+                                    {Array.from(name)[0] ?? "?"}
+                                  </span>
+                                  <div className={styles.rowText}>
+                                    <span className={styles.rowTitle}>{session.title}</span>
+                                    {session.lastQuestion ? <span className={styles.rowSummary}>{session.lastQuestion}</span> : null}
+                                  </div>
+                                  <span className={styles.meta}>
+                                    {[name, formatSessionTime(session.lastActiveAt)].filter(Boolean).join(" · ")}
+                                  </span>
                                   <button
                                     type="button"
-                                    className={styles.menuScrim}
-                                    aria-label={t("collab.cancel")}
+                                    className={styles.moreButton}
+                                    aria-label={t("collab.session.more")}
+                                    title={t("collab.session.more")}
+                                    aria-expanded={menuOpen}
                                     onClick={(event) => {
                                       event.stopPropagation();
-                                      setOpenMenuId(null);
+                                      setOpenMenuId(menuOpen ? null : session.id);
                                     }}
-                                  />
-                                  <div className={styles.menu} role="menu" onClick={(event) => event.stopPropagation()}>
-                                    <button type="button" role="menuitem" className={styles.menuItem} onClick={() => { setOpenMenuId(null); void copyLink(session); }}>
-                                      {t("collab.session.copyLink")}
-                                    </button>
-                                    {session.mine ? (
-                                      <>
-                                        <div className={styles.menuSeparator} role="separator" />
-                                        <button type="button" role="menuitem" className={`${styles.menuItem} ${styles.menuItemDanger}`} onClick={() => { setOpenMenuId(null); setDeleting(session); }}>
-                                          {t("collab.session.delete")}
+                                  >
+                                    <MoreHorizontal size={15} aria-hidden="true" />
+                                  </button>
+                                  {menuOpen ? (
+                                    <>
+                                      {/*
+                                       * The row itself opens the session reader. Every click that belongs to the menu has to
+                                       * stop here, or copying a link also opens the session behind the toast.
+                                       */}
+                                      <button
+                                        type="button"
+                                        className={styles.menuScrim}
+                                        aria-label={t("collab.cancel")}
+                                        onClick={(event) => {
+                                          event.stopPropagation();
+                                          setOpenMenuId(null);
+                                        }}
+                                      />
+                                      <div className={styles.menu} role="menu" onClick={(event) => event.stopPropagation()}>
+                                        <button type="button" role="menuitem" className={styles.menuItem} onClick={() => { setOpenMenuId(null); void copyLink(session); }}>
+                                          {t("collab.session.copyLink")}
                                         </button>
-                                      </>
-                                    ) : null}
-                                  </div>
-                                </>
-                              ) : null}
-                            </li>
-                          );
-                        })}
-                      </ul>
-                      {total > SESSION_PAGE_SIZE ? (
-                        <nav className={styles.pager} aria-label={t("collab.sessions.pager")}>
-                          <span className={styles.pagerInfo}>
-                            {t("collab.sessions.pageInfo", {
-                              page: String(pageIndex + 1),
-                              pages: String(pageCount),
-                              total: String(total)
+                                        {session.mine ? (
+                                          <>
+                                            <div className={styles.menuSeparator} role="separator" />
+                                            <button type="button" role="menuitem" className={`${styles.menuItem} ${styles.menuItemDanger}`} onClick={() => { setOpenMenuId(null); setDeleting(session); }}>
+                                              {t("collab.session.delete")}
+                                            </button>
+                                          </>
+                                        ) : null}
+                                      </div>
+                                    </>
+                                  ) : null}
+                                </li>
+                              );
                             })}
-                          </span>
-                          <span className={styles.grow} />
-                          <Button size="sm" variant="ghost" disabled={pageIndex === 0} onClick={() => setPageIndex(pageIndex - 1)}>
-                            {t("collab.sessions.prevPage")}
-                          </Button>
-                          <Button size="sm" variant="ghost" disabled={pageIndex >= pageCount - 1} onClick={() => setPageIndex(pageIndex + 1)}>
-                            {t("collab.sessions.nextPage")}
-                          </Button>
-                        </nav>
-                      ) : total > 0 ? (
-                        <p className={styles.pagerInfo}>{t("collab.sessions.totalOnly", { total: String(total) })}</p>
-                      ) : null}
+                          </ul>
+                          {total > SESSION_PAGE_SIZE ? (
+                            <nav className={styles.pager} aria-label={t("collab.sessions.pager")}>
+                              <span className={styles.pagerInfo}>
+                                {t("collab.sessions.pageInfo", {
+                                  page: String(pageIndex + 1),
+                                  pages: String(pageCount),
+                                  total: String(total)
+                                })}
+                              </span>
+                              <span className={styles.grow} />
+                              <Button size="sm" variant="ghost" disabled={pageIndex === 0} onClick={() => setPageIndex(pageIndex - 1)}>
+                                {t("collab.sessions.prevPage")}
+                              </Button>
+                              <Button size="sm" variant="ghost" disabled={pageIndex >= pageCount - 1} onClick={() => setPageIndex(pageIndex + 1)}>
+                                {t("collab.sessions.nextPage")}
+                              </Button>
+                            </nav>
+                          ) : total > 0 ? (
+                            <p className={styles.pagerInfo}>{t("collab.sessions.totalOnly", { total: String(total) })}</p>
+                          ) : null}
+                          </>
+                        )}
                       </>
+                    ) : (
+                      <LocalProjectSessions
+                        tasks={localTasks}
+                        onOpenTask={(task) => {
+                          const dispatch = appState?.dispatch;
+                          if (!dispatch) return;
+                          void openAgentTaskInChat({ memmyAgent: clients?.memmyAgent, dispatch, task });
+                        }}
+                      />
                     )}
                   </>
-                ) : collab ? (
-                  <CollabItemsPanel key={selected.id} collab={collab} projectId={selected.id} onToast={showToast} />
-                ) : null}
+                ) : shared && collab ? (
+                  <CollabItemsPanel key={shared.id} collab={collab} projectId={shared.id} onToast={showToast} />
+                ) : (
+                  // Items come from project memory, which needs sharing; the notice says where to turn it on.
+                  <section className={styles.localNotice} aria-label={t("collab.tab.items")}>
+                    <b>{t("collab.items.empty.title")}</b>
+                    <p>{t("collab.items.empty.notShared")}</p>
+                  </section>
+                )}
               </div>
             </div>
           </>
@@ -618,11 +700,57 @@ export function CollabPage() {
 
       {/* Overlays mount on the body, like the app's other menus and dialogs, so the sidebar never covers them. */}
       {typeof document === "undefined" ? null : createPortal(<>
-      {collab && selected ? (
+      {project ? (
+        <ProjectBoardSettingsDialog
+          open={settingsOpen}
+          project={project}
+          shared={shared}
+          collab={collab}
+          onClose={() => setSettingsOpen(false)}
+          onShared={() => {
+            // The board re-reads its own list once sharing exists.
+            setSettingsOpen(false);
+            setPollKey((key) => key + 1);
+          }}
+          onUnshared={() => {
+            setPage(null);
+            setSettingsOpen(false);
+            showToast(t("collab.settings.unshared"));
+          }}
+          taskCount={localTasks.length}
+          onPickSessions={() => {
+            setSettingsOpen(false);
+            setTaskPickerOpen(true);
+          }}
+          onNotice={showToast}
+          onFailed={showToast}
+        />
+      ) : null}
+      {collab && shared ? (
+        <ProjectTaskPickerDialog
+          open={taskPickerOpen}
+          collab={collab}
+          project={shared}
+          onClose={() => setTaskPickerOpen(false)}
+          onSaved={(result) => {
+            setTaskPickerOpen(false);
+            if (result.started) {
+              setProgress({ running: true, total: result.started, completed: 0, failed: 0 });
+              setPollKey((key) => key + 1);
+              showToast(t("collab.tasks.queued", { count: String(result.started) }));
+            } else {
+              showToast(t("collab.tasks.saved"));
+            }
+            void refreshSessions(shared.id);
+          }}
+          onFailed={showToast}
+        />
+      ) : null}
+      {collab && shared ? (
         <AssociateSessionsModal
           open={pickOpen}
           collab={collab}
-          project={selected}
+          project={shared}
           onClose={() => setPickOpen(false)}
           onLinked={(result) => {
             // The selection is already saved; the upload continues in the background and the board shows it.
@@ -634,7 +762,7 @@ export function CollabPage() {
             } else {
               showToast(t("collab.pick.done"));
             }
-            void refreshSessions(selected.id);
+            void refreshSessions(shared.id);
           }}
         />
       ) : null}
@@ -658,6 +786,334 @@ export function CollabPage() {
       {toast ? <div className={styles.toast} role="status">{toast}</div> : null}
       </>, document.body)}
     </AppFrame>
+  );
+}
+
+/**
+ * The sessions tab of a project that is not shared: this computer's own tasks for it, nothing more. Sharing is
+ * turned on in the project settings, so the list stays a list instead of carrying a reminder.
+ */
+function LocalProjectSessions(props: {
+  tasks: AgentTaskView[];
+  onOpenTask: (task: AgentTaskView) => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <>
+      {props.tasks.length === 0 ? (
+        <p className={styles.localEmpty}>{t("collab.board.noTasks")}</p>
+      ) : (
+        <ul className={styles.list}>
+          {props.tasks.map((task) => (
+            <li
+              key={task.sessionKey}
+              className={`${styles.row} ${styles.rowOpenable}`}
+              onClick={() => props.onOpenTask(task)}
+            >
+              <span className={styles.localIcon} aria-hidden="true"><Folder size={15} /></span>
+              <div className={styles.rowText}>
+                <span className={styles.rowTitle}>{task.title}</span>
+                {task.preview ? <span className={styles.rowSummary}>{task.preview}</span> : null}
+              </div>
+              <span className={styles.meta}>{formatSessionTime(task.updatedAt)}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </>
+  );
+}
+
+/**
+ * Which of the project's own Memmy sessions go to the cloud. A session that already belongs to the project starts
+ * checked, so the dialog also works as a way to take one back out.
+ */
+function ProjectTaskPickerDialog(props: {
+  open: boolean;
+  collab: CollabClient | null;
+  project: CollabProject;
+  onClose: () => void;
+  onSaved: (result: CollabSyncResult) => void;
+  onFailed: (message: string) => void;
+}) {
+  const { t } = useTranslation();
+  const [tasks, setTasks] = useState<CollabProjectTask[] | null>(null);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const { collab, open, project } = props;
+
+  useEffect(() => {
+    if (!open || !collab) return;
+    let cancelled = false;
+    setTasks(null);
+    setError(null);
+    collab.listProjectTasks(project.id)
+      .then((listing) => {
+        if (cancelled) return;
+        setTasks(listing);
+        setSelected(new Set(listing.filter((task) => task.included).map((task) => task.conversationId)));
+      })
+      .catch((cause: unknown) => {
+        if (!cancelled) setError(messageOf(cause));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [collab, open, project.id]);
+
+  const count = tasks?.length ?? 0;
+  const allSelected = count > 0 && selected.size === count;
+
+  function toggle(conversationId: string) {
+    setSelected((current) => {
+      const next = new Set(current);
+      if (next.has(conversationId)) next.delete(conversationId);
+      else next.add(conversationId);
+      return next;
+    });
+  }
+
+  async function confirm() {
+    if (!collab || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      props.onSaved(await collab.saveProjectTasks(project.id, [...selected]));
+    } catch (cause) {
+      setError(messageOf(cause) || t("collab.pick.failed"));
+      props.onFailed(messageOf(cause) || t("collab.pick.failed"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal
+      open={props.open}
+      title={t("collab.tasks.title")}
+      subtitle={t("collab.tasks.subtitle")}
+      onClose={props.onClose}
+      closeLabel={t("common.close")}
+      closeContent={<X size={16} aria-hidden="true" />}
+      className={styles.pickModal}
+      backdropClassName={styles.backdrop}
+      footer={(
+        <>
+          <span className={styles.tasksCount}>{t("collab.tasks.selected", { count: String(selected.size) })}</span>
+          <span className={styles.footerButtons}>
+            <Button variant="ghost" onClick={props.onClose}>{t("collab.cancel")}</Button>
+            <Button
+              variant="primary"
+              disabled={busy || tasks === null || count === 0}
+              onClick={() => void confirm()}
+            >
+              {t("collab.tasks.confirm")}
+            </Button>
+          </span>
+        </>
+      )}
+    >
+      {tasks === null ? (
+        <p className={styles.loading}>{error ?? t("collab.loading")}</p>
+      ) : count === 0 ? (
+        <p className={styles.localEmpty}>{t("collab.tasks.empty")}</p>
+      ) : (
+        // One bordered card holds the select-all row and the sessions, so every box sits on the same left edge.
+        <div className={styles.tasksCard}>
+          <label className={styles.tasksAll}>
+            <input
+              type="checkbox"
+              checked={allSelected}
+              onChange={() => setSelected(allSelected ? new Set() : new Set(tasks.map((task) => task.conversationId)))}
+            />
+            <span>{t("collab.tasks.selectAll")}</span>
+          </label>
+          <ul className={styles.tasksList}>
+            {tasks.map((task) => (
+              <li
+                key={task.conversationId}
+                className={`${styles.row} ${styles.rowOpenable}`}
+                onClick={() => toggle(task.conversationId)}
+              >
+                <input
+                  type="checkbox"
+                  className={styles.tasksCheck}
+                  checked={selected.has(task.conversationId)}
+                  onChange={() => toggle(task.conversationId)}
+                  onClick={(event) => event.stopPropagation()}
+                  aria-label={task.title}
+                />
+                <div className={styles.rowText}>
+                  <span className={styles.rowTitle}>{task.title}</span>
+                  {task.lastQuestion ? <span className={styles.rowSummary}>{task.lastQuestion}</span> : null}
+                </div>
+                <span className={styles.meta}>{formatSessionTime(task.updatedAt)}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </Modal>
+  );
+}
+
+/**
+ * The board's settings: the one switch that decides whether this project's sessions leave the computer, and the
+ * entry to choosing which of them members can read.
+ */
+function ProjectBoardSettingsDialog(props: {
+  open: boolean;
+  project: MemmyAgentProject;
+  shared: CollabProject | null;
+  collab: CollabClient | null;
+  onClose: () => void;
+  onShared: () => void;
+  onUnshared: () => void;
+  onPickSessions: () => void;
+  /** How many of the project's own sessions could be shared, which decides whether choosing them is worth a dialog. */
+  taskCount: number;
+  onNotice: (message: string) => void;
+  onFailed: (message: string) => void;
+}) {
+  const { t } = useTranslation();
+  const [busy, setBusy] = useState(false);
+  /** Which switch is running, so a slow cloud says what it is doing instead of only greying the box. */
+  const [action, setAction] = useState<"sharing" | "stopping" | null>(null);
+  /** Asking again before a shared project leaves the cloud, since members lose access. */
+  const [confirmStop, setConfirmStop] = useState(false);
+  const sharedId = props.shared?.id ?? null;
+
+  useEffect(() => {
+    if (props.open) setConfirmStop(false);
+  }, [props.open, sharedId]);
+
+  async function startSharing() {
+    if (!props.collab || busy) return;
+    setBusy(true);
+    setAction("sharing");
+    try {
+      const created = await props.collab.createProject(props.project.name, props.project.rootPath);
+      addCollabProject(created.project);
+      try {
+        await props.collab.bindLocalProject(created.project.id, props.project.id);
+        markCollabProjectBound(created.project.id, props.project.id);
+      } catch (cause) {
+        // Ok either way: the next launch retries the binding, and reads still go through the same folder.
+        console.warn(`Project binding failed: ${messageOf(cause)}`);
+      }
+      props.onShared();
+      if (props.taskCount > 0) {
+        // The project already has sessions: the person picks which of them members may read.
+        requestTaskPicker(props.project.id);
+      } else {
+        // Nothing to choose yet; new sessions sync from now on.
+        props.onNotice(t("collab.settings.sharedNoTasks"));
+      }
+    } catch (cause) {
+      props.onFailed(messageOf(cause) || t("collab.settings.shareFailed"));
+    } finally {
+      setBusy(false);
+      setAction(null);
+    }
+  }
+
+  async function stopSharing() {
+    if (!props.collab || !sharedId || busy) return;
+    setBusy(true);
+    setAction("stopping");
+    try {
+      try {
+        await props.collab.deleteProject(sharedId);
+      } catch (cause) {
+        // Already gone from the cloud: the switch is off either way, so the local record follows.
+        if (!(cause instanceof ApiRequestError && cause.status === 404)) throw cause;
+      }
+      removeCollabProject(sharedId);
+      props.onUnshared();
+    } catch (cause) {
+      props.onFailed(messageOf(cause) || t("collab.settings.unshareFailed"));
+    } finally {
+      setBusy(false);
+      setAction(null);
+    }
+  }
+
+  return (
+    <Modal
+      open={props.open}
+      title={t("collab.settings.title")}
+      subtitle={t("collab.settings.subtitle")}
+      onClose={props.onClose}
+      closeLabel={t("common.close")}
+      closeContent={<X size={16} aria-hidden="true" />}
+      className={styles.createModal}
+      backdropClassName={styles.backdrop}
+      footer={(
+        <>
+          <span />
+          <span className={styles.footerButtons}>
+            <Button variant="ghost" onClick={props.onClose}>{t("collab.cancel")}</Button>
+          </span>
+        </>
+      )}
+    >
+      <div className={styles.field}>
+        <span>{t("collab.settings.project")}</span>
+        <div className={styles.dirField}>
+          <Folder size={15} aria-hidden="true" className={styles.dirIcon} />
+          <span className={styles.dirPath}>{props.project.name}</span>
+        </div>
+        <small className={styles.fieldHint}>{props.project.rootPath}</small>
+      </div>
+      <label className={styles.shareField}>
+        <input
+          type="checkbox"
+          checked={Boolean(sharedId)}
+          disabled={busy}
+          onChange={(event) => {
+            if (event.target.checked) void startSharing();
+            else setConfirmStop(true);
+          }}
+        />
+        <span className={styles.shareText}>
+          <span className={styles.shareLabel}>
+            <Cloud size={13} aria-hidden="true" />
+            {t("collab.create.share")}
+          </span>
+          <small className={styles.fieldHint}>
+            {sharedId ? t("collab.settings.shareOnHint") : t("collab.create.shareHint")}
+          </small>
+        </span>
+      </label>
+      {action ? (
+        <p className={styles.settingsBusy} role="status">
+          {action === "sharing" ? t("collab.settings.sharing") : t("collab.settings.stopping")}
+        </p>
+      ) : null}
+      {sharedId ? (
+        <div className={styles.settingsActions}>
+          <Button size="sm" variant="ghost" onClick={props.onPickSessions}>
+            <Link2 size={14} aria-hidden="true" />
+            {t("collab.settings.pickSessions")}
+          </Button>
+        </div>
+      ) : null}
+      {confirmStop && sharedId ? (
+        <section className={styles.stopSharing} role="alertdialog" aria-label={t("collab.settings.stopTitle")}>
+          <b>{t("collab.settings.stopTitle")}</b>
+          <p>{t("appFrame.project.stopSharingMessage", { name: props.project.name })}</p>
+          <div className={styles.footerButtons}>
+            <Button size="sm" variant="ghost" disabled={busy} onClick={() => setConfirmStop(false)}>
+              {t("collab.cancel")}
+            </Button>
+            <Button size="sm" variant="primary" disabled={busy} onClick={() => void stopSharing()}>
+              {t("appFrame.project.stopSharing")}
+            </Button>
+          </div>
+        </section>
+      ) : null}
+    </Modal>
   );
 }
 
