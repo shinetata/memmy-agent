@@ -267,7 +267,7 @@ export function createBackendServices(options: CreateBackendServicesOptions): Ba
 export { createBootstrapService };
 export type { BootstrapScenario, BootstrapService };
 
-function createCatalogAgentTaskModelResolver(
+export function createCatalogAgentTaskModelResolver(
   appStateStore: AppStateStore,
   memmyConfigWriter: MemmyConfigWriter
 ): OnboardingInsightAgentTaskModelResolver {

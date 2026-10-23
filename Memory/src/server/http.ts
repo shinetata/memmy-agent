@@ -85,6 +85,7 @@ export const API_ROUTES = [
   "POST /api/v1/memory/search",
   "POST /api/v1/agent-sessions/available",
   "POST /api/v1/agent-sessions/read",
+  "POST /api/v1/agent-sessions/read-many",
   "GET /api/v1/memory/recalls/:queryId",
   "POST /api/v1/memory/add",
   "POST /api/v1/evidence/sync",
@@ -815,6 +816,17 @@ async function routeRequest(
         conversationId: request.conversationId as string
       })
     };
+  }
+  // An upload of many sessions reads each agent's store once instead of once per session.
+  if (method === "POST" && path === "/api/v1/agent-sessions/read-many") {
+    requireMemoryRead(principal);
+    const request = asObject(body, "agent-sessions.read-many");
+    requireStringField(request, "sourceId", "agent-sessions.read-many");
+    const ids = Array.isArray(request.conversationIds) ? request.conversationIds : null;
+    if (!ids || !ids.every((id): id is string => typeof id === "string" && id.length > 0)) {
+      throw new MemoryServiceError("invalid_argument", "agent-sessions.read-many requires conversationIds: string[]");
+    }
+    return localSessions.readMany({ sourceId: request.sourceId as string, conversationIds: ids });
   }
 
   if (method === "POST" && path === "/api/v1/memory/search") {

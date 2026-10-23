@@ -1,9 +1,11 @@
-import { ChevronDown, ChevronRight, Cloud, Folder, Layers, Link2, MessageSquarePlus, MoreHorizontal, Quote, Search, Trash2, Users, X } from "lucide-react";
+import { ChevronDown, ChevronRight, Cloud, Folder, Layers, Link2, MessageSquarePlus, MoreHorizontal, Pencil, Quote, Search, Trash2, Users, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import {
   createHttpCollabClient,
   type CollabClient,
+  type CollabItem,
+  type CollabItemsView,
   type CollabLinks,
   type CollabProject,
   type CollabProjectSession,
@@ -23,6 +25,7 @@ import {
   replaceCollabProject,
   subscribeCollabProjects
 } from "../app/collab-projects-store.js";
+import { ApiRequestError } from "../api/http.js";
 import { useOptionalAgentRuntimeBridge } from "../app/agent-runtime-bridge.js";
 import { useApiClients } from "../app/providers.js";
 import { Button } from "../components/button.js";
@@ -34,6 +37,7 @@ import { agentSourceDisplayName, agentSourceLogoUrl } from "./agent-source-logos
 import { AppFrame } from "./app-frame.js";
 import { memberColor } from "./collab-member-color.js";
 import styles from "./collab-page.module.css";
+import { MemoryMarkdown } from "./memory/memory-markdown.js";
 
 export { memberColor };
 
@@ -174,6 +178,8 @@ export function CollabPage() {
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   /** Upload progress of a queued association; the list grows while it runs. */
   const [progress, setProgress] = useState<CollabSyncProgress | null>(null);
+  /** Bumped when an association is queued, so polling starts without waiting for a filter or page change. */
+  const [pollKey, setPollKey] = useState(0);
   const [toast, setToast] = useState<string | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -293,7 +299,7 @@ export function CollabPage() {
       cancelled = true;
       if (timer) clearTimeout(timer);
     };
-  }, [collab, selectedId, member, query, pageIndex]);
+  }, [collab, selectedId, member, query, pageIndex, pollKey]);
 
   useEffect(() => () => {
     if (toastTimer.current) clearTimeout(toastTimer.current);
@@ -601,12 +607,9 @@ export function CollabPage() {
                       </>
                     )}
                   </>
-                ) : (
-                  <div className={styles.empty}>
-                    <b>{t("collab.items.empty.title")}</b>
-                    <p>{t("collab.items.empty.body")}</p>
-                  </div>
-                )}
+                ) : collab ? (
+                  <CollabItemsPanel key={selected.id} collab={collab} projectId={selected.id} onToast={showToast} />
+                ) : null}
               </div>
             </div>
           </>
@@ -626,6 +629,7 @@ export function CollabPage() {
             setPickOpen(false);
             if (result.started) {
               setProgress({ running: true, total: result.started, completed: 0, failed: 0 });
+              setPollKey((key) => key + 1);
               showToast(t("collab.pick.queued", { count: String(result.started) }));
             } else {
               showToast(t("collab.pick.done"));
@@ -654,6 +658,271 @@ export function CollabPage() {
       {toast ? <div className={styles.toast} role="status">{toast}</div> : null}
       </>, document.body)}
     </AppFrame>
+  );
+}
+
+/** How often the 事项 tab rereads items while MemOS is still processing one. */
+const ITEM_STATUS_POLL_MS = 3_000;
+/** How often an idle 事项 tab rereads, so a background pass shows up without the reader doing anything. */
+const ITEMS_REFRESH_MS = 60_000;
+
+/** The label of an item's state in project memory: 处理中, 已生效, 失败. */
+export function itemStatusKey(status: CollabItem["status"]): MessageKey {
+  if (status === "PROCESSING") return "collab.items.status.processing";
+  if (status === "FAILED") return "collab.items.status.failed";
+  return "collab.items.status.available";
+}
+
+/** The item's Markdown without its title, which the row already shows. */
+export function itemBodyMarkdown(markdown: string): string {
+  return markdown.replace(/^\s*#\s+[^\n]*\n?/u, "").trim();
+}
+
+/**
+ * The 事项 tab: one Markdown file per item in the project's knowledge base. Everyone reads them; owners and admins
+ * edit them; the owner's Memmy organizes sessions into them and can run a pass now instead of waiting for one.
+ */
+function CollabItemsPanel(props: { collab: CollabClient; projectId: string; onToast: (message: string) => void }) {
+  const { collab, projectId, onToast } = props;
+  const { t } = useTranslation();
+  const [view, setView] = useState<CollabItemsView | null>(null);
+  const [failed, setFailed] = useState<string | null>(null);
+  const [openId, setOpenId] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      setView(await collab.listItems(projectId));
+      setFailed(null);
+    } catch (cause) {
+      setFailed(messageOf(cause));
+    }
+  }, [collab, projectId]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  // A saved item reads 处理中 until MemOS has parsed the new version; keep rereading until it settles.
+  const processing = view?.items.some((item) => item.status === "PROCESSING") ?? false;
+  useEffect(() => {
+    if (!processing) return undefined;
+    const timer = setInterval(() => void load(), ITEM_STATUS_POLL_MS);
+    return () => clearInterval(timer);
+  }, [processing, load]);
+
+  // Organizing happens on its own timer, so an open board also rereads now and then to show what changed. Not while
+  // an item is being edited, so a refresh never competes with typing.
+  const editing = editingId !== null;
+  useEffect(() => {
+    if (processing || editing) return undefined;
+    const timer = setInterval(() => void load(), ITEMS_REFRESH_MS);
+    return () => clearInterval(timer);
+  }, [processing, editing, load]);
+
+  function saved(item: CollabItem, changed: boolean) {
+    setView((current) => current && { ...current, items: current.items.map((entry) => (entry.id === item.id ? item : entry)) });
+    setEditingId(null);
+    onToast(changed ? t("collab.items.edit.saved") : t("collab.items.edit.unchanged"));
+  }
+
+  if (failed !== null && view === null) {
+    return (
+      <div className={styles.empty} role="alert">
+        <p>{failed}</p>
+        <Button size="sm" onClick={() => void load()}>{t("collab.retry")}</Button>
+      </div>
+    );
+  }
+  if (view === null) return <p className={styles.loading}>{t("collab.loading")}</p>;
+
+  return (
+    <>
+      <div className={styles.toolbar}>
+        <span className={styles.itemsStatus}>
+          {view.organizedAt
+            ? t("collab.items.organizedAt", { time: formatSessionTime(view.organizedAt) })
+            : t("collab.items.neverOrganized")}
+          {view.pendingSessions ? ` · ${t("collab.items.pending", { count: String(view.pendingSessions) })}` : ""}
+        </span>
+      </div>
+      {view.lastError ? (
+        <p className={styles.itemsError} role="status">{t("collab.items.lastError", { message: view.lastError })}</p>
+      ) : null}
+      {view.items.length === 0 ? (
+        <div className={styles.empty}>
+          <b>{t("collab.items.empty.title")}</b>
+          <p>{view.canOrganize ? t("collab.items.empty.owner") : t("collab.items.empty.member")}</p>
+        </div>
+      ) : (
+        <ul className={styles.list}>
+          {view.items.map((item) => {
+            const open = openId === item.id;
+            return (
+              <li key={item.id} className={styles.itemBlock}>
+                <button
+                  type="button"
+                  className={`${styles.row} ${styles.rowOpenable} ${styles.itemRow}`}
+                  aria-expanded={open}
+                  onClick={() => {
+                    setOpenId(open ? null : item.id);
+                    if (open) setEditingId(null);
+                  }}
+                >
+                  {open ? <ChevronDown size={15} aria-hidden="true" /> : <ChevronRight size={15} aria-hidden="true" />}
+                  <div className={styles.rowText}>
+                    <span className={styles.rowTitle}>{item.name}</span>
+                    {item.summary ? <span className={styles.rowSummary}>{item.summary}</span> : null}
+                    {item.latest ? <span className={styles.itemLatest}>{t("collab.items.latest", { text: item.latest })}</span> : null}
+                  </div>
+                  <ItemStatusBadge item={item} />
+                  <span className={styles.meta}>{formatSessionTime(item.updatedAt)}</span>
+                </button>
+                {open && editingId === item.id ? (
+                  <CollabItemEditor
+                    collab={collab}
+                    projectId={projectId}
+                    itemId={item.id}
+                    onCancel={() => setEditingId(null)}
+                    onSaved={saved}
+                  />
+                ) : open ? (
+                  <CollabItemDetail item={item} canEdit={view.canEdit} onEdit={() => setEditingId(item.id)} />
+                ) : null}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </>
+  );
+}
+
+function ItemStatusBadge(props: { item: CollabItem }) {
+  const { item } = props;
+  const { t } = useTranslation();
+  const tone = item.status === "PROCESSING" ? styles.itemStatusProcessing : item.status === "FAILED" ? styles.itemStatusFailed : styles.itemStatusAvailable;
+  return (
+    <span className={`${styles.itemStatus} ${tone}`} title={item.statusMessage ?? undefined}>
+      {t(itemStatusKey(item.status))}
+    </span>
+  );
+}
+
+function CollabItemDetail(props: { item: CollabItem; canEdit: boolean; onEdit: () => void }) {
+  const { item, canEdit, onEdit } = props;
+  const { t } = useTranslation();
+  const time = formatSessionTime(item.updatedAt);
+  const byline = item.updatedBy?.kind === "edit"
+    ? t("collab.items.updatedBy.edit", { time, name: item.updatedBy.name })
+    : t("collab.items.updatedBy.organize", { time });
+  return (
+    <div className={styles.itemDetail}>
+      {item.status === "FAILED" && item.statusMessage ? (
+        <p className={styles.itemsError} role="status">{t("collab.items.failedReason", { message: item.statusMessage })}</p>
+      ) : null}
+      <MemoryMarkdown text={itemBodyMarkdown(item.markdown)} />
+      <div className={styles.itemFooter}>
+        <span className={styles.itemMeta}>{byline}</span>
+        <span className={styles.grow} />
+        {canEdit ? (
+          <Button size="sm" onClick={onEdit}>
+            <Pencil size={13} aria-hidden="true" />
+            {t("collab.items.edit")}
+          </Button>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Edits one item's Markdown. It opens the latest version and saves on top of it; when someone saved in between,
+ * the editor switches to their version and keeps the unsaved draft beside it.
+ */
+function CollabItemEditor(props: {
+  collab: CollabClient;
+  projectId: string;
+  itemId: string;
+  onCancel: () => void;
+  onSaved: (item: CollabItem, changed: boolean) => void;
+}) {
+  const { collab, projectId, itemId, onCancel, onSaved } = props;
+  const { t } = useTranslation();
+  const [base, setBase] = useState<CollabItem | null>(null);
+  const [draft, setDraft] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  /** The draft that lost to a newer version, kept so nothing typed is lost. */
+  const [lostDraft, setLostDraft] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    collab.readItem(projectId, itemId).then((latest) => {
+      if (cancelled) return;
+      setBase(latest);
+      setDraft(latest.markdown);
+    }, (cause: unknown) => {
+      if (!cancelled) setError(messageOf(cause));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [collab, projectId, itemId]);
+
+  async function confirm() {
+    if (!base) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const result = await collab.saveItem(projectId, base.id, { markdown: draft, baseVersion: base.version });
+      onSaved(result.item, result.changed);
+    } catch (cause) {
+      if (cause instanceof ApiRequestError && cause.code === "conflict") {
+        const latest = await collab.readItem(projectId, base.id).catch(() => null);
+        if (latest) {
+          setLostDraft(draft);
+          setBase(latest);
+          setDraft(latest.markdown);
+          return;
+        }
+      }
+      setError(messageOf(cause) || t("collab.items.edit.failed"));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className={styles.itemDetail}>
+      {lostDraft !== null ? (
+        <div className={styles.itemsError} role="alert">
+          <p className={styles.itemConflict}>{t("collab.items.edit.conflict")}</p>
+          <details>
+            <summary>{t("collab.items.edit.yourDraft")}</summary>
+            <pre className={styles.itemDraft}>{lostDraft}</pre>
+          </details>
+        </div>
+      ) : null}
+      {error ? <p className={styles.itemsError} role="alert">{error}</p> : null}
+      {base ? (
+        <textarea
+          className={styles.itemTextarea}
+          value={draft}
+          spellCheck={false}
+          aria-label={t("collab.items.edit.label")}
+          onChange={(event) => setDraft(event.target.value)}
+        />
+      ) : error ? null : <p className={styles.loading}>{t("collab.loading")}</p>}
+      <div className={styles.itemFooter}>
+        <span className={styles.itemMeta}>{t("collab.items.edit.hint")}</span>
+        <span className={styles.grow} />
+        <Button size="sm" variant="ghost" disabled={saving} onClick={onCancel}>{t("collab.items.edit.cancel")}</Button>
+        <Button size="sm" variant="primary" disabled={saving || !base || !draft.trim()} onClick={() => void confirm()}>
+          {saving ? t("collab.items.edit.saving") : t("collab.items.edit.confirm")}
+        </Button>
+      </div>
+    </div>
   );
 }
 

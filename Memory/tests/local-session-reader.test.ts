@@ -100,6 +100,36 @@ describe("local session reader", () => {
     await expect(reader.read({ sourceId: "nope", conversationId: "s-1" })).rejects.toThrow(/Unknown agent source/u);
   });
 
+  it("reads several sessions of an agent in one pass, widening once for older ones", async () => {
+    const windows: number[] = [];
+    // c-0 is the most recent; a scan yields only as many conversations as its window allows, like the real stores.
+    const conversations = Array.from({ length: 40 }, (_, index) => `c-${index}`);
+    const adapter: SourceAdapter = {
+      descriptor: { sourceId: "codex", displayName: "Codex", builtin: true, dataPath: "/fake/codex" },
+      detect: async () => true,
+      scan: async function* (options) {
+        windows.push(options.maxConversations ?? 0);
+        for (const [index, id] of conversations.slice(0, options.maxConversations).entries()) {
+          yield message("codex", id, "user", `问题 ${id}`, new Date(Date.UTC(2026, 9, 21, 8, 0, 40 - index)).toISOString(), "/repo");
+        }
+      }
+    };
+    const reader = createLocalSessionReader({ registry: createSourceRegistry([adapter]), snapshotTtlMs: 0, sessionsPerSource: 30 });
+
+    const recent = await reader.readMany({ sourceId: "codex", conversationIds: ["c-1", "c-5", "c-1"] });
+    expect(recent.sessions.map((session) => session.conversationId).sort()).toEqual(["c-1", "c-5"]);
+    expect(recent.missing).toEqual([]);
+    expect(windows).toEqual([30]);
+
+    const mixed = await reader.readMany({ sourceId: "codex", conversationIds: ["c-2", "c-35", "gone"] });
+    expect(mixed.sessions.map((session) => session.conversationId).sort()).toEqual(["c-2", "c-35"]);
+    expect(mixed.missing).toEqual(["gone"]);
+    expect(windows).toEqual([30, 30, 200]);
+
+    await expect(reader.readMany({ sourceId: "codex", conversationIds: Array.from({ length: 51 }, (_, index) => `x-${index}`) }))
+      .rejects.toThrow(/At most 50/u);
+  });
+
   it("strips host-injected blocks and automation ids from titles", () => {
     expect(cleanQuestion("<environment_context>cwd</environment_context>帮我拉起服务")).toBe("帮我拉起服务");
     expect(cleanQuestion("Automation: MemOS 社区周报 Automation ID: abc")).toBe("MemOS 社区周报");

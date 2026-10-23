@@ -9,6 +9,15 @@ import { dirname, join } from "node:path";
 import type { ApiErrorCode } from "./error-envelope.js";
 
 const CLOUD_TIMEOUT_MS = 20_000;
+/**
+ * How long deleting waits for the links file to be rewritten. The cloud has already dropped the project; the rewrite
+ * only stops this device from uploading into it again, and the periodic sync (which can spend a minute per session on
+ * a slow Memory service) may be holding the write queue. The rewrite still runs later, in queue order, so it ends up
+ * cleared either way.
+ */
+const DELETE_LINKS_WAIT_MS = 2_000;
+/** A delete slower than this is worth a log line: the cloud call and the links write are the only things in it. */
+const SLOW_DELETE_MS = 2_000;
 const UPLOAD_TIMEOUT_MS = 60_000;
 const MEMORY_TIMEOUT_MS = 30_000;
 /** Enough for every agent's recent sessions, so association sees the same pool as the picker. */
@@ -22,6 +31,13 @@ export const SESSION_PAGE_SIZE = 10;
  * sessions take seconds — so a bounded pool keeps a bulk association from taking minutes.
  */
 const UPLOAD_CONCURRENCY = 4;
+/**
+ * Sessions of one agent read together. The Memory service reads an agent's store whole whichever session is asked
+ * for, so one batch costs about what one session did; the cap bounds the size of one response.
+ */
+const READ_MANY_CHUNK = 20;
+/** A batch can include an older session, which makes the Memory service read a wider window. */
+const READ_MANY_TIMEOUT_MS = 60_000;
 const LINKS_FILE = "links.json";
 /** Matches the cloud limits so an upload is never rejected for size. */
 const MAX_UPLOAD_TURNS = 300;
@@ -61,6 +77,8 @@ export interface CollabServiceOptions {
   agentSessionsDir?: string;
   fetcher?: typeof fetch;
   now?: () => Date;
+  /** An association's upload finished with new sessions in the cloud; the owner organizes their history then. */
+  onSessionsUploaded?: (projectId: string) => void;
 }
 
 export interface CollabProject {
@@ -204,7 +222,15 @@ interface StoredLinks extends CollabLinks {
   workingDirectory: string | null;
   /** Last upload of each session, by session key. */
   synced: Record<string, SyncedSession>;
+  /**
+   * When each group or session link was made, by link key. Turns from before it are the session's history: the
+   * cloud does not write them into project memory, the owner's Memmy organizes them into items instead.
+   */
+  linkedAt: Record<string, string>;
 }
+
+/** A session read ahead in its agent's batch: the record, gone from the agent, or not read ahead. */
+type PreloadedSession = Record<string, unknown> | "missing" | null;
 
 export interface CollabSessionReference {
   session: CollabProjectSession;
@@ -298,18 +324,29 @@ export function parseSessionReference(reference: string): string | null {
   return SESSION_LINK_PATTERN.exec(trimmed)?.[1] ?? null;
 }
 
-export function createCollabService(options: CollabServiceOptions): CollabService {
-  const fetcher = options.fetcher ?? globalThis.fetch;
-  const now = options.now ?? (() => new Date());
-  const memmyHome = process.env.MEMMY_HOME?.trim() || join(homedir(), ".memmy");
-  const projectsDir = options.projectsDir ?? join(memmyHome, "projects");
-  /** Working directories for online projects that did not choose a folder, next to the project cache. */
-  const onlineWorkdirRoot = join(dirname(projectsDir), "online-projects");
-  const agentSessionsDir = options.agentSessionsDir ?? join(memmyHome, "workspace", "sessions");
-  const linkBase = (options.linkBaseUrl?.trim() || safeOrigin(options.cloudBaseUrl)).replace(/\/+$/u, "");
+export type CollabCloudRequest = (
+  path: string,
+  init?: { method?: string; body?: unknown; timeoutMs?: number }
+) => Promise<Record<string, unknown>>;
 
-  async function cloud(path: string, init: { method?: string; body?: unknown; timeoutMs?: number } = {}): Promise<Record<string, unknown>> {
-    const account = requireAccount();
+/** `/api/collab` requests signed with the person's account; the payload's `data` on success. */
+/** Resolves after `ms`, for a wait that must not outlast the person's patience. */
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    timer.unref?.();
+  });
+}
+
+export function createCollabCloudRequest(
+  options: Pick<CollabServiceOptions, "cloudBaseUrl" | "getAccount" | "fetcher">
+): CollabCloudRequest {
+  const fetcher = options.fetcher ?? globalThis.fetch;
+  return async (path, init = {}) => {
+    const account = options.getAccount();
+    if (!account) {
+      throw new CollabError("unauthorized", "请先登录 Memmy 后使用协作项目");
+    }
     let response: Response;
     try {
       response = await fetcher(`${options.cloudBaseUrl.replace(/\/+$/u, "")}/api/collab${path}`, {
@@ -332,9 +369,21 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
       throw new CollabError(errorCode(response.status), text(payload.message) || code || "协作项目请求未完成");
     }
     return record(payload.data);
-  }
+  };
+}
 
-  async function memory(path: string, body: unknown): Promise<Record<string, unknown>> {
+export function createCollabService(options: CollabServiceOptions): CollabService {
+  const fetcher = options.fetcher ?? globalThis.fetch;
+  const now = options.now ?? (() => new Date());
+  const memmyHome = process.env.MEMMY_HOME?.trim() || join(homedir(), ".memmy");
+  const projectsDir = options.projectsDir ?? join(memmyHome, "projects");
+  /** Working directories for online projects that did not choose a folder, next to the project cache. */
+  const onlineWorkdirRoot = join(dirname(projectsDir), "online-projects");
+  const agentSessionsDir = options.agentSessionsDir ?? join(memmyHome, "workspace", "sessions");
+  const linkBase = (options.linkBaseUrl?.trim() || safeOrigin(options.cloudBaseUrl)).replace(/\/+$/u, "");
+  const cloud = createCollabCloudRequest(options);
+
+  async function memory(path: string, body: unknown, timeoutMs = MEMORY_TIMEOUT_MS): Promise<Record<string, unknown>> {
     if (!options.memory) {
       throw new CollabError("memory_layer_unavailable", "无法连接 Memmy，请打开 Memmy 后重试。");
     }
@@ -342,7 +391,7 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
     try {
       response = await fetcher(`${options.memory.baseUrl.replace(/\/+$/u, "")}${path}`, {
         method: "POST",
-        signal: AbortSignal.timeout(MEMORY_TIMEOUT_MS),
+        signal: AbortSignal.timeout(timeoutMs),
         headers: { "content-type": "application/json", authorization: `Bearer ${options.memory.token}` },
         body: JSON.stringify(body)
       });
@@ -438,10 +487,11 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
   ): Promise<CollabSyncResult> {
     const result: CollabSyncResult = { uploaded: 0, removed: 0, failed: 0 };
     const pending = sessionsToUpload(stored, local);
+    const preload = preloadSessions(pending);
     let next = 0;
     let fatal: unknown = null;
 
-    // A small pool: progress stays per-session while four reads overlap.
+    // A small pool: progress stays per-session while the agents' batches load side by side.
     const workers = Array.from({ length: Math.min(UPLOAD_CONCURRENCY, pending.length) }, async () => {
       for (;;) {
         if (fatal) return;
@@ -450,7 +500,7 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
         next += 1;
         const session = pending[index]!;
         try {
-          const cloudSessionId = await uploadSession(stored.projectId, session);
+          const cloudSessionId = await uploadSession(stored.projectId, session, await preload(session), historyBoundary(stored, session));
           stored.synced[sessionKey(session)] = {
             cloudSessionId,
             updatedAt: session.updatedAt,
@@ -495,28 +545,80 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
       const latest = await readLinks(projectId, accountId);
       Object.assign(latest.synced, stored.synced);
       await writeLinks(latest);
-      const remaining = sessionsToUpload(latest, candidates);
+      // Still running only for sessions selected meanwhile; one that failed here waits for the next sync, and
+      // counting it would leave the board showing an upload that is not happening.
+      const attempted = new Set(pending.map(sessionKey));
+      const remaining = sessionsToUpload(latest, candidates).filter((session) => !attempted.has(sessionKey(session)));
       reportProgress(projectId, {
         running: remaining.length > 0,
         total: pending.length,
         completed: result.uploaded + result.failed,
         failed: result.failed
       });
+      if (result.uploaded) options.onSessionsUploaded?.(projectId);
     } catch {
       reportProgress(projectId, { running: false });
     }
   }
 
-  /** Rereads one session so the upload carries its latest turns; one session per request stays inside the cloud's size limit. */
-  async function uploadSession(projectId: string, session: { sourceId: string; conversationId: string }): Promise<string> {
-    if (session.sourceId === MEMMY_SOURCE_ID) {
-      // Memmy's own tasks are not an external agent source; their turns live in this agent's session files.
-      const task = await readMemmyTask(session.conversationId);
-      return putCloudSession(projectId, MEMMY_SOURCE_ID, session.conversationId, task.title, task.updatedAt, task.turns);
+  /**
+   * Reads the pending sessions of each agent in batches, each started when a worker first needs one of its sessions
+   * and shared by the others. A session resolves to its record, "missing" when the agent no longer has it, or null
+   * when its batch could not be read, which leaves it to a read of its own.
+   */
+  function preloadSessions(pending: readonly LocalAgentSession[]): (session: LocalAgentSession) => Promise<PreloadedSession> {
+    const chunkOf = new Map<string, string[]>();
+    const bySource = new Map<string, string[]>();
+    for (const session of pending) {
+      if (session.sourceId === MEMMY_SOURCE_ID) continue;
+      const ids = bySource.get(session.sourceId) ?? [];
+      ids.push(session.conversationId);
+      bySource.set(session.sourceId, ids);
     }
-    const local = record((await memory("/api/v1/agent-sessions/read", { sourceId: session.sourceId, conversationId: session.conversationId })).session);
+    for (const [sourceId, ids] of bySource) {
+      for (let start = 0; start < ids.length; start += READ_MANY_CHUNK) {
+        const chunk = ids.slice(start, start + READ_MANY_CHUNK);
+        for (const id of chunk) chunkOf.set(sessionKey({ sourceId, conversationId: id }), chunk);
+      }
+    }
+    const loads = new Map<string[], Promise<Map<string, Record<string, unknown>> | null>>();
+    return async (session) => {
+      const chunk = chunkOf.get(sessionKey(session));
+      if (!chunk) return null;
+      let load = loads.get(chunk);
+      if (!load) {
+        load = memory("/api/v1/agent-sessions/read-many", { sourceId: session.sourceId, conversationIds: chunk }, READ_MANY_TIMEOUT_MS)
+          .then((data) => new Map(list(data.sessions).map((raw) => [text(record(raw).conversationId), record(raw)] as const)))
+          // A Memory service without batch reads, or a failed batch: its sessions are read one by one as before.
+          .catch(() => null);
+        loads.set(chunk, load);
+      }
+      const loaded = await load;
+      if (!loaded) return null;
+      return loaded.get(session.conversationId) ?? "missing";
+    };
+  }
+
+  /** Rereads one session so the upload carries its latest turns; one session per request stays inside the cloud's size limit. */
+  async function uploadSession(
+    projectId: string,
+    session: { sourceId: string; conversationId: string },
+    preloaded: PreloadedSession = null,
+    historyBefore: string | null = null
+  ): Promise<string> {
+    if (session.sourceId === MEMMY_SOURCE_ID) {
+      // Memmy's own tasks are not an external agent source; their turns live in this agent's session files. A task
+      // started in the project has no history.
+      const task = await readMemmyTask(session.conversationId);
+      return putCloudSession(projectId, MEMMY_SOURCE_ID, session.conversationId, task.title, task.updatedAt, task.turns, null);
+    }
+    if (preloaded === "missing") {
+      throw new CollabError("not_found", "本机已找不到该会话");
+    }
+    const local = preloaded
+      ?? record((await memory("/api/v1/agent-sessions/read", { sourceId: session.sourceId, conversationId: session.conversationId })).session);
     const turns = list(local.turns).slice(-MAX_UPLOAD_TURNS).map(toUploadTurn);
-    return putCloudSession(projectId, session.sourceId, session.conversationId, text(local.title), isoOrNull(local.updatedAt), turns);
+    return putCloudSession(projectId, session.sourceId, session.conversationId, text(local.title), isoOrNull(local.updatedAt), turns, historyBefore);
   }
 
   /**
@@ -566,12 +668,13 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
     sourceSessionId: string,
     title: string,
     lastActiveAt: string | null,
-    turns: CollabSessionTurn[]
+    turns: CollabSessionTurn[],
+    historyBefore: string | null
   ): Promise<string> {
     const data = await cloud(`/projects/${encodeURIComponent(projectId)}/sessions`, {
       method: "PUT",
       timeoutMs: UPLOAD_TIMEOUT_MS,
-      body: { sessions: [{ source, sourceSessionId, title, lastActiveAt, turns }] }
+      body: { sessions: [{ source, sourceSessionId, title, lastActiveAt, turns, historyBefore }] }
     });
     return text(record(list(data.sessions)[0]).id);
   }
@@ -594,7 +697,7 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
     // Links saved by another account on this computer are not this person's.
     return stored && stored.projectId === projectId && stored.accountId === accountId
       ? stored
-      : { projectId, accountId, localProjectId: null, removedSessions: [], workingDirectory: null, groups: [], sessions: [], synced: {} };
+      : { projectId, accountId, localProjectId: null, removedSessions: [], workingDirectory: null, groups: [], sessions: [], synced: {}, linkedAt: {} };
   }
 
   async function readAllLinks(accountId: string): Promise<StoredLinks[]> {
@@ -734,6 +837,7 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
         }
         stored.groups = links.groups;
         stored.sessions = links.sessions;
+        stored.linkedAt = stampLinks(stored.linkedAt, links, now().toISOString());
 
         // The selection is saved before any upload, so closing the board or the app never loses it.
         const pending = sessionsToUpload(stored, [...local, ...tasks]);
@@ -755,7 +859,9 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
 
     async deleteProject(projectId) {
       const account = requireAccount();
+      const startedAt = now().getTime();
       await cloud(`/projects/${encodeURIComponent(projectId)}`, { method: "DELETE" });
+      const cloudDoneAt = now().getTime();
       syncProgress.delete(projectId);
       // Only the binding goes: the local project and its sessions remain usable as a plain local project.
       const stored = await readLinks(projectId, account.accountId);
@@ -763,8 +869,16 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
       stored.groups = [];
       stored.sessions = [];
       stored.synced = {};
+      stored.linkedAt = {};
       stored.removedSessions = [];
-      await exclusive(() => writeLinks(stored));
+      const cleared = exclusive(() => writeLinks(stored)).catch((error: unknown) => {
+        console.warn(`Project links not cleared after delete: ${error instanceof Error ? error.message : String(error)}`);
+      });
+      await Promise.race([cleared, sleep(DELETE_LINKS_WAIT_MS)]);
+      const finishedAt = now().getTime();
+      if (finishedAt - startedAt > SLOW_DELETE_MS) {
+        console.warn(`Deleting project ${projectId} took ${finishedAt - startedAt}ms (cloud ${cloudDoneAt - startedAt}ms, links ${finishedAt - cloudDoneAt}ms)`);
+      }
       return { ok: true };
     },
 
@@ -824,6 +938,7 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
             stored.removedSessions.push(conversationId);
           }
           stored.sessions = stored.sessions.filter((link) => sessionKey(link) !== key);
+          stored.linkedAt = stampLinks(stored.linkedAt, stored, now().toISOString());
           const group = stored.groups.find((link) => link.sourceId === sourceId && link.groupId === synced.groupId);
           if (group && !group.excluded.includes(conversationId)) group.excluded.push(conversationId);
           await writeLinks(stored);
@@ -929,6 +1044,42 @@ function linkCandidates(stored: StoredLinks, local: readonly LocalAgentSession[]
     candidates.set(sessionKey(session), { sourceId: session.sourceId, conversationId: session.conversationId, groupId: session.group?.id ?? null });
   }
   return [...candidates.values()];
+}
+
+function groupLinkKey(link: { sourceId: string; groupId: string }): string {
+  return `group\u0000${link.sourceId}\u0000${link.groupId}`;
+}
+
+function sessionLinkKey(link: { sourceId: string; conversationId: string }): string {
+  return `session\u0000${link.sourceId}\u0000${link.conversationId}`;
+}
+
+/** Link times for the links as they are now: a link kept keeps its time, a new one is made `at`. */
+export function stampLinks(previous: Readonly<Record<string, string>>, links: CollabLinks, at: string): Record<string, string> {
+  const keys = [...links.groups.map(groupLinkKey), ...links.sessions.map(sessionLinkKey)];
+  return Object.fromEntries(keys.map((key) => [key, previous[key] ?? at]));
+}
+
+/**
+ * Where a session's history ends: when it joined the project through the earliest link that covers it. A session
+ * that appears in a linked group later has no turns before that, so it has no history. Links saved before link
+ * times were kept have none, and their sessions upload as before, without history.
+ */
+export function historyBoundary(stored: Pick<StoredLinks, "groups" | "sessions" | "linkedAt">, session: LocalAgentSession): string | null {
+  if (session.sourceId === MEMMY_SOURCE_ID) return null;
+  const times: string[] = [];
+  if (stored.sessions.some((link) => sessionKey(link) === sessionKey(session))) {
+    const at = stored.linkedAt[sessionLinkKey(session)];
+    if (at) times.push(at);
+  }
+  const group = session.group
+    ? stored.groups.find((link) => link.sourceId === session.sourceId && link.groupId === session.group!.id && !link.excluded.includes(session.conversationId))
+    : undefined;
+  if (group) {
+    const at = stored.linkedAt[groupLinkKey(group)];
+    if (at) times.push(at);
+  }
+  return times.length ? times.reduce((earliest, at) => (Date.parse(at) < Date.parse(earliest) ? at : earliest)) : null;
 }
 
 interface MemmySessionRecords {
@@ -1050,7 +1201,8 @@ function parseStoredLinks(content: string): StoredLinks | null {
       sourceId: text(session.sourceId),
       conversationId: text(session.conversationId)
     })).filter((session) => session.sourceId && session.conversationId),
-    synced
+    synced,
+    linkedAt: Object.fromEntries(Object.entries(record(raw.linkedAt)).filter((entry): entry is [string, string] => typeof entry[1] === "string"))
   };
 }
 
@@ -1180,6 +1332,7 @@ function errorCode(status: number): ApiErrorCode {
   if (status === 401) return "unauthorized";
   if (status === 403) return "forbidden";
   if (status === 404) return "not_found";
+  if (status === 409) return "conflict";
   if (status === 429) return "rate_limited";
   return status >= 500 ? "memory_layer_unavailable" : "internal";
 }

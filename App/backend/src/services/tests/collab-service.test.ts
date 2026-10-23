@@ -4,10 +4,12 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   createCollabService,
+  historyBoundary,
   linkedSessionKeys,
   pageOf,
   parseSessionReference,
   sessionKey,
+  stampLinks,
   type CollabServiceOptions,
   type LocalAgentSession
 } from "../collab-service.js";
@@ -39,7 +41,7 @@ function fakeFetch(routes: Record<string, (call: Call) => unknown>) {
     const key = `${call.method} ${new URL(url).pathname}`;
     const handler = routes[key];
     if (!handler) return new Response(JSON.stringify({ code: 404, message: "no route", data: null }), { status: 404 });
-    const result = handler(call);
+    const result = await handler(call);
     return result instanceof Response ? result : new Response(JSON.stringify(result), { status: 200 });
   }) as typeof fetch;
   return { fetcher, calls };
@@ -405,6 +407,87 @@ describe("collab service", () => {
     expect((await svc.getLinks("p-1")).sessions).toEqual([{ sourceId: "codex", conversationId: "c1" }]);
   });
 
+  it("reads each agent's sessions in one batch instead of one read per session", async () => {
+    const local: LocalAgentSession[] = [
+      localSession("claude_code", "a1", "/repo", "2026-10-22T01:00:00.000Z"),
+      localSession("claude_code", "a2", "/repo", "2026-10-22T01:00:00.000Z"),
+      localSession("claude_code", "gone", "/repo", "2026-10-22T01:00:00.000Z"),
+      localSession("codex", "c1", "/repo", "2026-10-22T01:00:00.000Z")
+    ];
+    const { fetcher, calls } = fakeFetch({
+      "POST /api/v1/agent-sessions/available": () => ({ sessions: local, refreshing: false }),
+      "POST /api/v1/agent-sessions/read-many": (call) => {
+        const body = call.body as { sourceId: string; conversationIds: string[] };
+        const found = body.conversationIds.filter((id) => id !== "gone");
+        return {
+          sessions: found.map((id) => ({ conversationId: id, title: `会话 ${id}`, updatedAt: "2026-10-22T01:00:00.000Z", turns: [{ question: `问 ${id}`, reply: "答", steps: [], startedAt: "2026-10-22T01:00:00.000Z" }] })),
+          missing: body.conversationIds.filter((id) => id === "gone")
+        };
+      },
+      "PUT /api/collab/projects/p-1/sessions": (call) => {
+        const upload = (call.body as { sessions: Array<{ sourceSessionId: string }> }).sessions[0]!;
+        return { code: 0, data: { sessions: [{ id: `id-${upload.sourceSessionId}` }] } };
+      }
+    });
+    const svc = service(fetcher);
+
+    await svc.saveLinks("p-1", { groups: [{ sourceId: "claude_code", groupId: "/repo", excluded: [] }, { sourceId: "codex", groupId: "/repo", excluded: [] }], sessions: [] });
+    await waitForUploads(svc, "p-1");
+
+    const batches = calls.filter((call) => call.url.endsWith("/read-many")).map((call) => call.body as { sourceId: string; conversationIds: string[] });
+    expect(batches.map((batch) => [batch.sourceId, [...batch.conversationIds].sort()])).toEqual(expect.arrayContaining([
+      ["claude_code", ["a1", "a2", "gone"]],
+      ["codex", ["c1"]]
+    ]));
+    expect(batches).toHaveLength(2);
+    // A session the agent no longer has is not read again on its own.
+    expect(calls.some((call) => call.url.endsWith("/agent-sessions/read"))).toBe(false);
+    const uploaded = calls.filter((call) => call.method === "PUT").map((call) => (call.body as { sessions: Array<{ sourceSessionId: string }> }).sessions[0]!.sourceSessionId);
+    expect(uploaded.sort()).toEqual(["a1", "a2", "c1"]);
+    expect(await svc.getSyncProgress("p-1")).toMatchObject({ completed: 4, failed: 1 });
+  });
+
+  it("sends when each session joined the project, keeps that time across saves, and reports a finished association", async () => {
+    const local = [
+      localSession("claude_code", "a1", "/repo", "2026-10-22T01:00:00.000Z"),
+      localSession("codex", "c1", null, "2026-10-22T01:00:00.000Z")
+    ];
+    const { fetcher, calls } = linkFetch(local);
+    let clock = new Date("2026-10-22T06:00:00.000Z");
+    const finished: string[] = [];
+    const svc = service(fetcher, { now: () => clock, onSessionsUploaded: (projectId) => finished.push(projectId) });
+    const group = { sourceId: "claude_code", groupId: "/repo", excluded: [] };
+
+    await svc.saveLinks("p-1", { groups: [group], sessions: [] });
+    await waitForUploads(svc, "p-1");
+    clock = new Date("2026-10-22T07:00:00.000Z");
+    await svc.saveLinks("p-1", { groups: [group], sessions: [{ sourceId: "codex", conversationId: "c1" }] });
+    await waitForUploads(svc, "p-1");
+
+    const uploads = calls.filter((call) => call.method === "PUT").map((call) => (call.body as { sessions: Array<{ sourceSessionId: string; historyBefore: string | null }> }).sessions[0]!);
+    // The group keeps the time it was linked; the session linked an hour later has its own.
+    expect(uploads.map((upload) => [upload.sourceSessionId, upload.historyBefore])).toEqual([
+      ["a1", "2026-10-22T06:00:00.000Z"],
+      ["c1", "2026-10-22T07:00:00.000Z"]
+    ]);
+    expect(finished).toEqual(["p-1", "p-1"]);
+  });
+
+  it("ends history at the earliest link covering a session, and gives Memmy tasks none", () => {
+    const links = {
+      groups: [{ sourceId: "claude_code", groupId: "/repo", excluded: ["skipped"] }],
+      sessions: [{ sourceId: "claude_code", conversationId: "a1" }]
+    };
+    const linkedAt = stampLinks(stampLinks({}, { groups: links.groups, sessions: [] }, "2026-10-22T07:00:00.000Z"), links, "2026-10-22T06:00:00.000Z");
+    const stored = { ...links, linkedAt };
+    expect(historyBoundary(stored, localSession("claude_code", "a1", "/repo", ""))).toBe("2026-10-22T06:00:00.000Z");
+    expect(historyBoundary(stored, localSession("claude_code", "a2", "/repo", ""))).toBe("2026-10-22T07:00:00.000Z");
+    expect(historyBoundary(stored, localSession("claude_code", "skipped", "/repo", ""))).toBeNull();
+    expect(historyBoundary(stored, localSession("memmy", "task-1", null, ""))).toBeNull();
+    // Links saved before link times were kept upload as they did, without history.
+    expect(historyBoundary({ ...links, linkedAt: {} }, localSession("claude_code", "a2", "/repo", ""))).toBeNull();
+  });
+
   it("offers @ candidates from one project only, never across projects", async () => {
     const { fetcher, calls } = fakeFetch({
       "GET /api/collab/projects/p-1/sessions": () => ({
@@ -449,6 +532,54 @@ describe("collab service", () => {
     // The binding is gone so the local project shows as a plain local project with its tasks.
     expect(await svc.getLinks("p-1")).toEqual({ groups: [], sessions: [] });
     expect((await svc.getSyncProgress("p-1")).running).toBe(false);
+  });
+
+  // The periodic sync runs inside the write queue and can spend up to a minute per session on a slow Memory service.
+  // A delete must not sit behind it: the cloud already dropped the project, the links rewrite follows in queue order.
+  it("answers a delete without waiting for a slow sync to release the write queue", async () => {
+    let updatedAt = "2026-10-22T01:00:00.000Z";
+    let hangUploads = false;
+    let releaseUpload: (() => void) | null = null;
+    let uploadStarted = false;
+    const { fetcher } = fakeFetch({
+      "POST /api/v1/agent-sessions/available": () => ({
+        sessions: [localSession("claude_code", "a1", "/repo", updatedAt)],
+        refreshing: false
+      }),
+      "POST /api/v1/agent-sessions/read": () => ({ session: { title: "会话", updatedAt, turns: [] } }),
+      "PUT /api/collab/projects/p-1/sessions": async () => {
+        if (hangUploads) {
+          uploadStarted = true;
+          await new Promise<void>((resolve) => {
+            releaseUpload = resolve;
+          });
+        }
+        return { code: 0, data: { sessions: [{ id: "id-a1" }] } };
+      },
+      "DELETE /api/collab/projects/p-1": () => ({ code: 0, data: { ok: true } })
+    });
+    const svc = service(fetcher);
+    await svc.saveLinks("p-1", { groups: [], sessions: [{ sourceId: "claude_code", conversationId: "a1" }] });
+    // A newer turn makes the session upload again, and this upload is the one that stalls holding the queue.
+    updatedAt = "2026-10-22T02:00:00.000Z";
+    hangUploads = true;
+
+    const syncing = svc.syncLinkedSessions();
+    while (!uploadStarted) await new Promise((resolve) => setTimeout(resolve, 10));
+
+    const startedAt = Date.now();
+    await svc.deleteProject("p-1");
+    expect(Date.now() - startedAt).toBeLessThan(1_500 + 1_200);
+
+    releaseUpload!();
+    await syncing;
+    // The queued rewrite still runs after the sync, so the binding is gone once the queue drains.
+    for (let attempt = 0; attempt < 50; attempt += 1) {
+      const links = await svc.getLinks("p-1");
+      if (!links.groups.length && !links.sessions.length) break;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    expect(await svc.getLinks("p-1")).toEqual({ groups: [], sessions: [] });
   });
 
   it("keeps each account's links apart on a shared computer", async () => {

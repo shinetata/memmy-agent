@@ -84,6 +84,35 @@ const SyncProgressSchema = z.object({
   failed: z.number()
 });
 const OkResponseSchema = z.object({ ok: z.literal(true) });
+const ItemSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  summary: z.string(),
+  /** The last 演变轨迹 entry. */
+  latest: z.string(),
+  /** Whether MemOS has the latest Markdown in effect: 处理中, 已生效, 失败. */
+  status: z.enum(["PROCESSING", "AVAILABLE", "FAILED"]),
+  statusMessage: z.string().nullable(),
+  /** The version a save builds on. */
+  version: z.number(),
+  markdown: z.string(),
+  sources: z.array(z.string()),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  updatedBy: z.object({ name: z.string(), kind: z.enum(["organize", "edit"]) }).nullable()
+});
+const ItemsResponseSchema = z.object({
+  items: z.array(ItemSchema),
+  organizedAt: z.string().nullable(),
+  role: z.string(),
+  canEdit: z.boolean(),
+  canOrganize: z.boolean(),
+  pendingSessions: z.number(),
+  /** Why this device's last pass failed; null when it did not. */
+  lastError: z.string().nullable()
+});
+const ItemResponseSchema = z.object({ item: ItemSchema });
+const SaveItemResponseSchema = z.object({ item: ItemSchema, changed: z.boolean() });
 
 export type CollabProject = z.infer<typeof ProjectSchema>;
 export type CollabProjectSession = z.infer<typeof ProjectSessionSchema>;
@@ -99,6 +128,9 @@ export interface CollabSessionPage {
   total: number;
 }
 export type CollabSyncProgress = z.infer<typeof SyncProgressSchema>;
+/** A work item: one Markdown file in the project's knowledge base, indexed by the cloud. */
+export type CollabItem = z.infer<typeof ItemSchema>;
+export type CollabItemsView = z.infer<typeof ItemsResponseSchema>;
 
 export interface CollabClient {
   listProjects(): Promise<CollabProject[]>;
@@ -136,6 +168,12 @@ export interface CollabClient {
    * opening can afford; the full sync also covers sessions associated from other agents.
    */
   syncSessions(options?: { tasksOnly?: boolean }): Promise<CollabSyncResult>;
+  /** The project's work items, most recently updated first. */
+  listItems(projectId: string): Promise<CollabItemsView>;
+  /** One item with its current Markdown, to edit it. */
+  readItem(projectId: string, itemId: string): Promise<CollabItem>;
+  /** Saves a hand edit on top of `baseVersion`; a newer version in between fails with code "conflict". */
+  saveItem(projectId: string, itemId: string, input: { markdown: string; baseVersion: number }): Promise<{ item: CollabItem; changed: boolean }>;
 }
 
 /** Online projects through the desktop's local API, which signs cloud requests with the person's account. */
@@ -272,6 +310,33 @@ export function createHttpCollabClient(config: RuntimeConfig): CollabClient {
         path: `/api/collab/projects/${encodeURIComponent(projectId)}/sessions/${encodeURIComponent(sessionId)}`,
         schema: OkResponseSchema,
         init: { method: "DELETE" }
+      });
+    },
+
+    async listItems(projectId) {
+      return requestJson({
+        config,
+        path: `/api/collab/projects/${encodeURIComponent(projectId)}/items`,
+        schema: ItemsResponseSchema
+      });
+    },
+
+    async readItem(projectId, itemId) {
+      const data = await requestJson({
+        config,
+        path: `/api/collab/projects/${encodeURIComponent(projectId)}/items/${encodeURIComponent(itemId)}`,
+        schema: ItemResponseSchema
+      });
+      return data.item;
+    },
+
+    async saveItem(projectId, itemId, input) {
+      return requestJson({
+        config,
+        path: `/api/collab/projects/${encodeURIComponent(projectId)}/items/${encodeURIComponent(itemId)}`,
+        schema: SaveItemResponseSchema,
+        body: input,
+        init: { method: "PUT" }
       });
     }
   };

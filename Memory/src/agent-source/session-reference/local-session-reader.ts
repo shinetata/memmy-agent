@@ -16,6 +16,8 @@ const WIDE_SESSIONS_PER_SOURCE = 200;
 const DEFAULT_SNAPSHOT_TTL_MS = 15_000;
 const DEFAULT_AVAILABLE_LIMIT = 50;
 const MAX_AVAILABLE_LIMIT = 500;
+/** Sessions one batch read may ask for; their turns all travel in one response. */
+export const MAX_READ_MANY = 50;
 const TITLE_MAX_CHARS = 40;
 
 /** One question and everything the agent did until the next question. */
@@ -78,6 +80,11 @@ export interface LocalSessionReader {
   available(input: LocalSessionAvailableInput): Promise<LocalSessionListing>;
   /** Rereads one session so an upload carries its latest turns. */
   read(input: { sourceId: string; conversationId: string }): Promise<LocalSession>;
+  /**
+   * Rereads several sessions of one agent with one pass over its store. Reading them one by one costs a pass each,
+   * since a store is only read whole; `missing` lists the requested sessions it no longer has.
+   */
+  readMany(input: { sourceId: string; conversationIds: readonly string[] }): Promise<{ sessions: LocalSession[]; missing: string[] }>;
 }
 
 export interface CreateLocalSessionReaderDeps {
@@ -143,11 +150,25 @@ export function createLocalSessionReader(deps: CreateLocalSessionReaderDeps): Lo
       if (!adapter) {
         throw new MemoryServiceError("not_found", `Unknown agent source: ${input.sourceId}`);
       }
-      const session = await readOneSession(adapter, input.conversationId, sessionsPerSource);
+      const [session] = await readSessions(adapter, [input.conversationId], sessionsPerSource);
       if (!session) {
         throw new MemoryServiceError("not_found", `Session not found: ${input.sourceId}/${input.conversationId}`);
       }
       return session;
+    },
+
+    async readMany(input) {
+      const adapter = deps.registry.get(input.sourceId);
+      if (!adapter) {
+        throw new MemoryServiceError("not_found", `Unknown agent source: ${input.sourceId}`);
+      }
+      const wanted = [...new Set(input.conversationIds)];
+      if (wanted.length > MAX_READ_MANY) {
+        throw new MemoryServiceError("invalid_argument", `At most ${MAX_READ_MANY} sessions per read`);
+      }
+      const sessions = await readSessions(adapter, wanted, sessionsPerSource);
+      const found = new Set(sessions.map((session) => session.conversationId));
+      return { sessions, missing: wanted.filter((id) => !found.has(id)) };
     }
   };
 }
@@ -176,29 +197,41 @@ export async function readRecentSessions(adapter: SourceAdapter, limit: number):
   }
 }
 
-/** Reads one conversation, widening the window once when it is older than the recent list. */
-async function readOneSession(adapter: SourceAdapter, conversationId: string, recentLimit: number): Promise<LocalSession | null> {
+/**
+ * Reads the requested conversations in one pass over the recent window, then one wider pass for any that are older.
+ * Only requested conversations are built; the others in the window are skipped as they stream past.
+ */
+async function readSessions(adapter: SourceAdapter, conversationIds: readonly string[], recentLimit: number): Promise<LocalSession[]> {
   try {
     if (!(await adapter.detect())) {
-      return null;
+      return [];
     }
+    const grouper = createSessionGrouper(adapter);
+    const found: LocalSession[] = [];
+    let remaining = new Set(conversationIds);
     for (const limit of [recentLimit, WIDE_SESSIONS_PER_SOURCE]) {
-      const builder: SessionBuilder = { workspacePath: null, updatedAt: "", turns: [], nativeTitle: "" };
-      let seen = false;
+      if (!remaining.size) break;
+      const builders = new Map<string, SessionBuilder>();
       for await (const message of adapter.scan({ order: "recent_first", maxScanTargets: limit, maxConversations: limit, fullHistory: true })) {
-        if (message.conversationId !== conversationId) {
+        if (!remaining.has(message.conversationId)) {
           continue;
         }
-        seen = true;
+        let builder = builders.get(message.conversationId);
+        if (!builder) {
+          builder = { workspacePath: null, updatedAt: "", turns: [], nativeTitle: "" };
+          builders.set(message.conversationId, builder);
+        }
         appendMessage(builder, message);
       }
-      if (seen) {
-        return finishSession(adapter, createSessionGrouper(adapter), conversationId, builder);
+      for (const [conversationId, builder] of builders) {
+        const session = finishSession(adapter, grouper, conversationId, builder);
+        if (session) found.push(session);
       }
+      remaining = new Set([...remaining].filter((id) => !builders.has(id)));
     }
-    return null;
+    return found;
   } catch {
-    return null;
+    return [];
   }
 }
 

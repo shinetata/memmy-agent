@@ -23,8 +23,10 @@ import {
 } from "./infrastructure/memmy-config/agent-access.js";
 import { createPermissionManager } from "./permission/index.js";
 import { createLocalApiServer } from "./adapters/inbound/local-api/server.js";
-import { createBackendServices, type BootstrapScenario } from "./services/index.js";
-import { createCollabService } from "./services/collab-service.js";
+import { createBackendServices, createCatalogAgentTaskModelResolver, type BootstrapScenario } from "./services/index.js";
+import { createAgentModelCompleter } from "./services/agent-model.js";
+import { createCollabItemsService } from "./services/collab-items-service.js";
+import { createCollabCloudRequest, createCollabService } from "./services/collab-service.js";
 import { resolveCloudClientConfig, type CloudClientConfig } from "./config/service-urls.js";
 import { resetAccountRuntimeForDesktopInstallChange } from "./services/desktop-install-state-service.js";
 import {
@@ -43,6 +45,13 @@ export { createHttpMemmyAgentAdminClient } from "./adapters/outbound/memmy-agent
 const DEFAULT_MEMORY_LAYER_TIMEOUT_MS = 20_000;
 /** New sessions of associated groups reach the project within about a minute. */
 const COLLAB_SYNC_INTERVAL_MS = 60_000;
+/** The owner's Memmy organizes pending history and new project memory into items this often; idle passes call no model. */
+const COLLAB_ORGANIZE_INTERVAL_MS = 5 * 60_000;
+/**
+ * One pass soon after launch, so work that accumulated while the app was closed shows up without waiting a whole
+ * interval. It costs nothing when there is nothing pending.
+ */
+const COLLAB_ORGANIZE_FIRST_DELAY_MS = 60_000;
 
 export interface CreateLocalBackendOptions {
   databasePath: string;
@@ -88,6 +97,8 @@ export async function createLocalBackend(options: CreateLocalBackendOptions): Pr
   const appStateStore = createAppStateStore({ databasePath: options.databasePath });
   let server: Awaited<ReturnType<typeof createLocalApiServer>> | null = null;
   let collabSyncTimer: ReturnType<typeof setInterval> | undefined;
+  let collabOrganizeTimer: ReturnType<typeof setInterval> | undefined;
+  let collabOrganizeFirstPass: ReturnType<typeof setTimeout> | undefined;
 
   try {
     if (options.desktopInstallFingerprint) {
@@ -172,12 +183,20 @@ export async function createLocalBackend(options: CreateLocalBackendOptions): Pr
       };
     };
     const memoryLayerConfig = readMemoryLayerConfig(process.env);
+    // Development override: the online-project cloud can be a local stand-in while it is not deployed yet.
+    const collabCloudBaseUrl = process.env.MEMMY_COLLAB_CLOUD_URL?.trim() || cloudConfig.baseUrl;
+    // Work items come from the owner's agent model, so its quota pays for them and members' Memmy only reads.
+    const collabItems = createCollabItemsService({
+      cloud: createCollabCloudRequest({ cloudBaseUrl: collabCloudBaseUrl, getAccount: getCloudAccount }),
+      complete: createAgentModelCompleter(createCatalogAgentTaskModelResolver(appStateStore, memmyConfigWriter))
+    });
     const collab = createCollabService({
-      // Development override: the online-project cloud can be a local stand-in while it is not deployed yet.
-      cloudBaseUrl: process.env.MEMMY_COLLAB_CLOUD_URL?.trim() || cloudConfig.baseUrl,
+      cloudBaseUrl: collabCloudBaseUrl,
       getAccount: getCloudAccount,
       memory: memoryLayerConfig ? { baseUrl: memoryLayerConfig.baseUrl, token: memoryLayerConfig.token } : null,
-      ...(process.env.MEMMY_SESSION_LINK_BASE_URL?.trim() ? { linkBaseUrl: process.env.MEMMY_SESSION_LINK_BASE_URL.trim() } : {})
+      ...(process.env.MEMMY_SESSION_LINK_BASE_URL?.trim() ? { linkBaseUrl: process.env.MEMMY_SESSION_LINK_BASE_URL.trim() } : {}),
+      // The owner's own association is organized as soon as it is uploaded; other members' wait for the owner's pass.
+      onSessionsUploaded: (projectId) => void collabItems.organizeAfterUpload(projectId)
     });
     // Groups associated with an online project pick up new sessions, and associated sessions their new turns.
     collabSyncTimer = setInterval(() => {
@@ -186,12 +205,24 @@ export async function createLocalBackend(options: CreateLocalBackendOptions): Pr
       });
     }, COLLAB_SYNC_INTERVAL_MS);
     collabSyncTimer.unref();
+    const organizeIntervalMs = Number.parseInt(process.env.MEMMY_COLLAB_ORGANIZE_INTERVAL_MS ?? "", 10) || COLLAB_ORGANIZE_INTERVAL_MS;
+    const organizeNow = (): void => {
+      if (!getCloudAccount()) return;
+      void collabItems.organizeOwnedProjects().catch((error: unknown) => {
+        console.warn(`Project items pass did not complete: ${error instanceof Error ? error.message : String(error)}`);
+      });
+    };
+    collabOrganizeFirstPass = setTimeout(organizeNow, COLLAB_ORGANIZE_FIRST_DELAY_MS);
+    collabOrganizeFirstPass.unref();
+    collabOrganizeTimer = setInterval(organizeNow, organizeIntervalMs);
+    collabOrganizeTimer.unref();
     server = createLocalApiServer({
       knowledge: {
         baseUrl: cloudConfig.baseUrl,
         getSession: getCloudAccount
       },
       collab,
+      collabItems,
       permissionManager,
       services,
       composioMcpToken,
@@ -254,12 +285,16 @@ export async function createLocalBackend(options: CreateLocalBackendOptions): Pr
       },
       async close() {
         clearInterval(collabSyncTimer);
+        clearInterval(collabOrganizeTimer);
+        clearTimeout(collabOrganizeFirstPass);
         await boundServer.close();
         appStateStore.close();
       }
     };
   } catch (error) {
     clearInterval(collabSyncTimer);
+    clearInterval(collabOrganizeTimer);
+    clearTimeout(collabOrganizeFirstPass);
     await server?.close().catch(() => undefined);
     appStateStore.close();
     throw error;
