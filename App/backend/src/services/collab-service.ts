@@ -7,13 +7,13 @@ import { mkdir, readdir, readFile, rename, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { ApiErrorCode } from "./error-envelope.js";
+import { LocalSessionReadError, type LocalSessionReader } from "../adapters/outbound/agent-source/session-reference/local-session-reader.js";
 import { ensureDirectory, uniqueProjectDirectory } from "./project-directory.js";
 
 const CLOUD_TIMEOUT_MS = 20_000;
 /** A delete slower than this is worth a log line: the cloud call and the links write are the only things in it. */
 const SLOW_DELETE_MS = 2_000;
 const UPLOAD_TIMEOUT_MS = 60_000;
-const MEMORY_TIMEOUT_MS = 30_000;
 /** Enough for every agent's recent sessions, so association sees the same pool as the picker. */
 const MAX_LOCAL_SESSIONS = 500;
 /** How many sessions the @ menu lists before the person types anything. */
@@ -26,12 +26,10 @@ export const SESSION_PAGE_SIZE = 10;
  */
 const UPLOAD_CONCURRENCY = 4;
 /**
- * Sessions of one agent read together. The Memory service reads an agent's store whole whichever session is asked
- * for, so one batch costs about what one session did; the cap bounds the size of one response.
+ * Sessions of one agent read together. An agent's store is read whole whichever session is asked for, so one batch
+ * costs about what one session did; the cap bounds how many sessions one pass holds at once.
  */
 const READ_MANY_CHUNK = 20;
-/** A batch can include an older session, which makes the Memory service read a wider window. */
-const READ_MANY_TIMEOUT_MS = 60_000;
 const LINKS_FILE = "links.json";
 /** Matches the cloud limits so an upload is never rejected for size. */
 const MAX_UPLOAD_TURNS = 300;
@@ -79,8 +77,8 @@ export interface CollabAccount {
 export interface CollabServiceOptions {
   cloudBaseUrl: string;
   getAccount: () => CollabAccount | null;
-  /** Local Memory service, which reads this machine's agent sessions. */
-  memory: { baseUrl: string; token: string } | null;
+  /** Reads this machine's agent sessions, in this process; null when they cannot be read here. */
+  localSessions: LocalSessionReader | null;
   /** Origin of session links; the cloud origin when absent. */
   linkBaseUrl?: string;
   /** Where referenced sessions are saved; ~/.memmy/projects by default. */
@@ -459,27 +457,17 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
   const linkBase = (options.linkBaseUrl?.trim() || safeOrigin(options.cloudBaseUrl)).replace(/\/+$/u, "");
   const cloud = createCollabCloudRequest(options);
 
-  async function memory(path: string, body: unknown, timeoutMs = MEMORY_TIMEOUT_MS): Promise<Record<string, unknown>> {
-    if (!options.memory) {
-      throw new CollabError("memory_layer_unavailable", "无法连接 Memmy，请打开 Memmy 后重试。");
+  /** Reads this machine's agent sessions; a session or agent that is gone reads as not found. */
+  async function readLocal<T>(read: (reader: LocalSessionReader) => Promise<T>): Promise<T> {
+    if (!options.localSessions) {
+      throw new CollabError("memory_layer_unavailable", "无法读取本机会话，请重启 Memmy 后重试。");
     }
-    let response: Response;
     try {
-      response = await fetcher(`${options.memory.baseUrl.replace(/\/+$/u, "")}${path}`, {
-        method: "POST",
-        signal: AbortSignal.timeout(timeoutMs),
-        headers: { "content-type": "application/json", authorization: `Bearer ${options.memory.token}` },
-        body: JSON.stringify(body)
-      });
-    } catch {
-      throw new CollabError("memory_layer_unavailable", "无法连接 Memmy，请打开 Memmy 后重试。");
+      return await read(options.localSessions);
+    } catch (error) {
+      if (error instanceof LocalSessionReadError) throw new CollabError(error.code, error.message);
+      throw new CollabError("internal", "读取本机会话失败");
     }
-    const payload = record(await response.json().catch(() => ({})));
-    if (!response.ok) {
-      const message = text(record(payload.error).message);
-      throw new CollabError(response.status === 404 ? "not_found" : "internal", message || "读取本机会话失败");
-    }
-    return payload;
   }
 
   function requireAccount(): CollabAccount {
@@ -503,13 +491,13 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
   }
 
   async function listLocalSessions(input: { query?: string; sourceIds?: string[]; limit?: number; fresh?: boolean }) {
-    const data = await memory("/api/v1/agent-sessions/available", {
-      query: input.query,
-      sourceIds: input.sourceIds,
-      limit: input.limit,
-      fresh: input.fresh
-    });
-    return { sessions: list(data.sessions).map(toLocalSession), refreshing: data.refreshing === true };
+    const data = await readLocal((reader) => reader.available({
+      ...(input.query === undefined ? {} : { query: input.query }),
+      ...(input.sourceIds === undefined ? {} : { sourceIds: input.sourceIds }),
+      ...(input.limit === undefined ? {} : { limit: input.limit }),
+      fresh: input.fresh === true
+    }));
+    return { sessions: data.sessions.map(toLocalSession), refreshing: data.refreshing };
   }
 
   /** Upload progress per project, kept in memory: the board polls it while sessions arrive. */
@@ -689,9 +677,9 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
       if (!chunk) return null;
       let load = loads.get(chunk);
       if (!load) {
-        load = memory("/api/v1/agent-sessions/read-many", { sourceId: session.sourceId, conversationIds: chunk }, READ_MANY_TIMEOUT_MS)
-          .then((data) => new Map(list(data.sessions).map((raw) => [text(record(raw).conversationId), record(raw)] as const)))
-          // A Memory service without batch reads, or a failed batch: its sessions are read one by one as before.
+        load = readLocal((reader) => reader.readMany({ sourceId: session.sourceId, conversationIds: chunk }))
+          .then((data) => new Map(data.sessions.map((raw) => [raw.conversationId, record(raw)] as const)))
+          // A failed batch: its sessions are read one by one instead.
           .catch(() => null);
         loads.set(chunk, load);
       }
@@ -718,7 +706,7 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
       throw new CollabError("not_found", "本机已找不到该会话");
     }
     const local = preloaded
-      ?? record((await memory("/api/v1/agent-sessions/read", { sourceId: session.sourceId, conversationId: session.conversationId })).session);
+      ?? record(await readLocal((reader) => reader.read({ sourceId: session.sourceId, conversationId: session.conversationId })));
     const turns = list(local.turns).slice(-MAX_UPLOAD_TURNS).map(toUploadTurn);
     return putCloudSession(projectId, session.sourceId, session.conversationId, text(local.title), isoOrNull(local.updatedAt), turns, historyBefore);
   }

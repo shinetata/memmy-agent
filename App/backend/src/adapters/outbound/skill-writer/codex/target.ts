@@ -8,8 +8,10 @@ import { isInstalledMemmyHookCurrent, memmyHookRevisionField } from "../hook-rev
 import { readMemmyMemoryServiceConfig } from "../memmy-runtime-config.js";
 import {
   removeMemmyResumeSkillDirectory,
+  removeMemmySessionSkillDirectory,
   removeMemmySkillDirectory,
   replaceMemmyResumeSkillDirectory,
+  replaceMemmySessionSkillDirectory,
   replaceMemmySkillDirectory
 } from "../skill-directory.js";
 import { renderMemmyPluginSkillManifest } from "../templates/memmy-plugin.js";
@@ -67,6 +69,7 @@ export function createCodexSkillTarget(deps: CreateCodexSkillTargetDeps = {}): S
       const existing = removeLegacyMarkerBlock(await readTextFile(filePath));
       await writeFileAtomically(filePath, upsertMarkerBlock(existing, renderMemmySkillBootstrapManifest(manifest)));
       await replaceMemmySkillDirectory(root, manifest);
+      await replaceMemmySessionSkillDirectory(root);
       await replaceMemmyResumeSkillDirectory(root, CODEX_TARGET_ID);
     },
 
@@ -81,6 +84,7 @@ export function createCodexSkillTarget(deps: CreateCodexSkillTargetDeps = {}): S
       await writeFileAtomically(filePath, removeMarkerBlock(removeLegacyMarkerBlock(existing)));
       await removeMemmyResumeSkillDirectory(root);
       await removeMemmySkillDirectory(root);
+      await removeMemmySessionSkillDirectory(root);
     },
 
     async isInstalled(_targetId) {
@@ -137,6 +141,7 @@ export function createCodexSkillTarget(deps: CreateCodexSkillTargetDeps = {}): S
         upsertMarkerBlock(await readTextFile(filePath), renderMemmySkillBootstrapManifest(manifest))
       );
       await replaceMemmySkillDirectory(root, manifest);
+      await replaceMemmySessionSkillDirectory(root);
       await replaceMemmyResumeSkillDirectory(root, CODEX_TARGET_ID);
       await trustHooks({
         codexHomeDirectory: root,
@@ -164,6 +169,7 @@ export function createCodexSkillTarget(deps: CreateCodexSkillTargetDeps = {}): S
       await writeFileAtomically(filePath, removeMarkerBlock(removeLegacyMarkerBlock(await readTextFile(filePath))));
       await removeMemmyResumeSkillDirectory(root);
       await removeMemmySkillDirectory(root);
+      await removeMemmySessionSkillDirectory(root);
     }
   };
 }

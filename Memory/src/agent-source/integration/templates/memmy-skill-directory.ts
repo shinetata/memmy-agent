@@ -15,7 +15,7 @@ export function renderMemmySkillDirectoryFiles(manifest: SkillManifest): Rendere
       content: [
         "---",
         "name: memmy-memory",
-        "description: Use shared Memmy memory when prior context may be relevant. Check Memmy project sessions first, before web, IM or chat-history search, when the user asks what a teammate did or decided or how far their work got (如「看看某人在某事上的最新进展」「这个当时怎么定的」), pastes a Memmy session link or a screenshot of another agent's conversation to build on, or works on a task in a shared Memmy project that teammates may already have touched.",
+        "description: Use shared Memmy memory when prior context may be relevant.",
         "---",
         "",
         manifest.content.trimEnd(),

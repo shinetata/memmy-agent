@@ -2,8 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { parseArgs } from "../src/cli/args.js";
-import { runProjectSessionsCommand } from "../src/cli/project-sessions.js";
+import { runMemmySession } from "../memmy-session.js";
 
 const roots: string[] = [];
 afterEach(() => {
@@ -11,19 +10,18 @@ afterEach(() => {
 });
 
 function runtimeFile(contents: unknown): string {
-  const root = mkdtempSync(join(tmpdir(), "memmy-cli-sessions-"));
+  const root = mkdtempSync(join(tmpdir(), "memmy-session-cli-"));
   roots.push(root);
   const path = join(root, "runtime.json");
   writeFileSync(path, JSON.stringify(contents));
   return path;
 }
 
-function run(argv: string[], deps: Parameters<typeof runProjectSessionsCommand>[2]) {
-  const parsed = parseArgs(argv);
-  return runProjectSessionsCommand(parsed.positionals, parsed, deps);
+function run(argv: string[], deps: Parameters<typeof runMemmySession>[1]) {
+  return runMemmySession(argv, deps);
 }
 
-describe("memmy-memory sessions", () => {
+describe("memmy-session", () => {
   it("reads a pasted link through the desktop's local API and prints the reference text", async () => {
     const calls: Array<{ url: string; headers: Record<string, string>; body: unknown }> = [];
     const fetcher = (async (input: string | URL, init?: RequestInit) => {
@@ -110,6 +108,8 @@ describe("memmy-memory sessions", () => {
     const denied = (async () => new Response(JSON.stringify({ error: { code: "not_found", message: "项目或会话不存在，或你不是该项目的成员" } }), { status: 404 })) as typeof fetch;
     const runtimeConfigPath = runtimeFile({ baseUrl: "http://127.0.0.1:62315", localToken: "t" });
     await expect(run(["read", "abc"], { fetch: denied, runtimeConfigPath })).rejects.toThrow("项目或会话不存在，或你不是该项目的成员");
-    await expect(run(["read"], { runtimeConfigPath })).rejects.toThrow(/requires a Memmy session link/u);
+    await expect(run(["read"], { runtimeConfigPath })).rejects.toThrow(/需要 Memmy 会话链接/u);
+    expect(await run([], { runtimeConfigPath })).toMatch(/^Usage:/u);
+    await expect(run(["list"], { runtimeConfigPath })).rejects.toThrow(/未知命令：list/u);
   });
 });

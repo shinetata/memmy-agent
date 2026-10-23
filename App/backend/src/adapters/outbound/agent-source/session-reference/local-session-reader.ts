@@ -1,10 +1,10 @@
 /**
  * Local session reader. Lists this machine's agent sessions so a person can pick which ones to associate with an
- * online project, and reads one session's turns so they can be uploaded to it.
+ * online project, and reads one session's turns so they can be uploaded to it. It runs in the desktop backend on
+ * the backend's own agent adapters, so online projects do not depend on the Memory service.
  */
-import { MemoryServiceError } from "../../utils/error.js";
-import type { SourceRegistry } from "../adapters/source-registry.js";
-import type { ConversationMessage, SourceAdapter } from "../adapters/types.js";
+import type { SourceRegistry } from "../source-registry.js";
+import type { ConversationMessage, SourceAdapter } from "../types.js";
 import { rankLocalSessions } from "./local-session-rank.js";
 import { createSessionGrouper, type LocalSessionGroup, type SessionGrouper } from "./session-group.js";
 
@@ -87,6 +87,14 @@ export interface LocalSessionReader {
   readMany(input: { sourceId: string; conversationIds: readonly string[] }): Promise<{ sessions: LocalSession[]; missing: string[] }>;
 }
 
+/** A read the caller can explain: an unknown agent or session, or a batch larger than one read allows. */
+export class LocalSessionReadError extends Error {
+  constructor(readonly code: "not_found" | "invalid_argument", message: string) {
+    super(message);
+    this.name = "LocalSessionReadError";
+  }
+}
+
 export interface CreateLocalSessionReaderDeps {
   registry: SourceRegistry;
   sessionsPerSource?: number;
@@ -148,11 +156,11 @@ export function createLocalSessionReader(deps: CreateLocalSessionReaderDeps): Lo
     async read(input) {
       const adapter = deps.registry.get(input.sourceId);
       if (!adapter) {
-        throw new MemoryServiceError("not_found", `Unknown agent source: ${input.sourceId}`);
+        throw new LocalSessionReadError("not_found", `Unknown agent source: ${input.sourceId}`);
       }
       const [session] = await readSessions(adapter, [input.conversationId], sessionsPerSource);
       if (!session) {
-        throw new MemoryServiceError("not_found", `Session not found: ${input.sourceId}/${input.conversationId}`);
+        throw new LocalSessionReadError("not_found", `Session not found: ${input.sourceId}/${input.conversationId}`);
       }
       return session;
     },
@@ -160,11 +168,11 @@ export function createLocalSessionReader(deps: CreateLocalSessionReaderDeps): Lo
     async readMany(input) {
       const adapter = deps.registry.get(input.sourceId);
       if (!adapter) {
-        throw new MemoryServiceError("not_found", `Unknown agent source: ${input.sourceId}`);
+        throw new LocalSessionReadError("not_found", `Unknown agent source: ${input.sourceId}`);
       }
       const wanted = [...new Set(input.conversationIds)];
       if (wanted.length > MAX_READ_MANY) {
-        throw new MemoryServiceError("invalid_argument", `At most ${MAX_READ_MANY} sessions per read`);
+        throw new LocalSessionReadError("invalid_argument", `At most ${MAX_READ_MANY} sessions per read`);
       }
       const sessions = await readSessions(adapter, wanted, sessionsPerSource);
       const found = new Set(sessions.map((session) => session.conversationId));

@@ -3,13 +3,8 @@ import { randomUUID } from "node:crypto";
 import type { AddressInfo } from "node:net";
 import {
   createAgentSourceExecutor,
-  createBuiltinSourceRegistry,
   type AgentSourceExecutor
 } from "../agent-source/runtime.js";
-import {
-  createLocalSessionReader,
-  type LocalSessionReader
-} from "../agent-source/session-reference/local-session-reader.js";
 import {
   L3WorldModelBoundaryRequestSchema,
   L3WorldModelRequestEnvelopeSchema,
@@ -83,9 +78,6 @@ export const API_ROUTES = [
   "POST /api/v1/turns/:turnId/complete",
   "POST /api/v1/source-turns/complete",
   "POST /api/v1/memory/search",
-  "POST /api/v1/agent-sessions/available",
-  "POST /api/v1/agent-sessions/read",
-  "POST /api/v1/agent-sessions/read-many",
   "GET /api/v1/memory/recalls/:queryId",
   "POST /api/v1/memory/add",
   "POST /api/v1/evidence/sync",
@@ -180,8 +172,6 @@ export function createMemoryHttpServer(options: MemoryHttpServerOptions): Server
     scheduleWorker: autoWorker.schedule,
     memoryAddAnalytics
   });
-  // Online projects pick sessions from this machine's agents and upload the turns of the ones a person associates.
-  const localSessions = createLocalSessionReader({ registry: createBuiltinSourceRegistry() });
   const activeRequests = new Set<Promise<void>>();
   const server = createServer((request, response) => {
     const handling = handleRequest(request, response);
@@ -262,8 +252,7 @@ export function createMemoryHttpServer(options: MemoryHttpServerOptions): Server
         principal,
         Boolean(options.onShutdownRequested),
         pluginRuntimeAnalytics,
-        requestId,
-        localSessions
+        requestId
       );
       if (request.method === "POST" && url.pathname === "/api/v1/admin/shutdown") {
         response.once("finish", () => options.onShutdownRequested?.());
@@ -553,8 +542,7 @@ async function routeRequest(
   principal: AuthPrincipal,
   canShutdown: boolean,
   pluginRuntimeAnalytics: PluginRuntimeAnalytics,
-  requestId: string,
-  localSessions: LocalSessionReader
+  requestId: string
 ): Promise<unknown> {
   const path = url.pathname;
 
@@ -790,43 +778,6 @@ async function routeRequest(
     );
     scheduleAutoWorkerForEvolution(result, autoWorker);
     return publicCompleteTurnResponse(result);
-  }
-
-  if (method === "POST" && path === "/api/v1/agent-sessions/available") {
-    requireMemoryRead(principal);
-    const request = asObject(body, "agent-sessions.available");
-    return localSessions.available({
-      query: typeof request.query === "string" ? request.query : undefined,
-      cwd: typeof request.cwd === "string" ? request.cwd : null,
-      sourceIds: Array.isArray(request.sourceIds)
-        ? request.sourceIds.filter((value): value is string => typeof value === "string")
-        : undefined,
-      limit: typeof request.limit === "number" && Number.isFinite(request.limit) ? request.limit : undefined,
-      fresh: request.fresh === true
-    });
-  }
-  if (method === "POST" && path === "/api/v1/agent-sessions/read") {
-    requireMemoryRead(principal);
-    const request = asObject(body, "agent-sessions.read");
-    requireStringField(request, "sourceId", "agent-sessions.read");
-    requireStringField(request, "conversationId", "agent-sessions.read");
-    return {
-      session: await localSessions.read({
-        sourceId: request.sourceId as string,
-        conversationId: request.conversationId as string
-      })
-    };
-  }
-  // An upload of many sessions reads each agent's store once instead of once per session.
-  if (method === "POST" && path === "/api/v1/agent-sessions/read-many") {
-    requireMemoryRead(principal);
-    const request = asObject(body, "agent-sessions.read-many");
-    requireStringField(request, "sourceId", "agent-sessions.read-many");
-    const ids = Array.isArray(request.conversationIds) ? request.conversationIds : null;
-    if (!ids || !ids.every((id): id is string => typeof id === "string" && id.length > 0)) {
-      throw new MemoryServiceError("invalid_argument", "agent-sessions.read-many requires conversationIds: string[]");
-    }
-    return localSessions.readMany({ sourceId: request.sourceId as string, conversationIds: ids });
   }
 
   if (method === "POST" && path === "/api/v1/memory/search") {

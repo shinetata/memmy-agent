@@ -5,8 +5,8 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import Database from "better-sqlite3";
-import type { SourceAdapter } from "../adapters/types.js";
+import { DatabaseSync } from "node:sqlite";
+import type { SourceAdapter } from "../types.js";
 
 /** The organizing unit a session belongs to. Sessions outside every unit have no group. */
 export interface LocalSessionGroup {
@@ -123,10 +123,10 @@ function createDirectoryResolver(): (path: string | null) => string | null {
 /** Maps a Cursor chat to the folder or .code-workspace file of the workspace it belongs to, read-only. */
 function readCursorWorkspaces(workspaceStorage: string): (conversationId: string) => string | null {
   const workspaceIds = new Map<string, string>();
-  let db: Database.Database | null = null;
+  let db: DatabaseSync | null = null;
   try {
-    db = new Database(join(dirname(workspaceStorage), "globalStorage", "state.vscdb"), { readonly: true, fileMustExist: true });
-    const rows = db.prepare("SELECT composerId, workspaceId FROM composerHeaders WHERE isSubagent = 0").all() as Array<{ composerId: string; workspaceId: string | null }>;
+    db = new DatabaseSync(join(dirname(workspaceStorage), "globalStorage", "state.vscdb"), { readOnly: true });
+    const rows = db.prepare("SELECT composerId, workspaceId FROM composerHeaders WHERE isSubagent = 0").all() as unknown as Array<{ composerId: string; workspaceId: string | null }>;
     for (const row of rows) {
       if (row.workspaceId && row.workspaceId !== CURSOR_EMPTY_WINDOW) workspaceIds.set(row.composerId, row.workspaceId);
     }
@@ -163,7 +163,7 @@ function readCursorWorkspacePath(storagePath: string): string | null {
 
 /** Reads Codex projects from the newest state database, read-only; null when there is none. */
 function readCodexProjects(codexHome: string): CodexProject[] | null {
-  let db: Database.Database | null = null;
+  let db: DatabaseSync | null = null;
   try {
     const file = readdirSync(codexHome)
       .map((name) => ({ name, version: Number(/^state_(\d+)\.sqlite$/u.exec(name)?.[1] ?? Number.NaN) }))
@@ -172,10 +172,10 @@ function readCodexProjects(codexHome: string): CodexProject[] | null {
     if (!file) {
       return null;
     }
-    db = new Database(join(codexHome, file.name), { readonly: true, fileMustExist: true });
+    db = new DatabaseSync(join(codexHome, file.name), { readOnly: true });
     const rows = db.prepare(
       "SELECT p.id AS id, p.name AS name, r.path AS path FROM projects p JOIN project_roots r ON r.project_id = p.id ORDER BY p.position, r.position"
-    ).all() as Array<{ id: string; name: string; path: string }>;
+    ).all() as unknown as Array<{ id: string; name: string; path: string }>;
     const projects = new Map<string, CodexProject>();
     for (const row of rows) {
       const project = projects.get(row.id) ?? { id: row.id, name: row.name, roots: [] };

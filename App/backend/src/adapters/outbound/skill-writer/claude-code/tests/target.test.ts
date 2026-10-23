@@ -122,20 +122,25 @@ describe("claude code skill target", () => {
   it("allows the read-only session commands once and removes only its own rules", async () => {
     const { rootDirectory, memmyConfigPath } = createFixture();
     const target = createClaudeCodeSkillTarget({ rootDirectory, memmyConfigPath });
-    writeFileSync(join(rootDirectory, "settings.json"), JSON.stringify({ permissions: { allow: ["Bash(npm test:*)"], deny: ["Bash(rm:*)"] } }));
+    // An earlier install allowed the commands sessions were read through before `memmy-session`.
+    writeFileSync(join(rootDirectory, "settings.json"), JSON.stringify({
+      permissions: { allow: ["Bash(npm test:*)", "Bash(memmy-memory sessions read:*)"], deny: ["Bash(rm:*)"] }
+    }));
     const readSettings = () => JSON.parse(readFileSync(join(rootDirectory, "settings.json"), "utf8")) as { permissions?: { allow?: string[]; deny?: string[] } };
 
     await target.installPlugin?.("claude_code");
     await target.installPlugin?.("claude_code");
 
     expect(readSettings().permissions).toEqual({
-      allow: ["Bash(npm test:*)", "Bash(memmy-memory sessions read:*)", "Bash(memmy-memory sessions search:*)", "Read(~/.memmy/projects/**)"],
+      allow: ["Bash(npm test:*)", "Bash(memmy-session read:*)", "Bash(memmy-session search:*)", "Read(~/.memmy/projects/**)"],
       deny: ["Bash(rm:*)"]
     });
+    expect(readFileSync(join(rootDirectory, "skills", "memmy-session", "SKILL.md"), "utf8")).toContain("name: memmy-session");
 
     await target.uninstallPlugin?.("claude_code");
 
     expect(readSettings().permissions).toEqual({ allow: ["Bash(npm test:*)"], deny: ["Bash(rm:*)"] });
+    expect(existsSync(join(rootDirectory, "skills", "memmy-session"))).toBe(false);
   });
 
   it("marks a hook without a stored revision as outdated and refreshes it in place", async () => {

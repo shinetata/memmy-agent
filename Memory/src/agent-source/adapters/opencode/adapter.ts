@@ -114,7 +114,6 @@ function toConversationMessage(
     workspacePath: rawMessage.workspacePath,
     gitRoot: rawMessage.gitRoot,
     ordinal: rawMessage.ordinal,
-    ...(rawMessage.sessionTitle ? { sessionTitle: rawMessage.sessionTitle } : {}),
     rawMeta: rawMessage.rawMeta
   };
 }

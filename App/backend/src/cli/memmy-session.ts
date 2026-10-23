@@ -1,32 +1,79 @@
+#!/usr/bin/env node
 /**
- * `sessions read|search`: lets an agent read or find sessions of the person's online projects. The desktop app
- * holds the account, so these commands go through its local API, found via ~/.memmy/runtime.json.
+ * `memmy-session`: lets an agent find and read the sessions of the person's shared Memmy projects. The desktop app
+ * holds the account and the project cache, so every command goes through its local API, found via
+ * ~/.memmy/runtime.json. Nothing here touches memory.
+ *
+ * Only Node built-ins are imported: the desktop build copies this one file next to its launcher.
  */
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join } from "node:path";
-import { hasOption, optionBoolean, optionString, type ParsedArgs } from "./args.js";
+import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 
 const RUNTIME_TOKEN_HEADER = "x-memmy-local-token";
 const REQUEST_TIMEOUT_MS = 90_000;
 const DESKTOP_NOT_RUNNING = "无法连接 Memmy，请打开 Memmy 后重试。";
 const NO_MATCH = "没有匹配的会话。可以换更短的关键词，或去掉 --member、--since 后重试；会话也可能还没有共享到项目。";
+const USAGE = [
+  "Usage:",
+  "  memmy-session search <keywords> [--member <name>] [--project <project name>] [--since 30d] [--limit <n>]",
+  "  memmy-session read <link|id> [--turns <from>-<to> | --around <turn> | --find \"<sentence>\" | --all]",
+  "",
+  "Finds and reads sessions of your shared Memmy projects. Memmy must be running."
+].join("\n");
 
-export interface ProjectSessionsDeps {
+export interface MemmySessionDeps {
   fetch?: typeof fetch;
   runtimeConfigPath?: string;
 }
 
-/**
- * Runs `sessions read <link-or-id> [--around|--turns|--find|--all]` or
- * `sessions search <keywords> [--member] [--project] [--since] [--limit]`.
- */
-export async function runProjectSessionsCommand(words: string[], parsed: ParsedArgs, deps: ProjectSessionsDeps = {}): Promise<string> {
-  const [action, ...rest] = words;
+export interface ParsedArgs {
+  positionals: string[];
+  options: Record<string, string | true>;
+}
+
+/** `--name value`, `--name=value`, or a bare `--name`; everything else is a positional word. */
+export function parseArgs(argv: readonly string[]): ParsedArgs {
+  const positionals: string[] = [];
+  const options: Record<string, string | true> = {};
+  for (let index = 0; index < argv.length; index += 1) {
+    const token = argv[index] ?? "";
+    if (token === "--") {
+      positionals.push(...argv.slice(index + 1));
+      break;
+    }
+    if (token === "-h") {
+      options.help = true;
+      continue;
+    }
+    if (!token.startsWith("--")) {
+      positionals.push(token);
+      continue;
+    }
+    const raw = token.slice(2);
+    const equals = raw.indexOf("=");
+    if (equals >= 0) {
+      options[raw.slice(0, equals)] = raw.slice(equals + 1);
+      continue;
+    }
+    const next = argv[index + 1];
+    options[raw] = next !== undefined && !next.startsWith("--") ? argv[++index] ?? "" : true;
+  }
+  return { positionals, options };
+}
+
+/** Runs `read <link-or-id> [--turns|--around|--find|--all]` or `search <keywords> [--member] [--project] [--since] [--limit]`. */
+export async function runMemmySession(argv: readonly string[], deps: MemmySessionDeps = {}): Promise<string> {
+  const parsed = parseArgs(argv);
+  const [action, ...rest] = parsed.positionals;
+  if (!action || action === "help" || parsed.options.help) {
+    return USAGE;
+  }
   if (action === "read") {
     const reference = rest.join(" ").trim();
     if (!reference) {
-      throw new Error("sessions read requires a Memmy session link or session ID");
+      throw new Error("read 需要 Memmy 会话链接或会话 ID");
     }
     const result = await localApi(deps, "POST", "/api/collab/sessions/read", { reference, view: readView(parsed) });
     return typeof result.text === "string" ? result.text : "";
@@ -35,7 +82,7 @@ export async function runProjectSessionsCommand(words: string[], parsed: ParsedA
     // Memmy turns the words into keywords, merges a session shared to several projects and applies --since.
     const params = new URLSearchParams({ q: rest.join(" ").trim() });
     for (const name of ["member", "project", "since", "limit"] as const) {
-      const value = optionString(parsed.options, name);
+      const value = optionString(parsed, name);
       if (value) params.set(name, value);
     }
     const result = await localApi(deps, "GET", `/api/collab/sessions/search?${params.toString()}`);
@@ -45,15 +92,15 @@ export async function runProjectSessionsCommand(words: string[], parsed: ParsedA
     }
     return sessions.map(formatSearchLine).join("\n");
   }
-  throw new Error("sessions requires read or search");
+  throw new Error(`未知命令：${action}\n\n${USAGE}`);
 }
 
 /** What `read` prints inline; no flag is the overview. At most one range, since each answers a different need. */
 function readView(parsed: ParsedArgs): Record<string, unknown> {
-  const around = optionString(parsed.options, "around");
-  const turns = optionString(parsed.options, "turns");
-  const find = optionString(parsed.options, "find");
-  const all = hasOption(parsed.options, "all") && optionBoolean(parsed.options, "all") === true;
+  const around = optionString(parsed, "around");
+  const turns = optionString(parsed, "turns");
+  const find = optionString(parsed, "find");
+  const all = parsed.options.all === true || parsed.options.all === "true";
   if ([around, turns, find].filter((value) => value !== undefined).length + (all ? 1 : 0) > 1) {
     throw new Error("只能指定一种读取范围：--around、--turns、--find 或 --all");
   }
@@ -81,6 +128,11 @@ function turnNumber(value: string, flag: string): number {
   return number;
 }
 
+function optionString(parsed: ParsedArgs, name: string): string | undefined {
+  const value = parsed.options[name];
+  return typeof value === "string" ? value : undefined;
+}
+
 /** One line per session: ID, title, then every project it is shared to · member · last activity. */
 function formatSearchLine(session: Record<string, unknown>): string {
   const member = text(session.memberName) || (session.mine === true ? "你" : "");
@@ -91,12 +143,12 @@ function formatSearchLine(session: Record<string, unknown>): string {
 }
 
 async function localApi(
-  deps: ProjectSessionsDeps,
+  deps: MemmySessionDeps,
   method: "GET" | "POST",
   path: string,
   body?: unknown
 ): Promise<Record<string, unknown>> {
-  const runtime = await readRuntimeConfig(deps.runtimeConfigPath ?? join(homedir(), ".memmy", "runtime.json"));
+  const runtime = await readRuntimeConfig(deps.runtimeConfigPath ?? defaultRuntimeConfigPath());
   let response: Response;
   try {
     response = await (deps.fetch ?? fetch)(new URL(path, runtime.baseUrl), {
@@ -117,6 +169,10 @@ async function localApi(
     throw new Error(text(error.message) || `Memmy request failed (${response.status})`);
   }
   return payload;
+}
+
+function defaultRuntimeConfigPath(): string {
+  return join(process.env.MEMMY_HOME?.trim() || join(homedir(), ".memmy"), "runtime.json");
 }
 
 async function readRuntimeConfig(path: string): Promise<{ baseUrl: string; localToken: string }> {
@@ -144,4 +200,17 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function text(value: unknown): string {
   return typeof value === "string" ? value : "";
+}
+
+async function main(): Promise<void> {
+  try {
+    process.stdout.write(`${await runMemmySession(process.argv.slice(2))}\n`);
+  } catch (error) {
+    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    process.exitCode = 1;
+  }
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+  void main();
 }

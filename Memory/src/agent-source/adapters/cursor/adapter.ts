@@ -86,11 +86,7 @@ export function createCursorSourceAdapter(deps: CreateCursorSourceAdapterDeps = 
 
         for await (const rawMessage of streamConversationWindow(
           options.fullHistory
-            ? streamCursorVscdb(
-              target.stateDbPath,
-              options.signal,
-              options.order === "recent_first" ? options.maxConversations : undefined
-            )
+            ? streamCursorVscdb(target.stateDbPath, options.signal)
             : readCursorVscdb(target.stateDbPath, options.signal),
           options.since,
           options.signal,
@@ -182,7 +178,6 @@ function toConversationMessage(
     workspacePath: target.workspacePath,
     gitRoot: target.gitRoot,
     ordinal: rawMessage.ordinal,
-    ...(rawMessage.sessionTitle ? { sessionTitle: rawMessage.sessionTitle } : {}),
     rawMeta: Object.freeze({
       ...rawMessage.rawMeta,
       cursorStorageHash: target.storageHash

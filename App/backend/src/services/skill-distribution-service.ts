@@ -2,7 +2,13 @@
 import { createHash } from "node:crypto";
 import { readdir, readFile, stat } from "node:fs/promises";
 import { join, relative } from "node:path";
-import { isMemmySkillDirectoryCurrent, readInstalledSkillKind, replaceMemmySkillDirectory } from "../adapters/outbound/skill-writer/skill-directory.js";
+import {
+  isMemmySessionSkillDirectoryCurrent,
+  isMemmySkillDirectoryCurrent,
+  readInstalledSkillKind,
+  replaceMemmySessionSkillDirectory,
+  replaceMemmySkillDirectory
+} from "../adapters/outbound/skill-writer/skill-directory.js";
 import { renderMemmyDefaultSkillManifest } from "../adapters/outbound/skill-writer/templates/memmy-default.js";
 import { renderMemmyPluginSkillManifest } from "../adapters/outbound/skill-writer/templates/memmy-plugin.js";
 import type { MemoryPluginConflict } from "../adapters/outbound/skill-writer/types.js";
@@ -142,11 +148,16 @@ export function createSkillDistributionService(
       const manifest = kind === "plugin"
         ? renderMemmyPluginSkillManifest(sourceId)
         : renderMemmyDefaultSkillManifest(sourceId);
-      if (await isMemmySkillDirectoryCurrent(root, manifest)) return false;
+      const memoryCurrent = await isMemmySkillDirectoryCurrent(root, manifest);
+      if (memoryCurrent && await isMemmySessionSkillDirectoryCurrent(root)) return false;
 
-      if (kind === "plugin") await target.installPlugin!(sourceId);
-      // Skill-only agents get the skill directory alone: their instructions file must not gain memory guidance.
-      else await replaceMemmySkillDirectory(root, manifest);
+      if (!memoryCurrent) {
+        if (kind === "plugin") await target.installPlugin!(sourceId);
+        // Skill-only agents get the skill directory alone: their instructions file must not gain memory guidance.
+        else await replaceMemmySkillDirectory(root, manifest);
+      }
+      // The session skill is installed with the memory skill; an agent connected before it existed gets it here.
+      if (!(await isMemmySessionSkillDirectoryCurrent(root))) await replaceMemmySessionSkillDirectory(root);
       return true;
     }
   };

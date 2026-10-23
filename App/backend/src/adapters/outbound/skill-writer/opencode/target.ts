@@ -4,7 +4,12 @@ import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { resolveOpencodeConfigDirectory } from "../../agent-paths.js";
 import { readMemmyMemoryServiceConfig } from "../memmy-runtime-config.js";
-import { removeMemmySkillDirectory, replaceMemmySkillDirectory } from "../skill-directory.js";
+import {
+  removeMemmySessionSkillDirectory,
+  removeMemmySkillDirectory,
+  replaceMemmySessionSkillDirectory,
+  replaceMemmySkillDirectory
+} from "../skill-directory.js";
 import { renderMemmyOpencodePlugin, renderMemmyOpencodeResumeCommand } from "../templates/memmy-opencode-plugin.js";
 import { renderMemmyPluginSkillManifest } from "../templates/memmy-plugin.js";
 import { renderMemmySkillBootstrapManifest } from "../templates/memmy-skill-directory.js";
@@ -50,6 +55,7 @@ export function createOpencodeSkillTarget(deps: CreateOpencodeSkillTargetDeps = 
       const existing = removeCliMarkerBlock(await readTextFile(filePath));
       await writeFileAtomically(filePath, upsertMarkerBlock(existing, renderMemmySkillBootstrapManifest(manifest)));
       await replaceMemmySkillDirectory(rootDirectory, manifest);
+      await replaceMemmySessionSkillDirectory(rootDirectory);
     },
 
     async uninstall(_targetId) {
@@ -64,6 +70,7 @@ export function createOpencodeSkillTarget(deps: CreateOpencodeSkillTargetDeps = 
         await writeFileAtomically(filePath, removeMarkerBlock(existing));
       }
       await removeMemmySkillDirectory(root);
+      await removeMemmySessionSkillDirectory(root);
     },
 
     async isInstalled(_targetId) {
@@ -100,6 +107,7 @@ export function createOpencodeSkillTarget(deps: CreateOpencodeSkillTargetDeps = 
         )
       );
       await replaceMemmySkillDirectory(rootDirectory, manifest);
+      await replaceMemmySessionSkillDirectory(rootDirectory);
     },
 
     async uninstallPlugin(_targetId) {
@@ -118,6 +126,7 @@ export function createOpencodeSkillTarget(deps: CreateOpencodeSkillTargetDeps = 
         await writeFileAtomically(filePath, removeMarkerBlock(existing));
       }
       await removeMemmySkillDirectory(root);
+      await removeMemmySessionSkillDirectory(root);
     }
   };
 }

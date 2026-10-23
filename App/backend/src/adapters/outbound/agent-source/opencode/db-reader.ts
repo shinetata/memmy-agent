@@ -25,9 +25,12 @@ export async function* readOpencodeDatabase(path: string, signal?: AbortSignal):
     const source = createSource(db);
     if (!source) return;
     const directories = new Map([...source.sessions()].map((session) => [session.id, session.directory ?? null]));
+    // OpenCode names each session itself; the row is read here rather than through the turn parser.
+    const titles = readSessionTitles(db);
     for await (const message of readOpencodeSessions(source, signal)) {
       const directory = directories.get(message.conversationId) ?? null;
-      yield { ...message, workspacePath: directory, gitRoot: directory };
+      const sessionTitle = titles.get(message.conversationId);
+      yield { ...message, workspacePath: directory, gitRoot: directory, ...(sessionTitle ? { sessionTitle } : {}) };
     }
   } finally {
     db.close();
@@ -53,6 +56,17 @@ function createSource(db: DatabaseSync): OpencodeSource | null {
     parts: (messageId) => (parts.all(messageId) as unknown as Array<{ id: string; data: string }>)
       .map((row) => ({ id: row.id, data: parseJson(row.data) }))
   };
+}
+
+/** Session titles, when this OpenCode stores them; older schemas have no such column. */
+function readSessionTitles(db: DatabaseSync): ReadonlyMap<string, string> {
+  const titles = new Map<string, string>();
+  if (!tableColumns(db, "session").has("title")) return titles;
+  for (const row of db.prepare("SELECT id, title FROM session").all() as unknown as Array<{ id: string; title: string | null }>) {
+    const title = typeof row.title === "string" ? row.title.replace(/\s+/gu, " ").trim() : "";
+    if (row.id && title) titles.set(row.id, title);
+  }
+  return titles;
 }
 
 function toOpencodeSession(row: Record<string, unknown>): OpencodeSession {

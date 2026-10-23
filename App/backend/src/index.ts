@@ -27,6 +27,8 @@ import { createBackendServices, createCatalogAgentTaskModelResolver, type Bootst
 import { createAgentModelCompleter } from "./services/agent-model.js";
 import { createCollabItemsService } from "./services/collab-items-service.js";
 import { createCollabCloudRequest, createCollabService } from "./services/collab-service.js";
+import { createLocalSessionReader } from "./adapters/outbound/agent-source/session-reference/local-session-reader.js";
+import { createBuiltinAgentSourceRegistry } from "./services/builtin-agent-source-registry.js";
 import { createProjectDirectoryService } from "./services/project-directory-service.js";
 import { resolveCloudClientConfig, type CloudClientConfig } from "./config/service-urls.js";
 import { resetAccountRuntimeForDesktopInstallChange } from "./services/desktop-install-state-service.js";
@@ -183,7 +185,6 @@ export async function createLocalBackend(options: CreateLocalBackendOptions): Pr
         memberName: session.profile.nickname
       };
     };
-    const memoryLayerConfig = readMemoryLayerConfig(process.env);
     // Development override: the online-project cloud can be a local stand-in while it is not deployed yet.
     const collabCloudBaseUrl = process.env.MEMMY_COLLAB_CLOUD_URL?.trim() || cloudConfig.baseUrl;
     // Work items come from the owner's agent model, so its quota pays for them and members' Memmy only reads.
@@ -194,7 +195,8 @@ export async function createLocalBackend(options: CreateLocalBackendOptions): Pr
     const collab = createCollabService({
       cloudBaseUrl: collabCloudBaseUrl,
       getAccount: getCloudAccount,
-      memory: memoryLayerConfig ? { baseUrl: memoryLayerConfig.baseUrl, token: memoryLayerConfig.token } : null,
+      // The backend reads this machine's agent sessions itself, so association works without the Memory service.
+      localSessions: createLocalSessionReader({ registry: createBuiltinAgentSourceRegistry() }),
       ...(process.env.MEMMY_SESSION_LINK_BASE_URL?.trim() ? { linkBaseUrl: process.env.MEMMY_SESSION_LINK_BASE_URL.trim() } : {}),
       // The owner's own association is organized as soon as it is uploaded; other members' wait for the owner's pass.
       onSessionsUploaded: (projectId) => void collabItems.organizeAfterUpload(projectId)

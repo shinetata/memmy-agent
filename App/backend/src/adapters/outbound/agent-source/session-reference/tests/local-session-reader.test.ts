@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { createSourceRegistry } from "../src/agent-source/adapters/source-registry.js";
-import type { ConversationMessage, SourceAdapter } from "../src/agent-source/adapters/types.js";
-import { cleanQuestion, createLocalSessionReader } from "../src/agent-source/session-reference/local-session-reader.js";
+import { createSourceRegistry } from "../../source-registry.js";
+import type { ConversationMessage, SourceAdapter } from "../../types.js";
+import { cleanQuestion, createLocalSessionReader } from "../local-session-reader.js";
 
 describe("local session reader", () => {
   it("lists each session once with its first question as title", async () => {

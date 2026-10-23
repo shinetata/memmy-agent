@@ -255,8 +255,10 @@ describe("skill distribution service", () => {
       // The skill directory is rewritten directly; install() would also add memory guidance to AGENTS.md.
       expect(installed).toBe(0);
       const content = readFileSync(join(rootDirectory, "skills", "memmy-memory", "SKILL.md"), "utf8");
-      expect(content).toContain("## Online Project Sessions");
       expect(content).toContain("## Agent Loop");
+      // Project sessions are a skill of their own, next to the memory skill.
+      expect(content).not.toContain("memmy-session");
+      expect(readFileSync(join(rootDirectory, "skills", "memmy-session", "SKILL.md"), "utf8")).toContain("name: memmy-session");
     } finally {
       rmSync(rootDirectory, { recursive: true, force: true });
     }
@@ -290,6 +292,9 @@ describe("skill distribution service", () => {
         ])
       });
 
+      // Connected before the session skill existed: only the session skill is added.
+      await expect(service.refreshInstalledSkill("cursor", "skill")).resolves.toBe(true);
+      expect(readFileSync(join(rootDirectory, "skills", "memmy-session", "SKILL.md"), "utf8")).toContain("name: memmy-session");
       await expect(service.refreshInstalledSkill("cursor", "skill")).resolves.toBe(false);
       expect(installed).toBe(0);
     } finally {

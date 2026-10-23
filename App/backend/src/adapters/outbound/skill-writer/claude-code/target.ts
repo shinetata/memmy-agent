@@ -5,7 +5,12 @@ import { basename, dirname, join } from "node:path";
 import { createNodeHookCommand } from "../hook-command.js";
 import { isInstalledMemmyHookCurrent, memmyHookRevisionField } from "../hook-revision.js";
 import { readMemmyMemoryServiceConfig } from "../memmy-runtime-config.js";
-import { removeMemmySkillDirectory, replaceMemmySkillDirectory } from "../skill-directory.js";
+import {
+  removeMemmySessionSkillDirectory,
+  removeMemmySkillDirectory,
+  replaceMemmySessionSkillDirectory,
+  replaceMemmySkillDirectory
+} from "../skill-directory.js";
 import { renderMemmyPluginSkillManifest } from "../templates/memmy-plugin.js";
 import { renderMemmyResumeHookScript } from "../templates/memmy-resume-hook.js";
 import { renderMemmySkillBootstrapManifest } from "../templates/memmy-skill-directory.js";
@@ -62,6 +67,7 @@ export function createClaudeCodeSkillTarget(deps: CreateClaudeCodeSkillTargetDep
       const existing = removeLegacyMarkerBlock(await readTextFile(filePath));
       await writeFileAtomically(filePath, upsertMarkerBlock(existing, renderMemmySkillBootstrapManifest(manifest)));
       await replaceMemmySkillDirectory(root, manifest);
+      await replaceMemmySessionSkillDirectory(root);
     },
 
     async uninstall(_targetId) {
@@ -75,6 +81,7 @@ export function createClaudeCodeSkillTarget(deps: CreateClaudeCodeSkillTargetDep
       await writeFileAtomically(filePath, removeMarkerBlock(removeLegacyMarkerBlock(existing)));
       await removeLegacyAgentInstructions(root);
       await removeMemmySkillDirectory(root);
+      await removeMemmySessionSkillDirectory(root);
     },
 
     async isInstalled(_targetId) {
@@ -134,6 +141,7 @@ export function createClaudeCodeSkillTarget(deps: CreateClaudeCodeSkillTargetDep
         upsertMarkerBlock(await readTextFile(filePath), renderMemmySkillBootstrapManifest(manifest))
       );
       await replaceMemmySkillDirectory(root, manifest);
+      await replaceMemmySessionSkillDirectory(root);
       await writeFileAtomically(
         hookConfigPath,
         `${JSON.stringify({ ...hookConfig, ...(await memmyHookRevisionField(CLAUDE_CODE_TARGET_ID, "claude-code")) }, null, 2)}\n`
@@ -156,6 +164,7 @@ export function createClaudeCodeSkillTarget(deps: CreateClaudeCodeSkillTargetDep
       await writeFileAtomically(filePath, removeMarkerBlock(removeLegacyMarkerBlock(await readTextFile(filePath))));
       await removeLegacyAgentInstructions(root);
       await removeMemmySkillDirectory(root);
+      await removeMemmySessionSkillDirectory(root);
     }
   };
 }
@@ -280,17 +289,23 @@ async function upsertClaudeCodeHookSettings(filePath: string, hookScriptPath: st
 }
 
 /**
- * Online project sessions are read through read-only commands and saved under ~/.memmy/projects.
+ * Shared project sessions are read through the read-only `memmy-session` commands and saved under ~/.memmy/projects.
  * Allowing them keeps a pasted session link from stopping on an approval prompt at every step.
  */
 const MEMMY_SESSION_PERMISSION_RULES = [
-  "Bash(memmy-memory sessions read:*)",
-  "Bash(memmy-memory sessions search:*)",
+  "Bash(memmy-session read:*)",
+  "Bash(memmy-session search:*)",
   "Read(~/.memmy/projects/**)"
+];
+/** Rules for the commands sessions were read through before `memmy-session`; a reinstall drops them. */
+const LEGACY_SESSION_PERMISSION_RULES = [
+  "Bash(memmy-memory sessions read:*)",
+  "Bash(memmy-memory sessions search:*)"
 ];
 
 function withoutMemmySessionRules(value: unknown): unknown[] {
-  return Array.isArray(value) ? value.filter((rule) => !MEMMY_SESSION_PERMISSION_RULES.includes(rule as string)) : [];
+  const ours = new Set([...MEMMY_SESSION_PERMISSION_RULES, ...LEGACY_SESSION_PERMISSION_RULES]);
+  return Array.isArray(value) ? value.filter((rule) => !ours.has(rule as string)) : [];
 }
 
 async function removeClaudeCodeHookSettings(filePath: string): Promise<void> {

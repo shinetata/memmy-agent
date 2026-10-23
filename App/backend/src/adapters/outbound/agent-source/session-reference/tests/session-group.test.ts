@@ -5,8 +5,8 @@ import {
   cursorWorkspaceGroup,
   directoryGroup,
   mainCheckoutOf
-} from "../src/agent-source/session-reference/session-group.js";
-import type { SourceAdapter } from "../src/agent-source/adapters/types.js";
+} from "../session-group.js";
+import type { SourceAdapter } from "../../types.js";
 
 describe("local session groups", () => {
   it("groups by working directory, named after the folder", () => {

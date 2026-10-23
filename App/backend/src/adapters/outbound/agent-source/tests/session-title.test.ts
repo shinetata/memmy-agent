@@ -2,11 +2,11 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { readCodexThreadTitles } from "../src/agent-source/adapters/codex/session-titles.js";
+import { readCodexThreadTitles } from "../codex/session-titles.js";
 import {
   createJsonlTitleTracker,
   readJsonlSessionTitle
-} from "../src/agent-source/adapters/jsonl-session-title.js";
+} from "../jsonl-session-title.js";
 
 const roots: string[] = [];
 afterEach(() => {

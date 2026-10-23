@@ -23,14 +23,10 @@ export async function* readCursorVscdb(path: string, signal?: AbortSignal): Asyn
 }
 
 /** Streams without materialising a database-wide message array. */
-export async function* streamCursorVscdb(
-  path: string,
-  signal?: AbortSignal,
-  recentLimit?: number
-): AsyncIterable<RawCursorMessage> {
+export async function* streamCursorVscdb(path: string, signal?: AbortSignal): AsyncIterable<RawCursorMessage> {
   const db = new Database(path, { readonly: true });
   try {
-    yield* readComposers(createSource(db, recentLimit), signal);
+    yield* readComposers(createSource(db), signal);
   } finally {
     db.close();
   }
@@ -40,30 +36,14 @@ async function* readComposers(source: CursorVscdbSource | null, signal?: AbortSi
   if (!source) return;
   for (const composerId of source.mainComposerIds()) {
     signal?.throwIfAborted();
-    // Cursor names a chat in its composer data; that name is what the chat list shows.
-    const sessionTitle = composerTitle(source.composerData(composerId));
-    for await (const message of readCursorComposer(source, composerId, signal)) {
-      yield sessionTitle ? { ...message, sessionTitle } : message;
-    }
+    yield* readCursorComposer(source, composerId, signal);
   }
 }
 
-/** `composerData.name` holds the generated chat name; it is blank until Cursor has named the chat. */
-function composerTitle(data: unknown): string | null {
-  if (typeof data !== "object" || data === null) return null;
-  const name = (data as { name?: unknown }).name;
-  if (typeof name !== "string") return null;
-  const title = name.replace(/\s+/gu, " ").trim();
-  return title.length > 0 ? title : null;
-}
-
 /** A workspace database without the chat tables is not a conversation store. */
-function createSource(db: Database.Database, recentLimit?: number): CursorVscdbSource | null {
+function createSource(db: Database.Database): CursorVscdbSource | null {
   if (!hasTable(db, "composerHeaders") || !hasTable(db, "cursorDiskKV")) return null;
-  const mainComposerQuery = "SELECT composerId FROM composerHeaders WHERE isSubagent = 0 AND composerId IS NOT NULL";
-  const mainComposers = recentLimit === undefined
-    ? db.prepare(mainComposerQuery)
-    : db.prepare(`${mainComposerQuery} ORDER BY lastUpdatedAt DESC LIMIT ${Math.max(1, Math.trunc(recentLimit))}`);
+  const mainComposers = db.prepare("SELECT composerId FROM composerHeaders WHERE isSubagent = 0 AND composerId IS NOT NULL");
   const diskValue = db.prepare("SELECT value FROM cursorDiskKV WHERE key = ?");
   const parse = (key: string): unknown => {
     const row = diskValue.get(key) as { value?: unknown } | undefined;

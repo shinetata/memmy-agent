@@ -2,6 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { LocalSessionReadError, type LocalSessionReader } from "../../adapters/outbound/agent-source/session-reference/local-session-reader.js";
 import {
   createCollabService,
   historyBoundary,
@@ -26,9 +27,32 @@ interface Call {
   body: unknown;
 }
 
-/** Answers cloud and Memory requests from a route table and records each call. */
+/** The local session reader answering from the same route table as the fetcher, by fetcher. */
+const readersOf = new WeakMap<typeof fetch, LocalSessionReader>();
+
+/**
+ * Answers cloud requests, and reads of this machine's agent sessions, from one route table and records each call.
+ * The reads keep the paths they had as Memory service requests, so a test can name them the same way.
+ */
 function fakeFetch(routes: Record<string, (call: Call) => unknown>) {
   const calls: Call[] = [];
+  const readLocal = async (path: string, body: unknown): Promise<any> => {
+    const call: Call = { url: `local:${path}`, method: "POST", headers: {}, body };
+    calls.push(call);
+    const handler = routes[`POST ${path}`];
+    if (!handler) throw new LocalSessionReadError("not_found", "no route");
+    const result = await handler(call);
+    if (!(result instanceof Response)) return result;
+    const payload = await result.json().catch(() => ({}));
+    if (result.status === 404) throw new LocalSessionReadError("not_found", payload?.error?.message ?? "not found");
+    if (!result.ok) throw new Error(`local read failed (${result.status})`);
+    return payload;
+  };
+  const localSessions: LocalSessionReader = {
+    available: (input) => readLocal("/api/v1/agent-sessions/available", input),
+    read: async (input) => (await readLocal("/api/v1/agent-sessions/read", input)).session,
+    readMany: (input) => readLocal("/api/v1/agent-sessions/read-many", input)
+  };
   const fetcher = (async (input: string | URL, init?: RequestInit) => {
     const url = String(input);
     const call: Call = {
@@ -44,6 +68,7 @@ function fakeFetch(routes: Record<string, (call: Call) => unknown>) {
     const result = await handler(call);
     return result instanceof Response ? result : new Response(JSON.stringify(result), { status: 200 });
   }) as typeof fetch;
+  readersOf.set(fetcher, localSessions);
   return { fetcher, calls };
 }
 
@@ -53,7 +78,7 @@ function service(fetcher: typeof fetch, overrides: Partial<CollabServiceOptions>
   return createCollabService({
     cloudBaseUrl: "https://cloud.test.invalid",
     getAccount: () => ({ accountId: "u-b", credential: "uuid-b" }),
-    memory: { baseUrl: "http://127.0.0.1:18960", token: "mem-token" },
+    localSessions: readersOf.get(fetcher) ?? null,
     projectsDir: root,
     fetcher,
     now: () => new Date("2026-10-22T06:32:00.000Z"),
@@ -563,14 +588,7 @@ describe("collab service", () => {
         return { code: 0, data: { sessions: [{ id: `id-${upload.sourceSessionId}` }] } };
       }
     } as Record<string, (call: Call) => unknown>;
-    const fetcher = (async (input: string | URL, init?: RequestInit) => {
-      const url = String(input);
-      const key = `${init?.method ?? "GET"} ${new URL(url).pathname}`;
-      const handler = routes[key];
-      const call = { url, method: init?.method ?? "GET", headers: {}, body: init?.body ? JSON.parse(String(init.body)) : undefined };
-      if (!handler) return new Response(JSON.stringify({ code: 404, message: "no route", data: null }), { status: 404 });
-      return new Response(JSON.stringify(await handler(call)), { status: 200 });
-    }) as typeof fetch;
+    const { fetcher } = fakeFetch(routes);
     const svc = service(fetcher);
 
     await svc.saveLinks("p-1", { groups: [{ sourceId: "claude_code", groupId: "/repo", excluded: [] }], sessions: [] });
@@ -824,7 +842,7 @@ describe("collab service", () => {
     await expect(service(fetcher).readSession(cloudSession.id)).rejects.toMatchObject({ code: "not_found", message: "项目或会话不存在，或你不是该项目的成员" });
     const offline = (async () => { throw new TypeError("fetch failed"); }) as typeof fetch;
     await expect(service(offline).listProjects()).rejects.toMatchObject({ message: "暂时无法连接 Memmy 云端，请稍后重试。" });
-    await expect(service(fetcher, { memory: null }).listLocalSessions({})).rejects.toMatchObject({ message: "无法连接 Memmy，请打开 Memmy 后重试。" });
+    await expect(service(fetcher, { localSessions: null }).listLocalSessions({})).rejects.toMatchObject({ message: "无法读取本机会话，请重启 Memmy 后重试。" });
   });
 });
 
