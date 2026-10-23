@@ -12,6 +12,7 @@ import {
   collectFragments,
   createCollabItemsService,
   isHistoryTurn,
+  itemStateOf,
   newItemMarkdown,
   normalizeItemMarkdown,
   parseItemMarkdown,
@@ -132,12 +133,26 @@ describe("history and transcripts", () => {
     expect(chunks.join("\n\n").match(/成员：问题/gu)).toHaveLength(5);
     expect(chunks[0]).toContain("步骤：Bash ×2、Edit");
   });
+
+  it("keeps both ends of a long reply and marks it as the Agent's", () => {
+    const reply = `改动范围${"中".repeat(5_000)}剩下的问题`;
+    const [chunk] = transcriptChunks([{ question: "问", reply, steps: [], startedAt: new Date(BASE).toISOString() }], 24_000);
+    expect(chunk).toContain("Agent：改动范围");
+    expect(chunk).toContain("剩下的问题");
+    expect(chunk!.length).toBeLessThan(3_000);
+  });
 });
 
 describe("item Markdown", () => {
   it("reads the name, summary and latest timeline entry", () => {
     expect(parseItemMarkdown(markdown("知识库分享", "10/23 上线"))).toEqual({ name: "知识库分享", summary: "知识库分享的摘要", latest: "10/23 上线" });
     expect(parseItemMarkdown(newItemMarkdown("新事项", "做什么"))).toEqual({ name: "新事项", summary: "做什么", latest: "" });
+  });
+
+  it("reads the state paragraph, on its label's line or below it", () => {
+    expect(itemStateOf(markdown("知识库分享"))).toBe("进行中");
+    expect(itemStateOf("# a\n\n**现状**：\n\n（截至 10/23）接口已上线，\n前端待联调\n\n## 决策\n")).toBe("（截至 10/23）接口已上线， 前端待联调");
+    expect(itemStateOf(newItemMarkdown("新事项", "做什么"))).toBe("");
   });
 
   it("strips the fence and preamble and keeps the item's own name", () => {
@@ -329,6 +344,36 @@ describe("createCollabItemsService: history", () => {
     expect(merges[1]!.user).toContain("10/22 手动补充");
     expect(state.items[0]).toMatchObject({ version: 3, sources: ["s-a"] });
     expect(state.items[0]!.markdown).toContain("10/22 手动补充");
+  });
+
+  it("shows sorting each item's state and tells each merge which other items a session also went into", async () => {
+    const { cloud } = fakeCloud({ items: [item()], pending: [pending[0]!], turns: { "s-a": historyTurns("弹窗") } });
+    const { complete, calls } = fakeModel({
+      divide: { assign: [{ item_id: "item-a", sessions: ["s1"] }], creates: [{ name: "分享权限", summary: "谁能分享", sessions: ["s1"] }] }
+    });
+    await createCollabItemsService({ cloud, complete, now }).organize("p1");
+
+    expect(calls.find((call) => call.system === DIVIDE_SYSTEM_PROMPT)!.user).toContain("\"state\":\"进行中\"");
+    const merges = calls.filter((call) => call.system === MERGE_SYSTEM_PROMPT);
+    expect(merges.map((call) => /同时归入了：([^。]+)/u.exec(call.user)?.[1])).toEqual(["分享权限", "知识库分享"]);
+  });
+
+  it("neither creates an item nor records a source when the merge finds nothing for it", async () => {
+    const { cloud, state } = fakeCloud({ items: [item()], pending: [pending[0]!], turns: { "s-a": historyTurns("弹窗") } });
+    const complete = async (request: AgentModelRequest) => {
+      if (request.system === SUMMARY_SYSTEM_PROMPT) return "**目标**：弹窗";
+      if (request.system === DIVIDE_SYSTEM_PROMPT) {
+        return JSON.stringify({ assign: [{ item_id: "item-a", sessions: ["s1"] }], creates: [{ name: "分享权限", summary: "谁能分享", sessions: ["s1"] }] });
+      }
+      // Nothing in the material belongs here: the file comes back as it was, the new one as its bare template.
+      return /<<<\n([\s\S]*?)\n>>>/u.exec(request.user)![1]!;
+    };
+    const result = await createCollabItemsService({ cloud, complete, now }).organize("p1");
+
+    expect(result).toMatchObject({ sessions: 1, created: 0, updated: 0 });
+    expect(state.posts).toHaveLength(0);
+    expect(state.puts).toHaveLength(0);
+    expect(state.organized).toEqual(["s-a"]);
   });
 
   it("leaves a session pending when the item it went into could not be saved", async () => {
