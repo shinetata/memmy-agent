@@ -1058,12 +1058,14 @@ async function installBundledCliIfNeeded(): Promise<void> {
     const cliDirectory = join(process.resourcesPath, "cli");
     const memoryCli = join(cliDirectory, "memmy-memory");
     const memmyCli = join(cliDirectory, "memmy");
-    await Promise.all([access(memoryCli), access(memmyCli)]);
+    const sessionCli = join(cliDirectory, "memmy-session");
+    await Promise.all([access(memoryCli), access(memmyCli), access(sessionCli)]);
 
     const binDirectory = await resolveCliInstallDirectory();
     await mkdir(binDirectory, { recursive: true });
     await installSymlink(memoryCli, join(binDirectory, "memmy-memory"));
     await installSymlink(memmyCli, join(binDirectory, "memmy"));
+    await installSymlink(sessionCli, join(binDirectory, "memmy-session"));
     await ensureUserPathIncludes(binDirectory);
   } catch (error) {
     console.warn("Memmy CLI auto-install skipped:", error);
@@ -1107,14 +1109,17 @@ function resolveCliToolEntries(): Array<{ name: string; source: string }> {
   if (app.isPackaged) {
     const cliDirectory = join(process.resourcesPath, "cli");
     return [
-      { name: "memmy-memory", source: join(cliDirectory, "memmy-memory") }
+      { name: "memmy-memory", source: join(cliDirectory, "memmy-memory") },
+      { name: "memmy-session", source: join(cliDirectory, "memmy-session") }
     ];
   }
 
   const rootDirectory = resolveDevelopmentRoot();
   const memoryCli = join(rootDirectory, "Memory", "dist", "src", "cli", "index.js");
+  const sessionCli = join(rootDirectory, "App", "backend", "dist", "src", "cli", "memmy-session.js");
   return [
-    { name: "memmy-memory", source: memoryCli }
+    { name: "memmy-memory", source: memoryCli },
+    { name: "memmy-session", source: sessionCli }
   ];
 }
 
