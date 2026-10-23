@@ -1,0 +1,170 @@
+// @vitest-environment happy-dom
+
+/**
+ * The board's row menu. A row opens the session reader when clicked, and the menu lives inside that row, so
+ * every menu click has to stay inside the menu: copying a link shows only the toast, never the reader.
+ */
+import { act } from "react";
+import type { ReactNode } from "react";
+import { createRoot, type Root } from "react-dom/client";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resetCollabProjectsStore } from "../../app/collab-projects-store.js";
+import { I18nProvider } from "../../i18n/i18n-provider.js";
+import { CollabPage } from "../collab-page.js";
+
+const mocks = vi.hoisted(() => ({
+  listProjects: vi.fn(),
+  listSessions: vi.fn(),
+  readSessionDetail: vi.fn(),
+  removeSession: vi.fn(),
+  syncSessions: vi.fn(),
+  getSyncProgress: vi.fn(),
+  writeText: vi.fn()
+}));
+
+vi.mock("../../api/collab-client.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../api/collab-client.js")>();
+  return { ...actual, createHttpCollabClient: () => mocks };
+});
+
+vi.mock("../../app/providers.js", () => ({
+  useApiClients: () => ({ clients: { runtimeConfig: {} }, setClients: vi.fn() })
+}));
+
+// The frame is the app chrome around the board; these tests only need the board.
+vi.mock("../app-frame.js", () => ({
+  AppFrame: (props: { children: ReactNode }) => <div>{props.children}</div>
+}));
+
+(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+const project = {
+  id: "p-1",
+  name: "Memmy项目协作记忆",
+  role: "owner",
+  memberCount: 2,
+  sessionCount: 1,
+  createdAt: "2026-10-21T03:00:00.000Z",
+  localProjectId: null
+};
+
+const session = {
+  id: "s-1",
+  projectId: project.id,
+  projectName: project.name,
+  title: "Memmy项目协作记忆方案",
+  lastQuestion: "关于Memmy项目协作事项的部分",
+  memberName: "快乐团子",
+  mine: true,
+  source: "claude_code",
+  turnCount: 1,
+  lastActiveAt: "2026-10-23T03:11:00.000Z",
+  link: "memmy://collab/p-1/s-1",
+  shareText: "Memmy 协作会话：Memmy项目协作记忆方案"
+};
+
+async function flush(): Promise<void> {
+  for (let index = 0; index < 8; index += 1) {
+    await act(async () => new Promise((resolve) => window.setTimeout(resolve, 0)));
+  }
+}
+
+describe("collab session row menu", () => {
+  let container: HTMLDivElement;
+  let root: Root;
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    resetCollabProjectsStore();
+    Object.defineProperty(window.navigator, "clipboard", {
+      value: { writeText: mocks.writeText },
+      configurable: true
+    });
+    mocks.listProjects.mockResolvedValue([project]);
+    mocks.listSessions.mockResolvedValue({ project, sessions: [session], total: 1 });
+    mocks.getSyncProgress.mockResolvedValue({ running: false, total: 0, completed: 0, failed: 0 });
+    mocks.syncSessions.mockResolvedValue({ uploaded: 0, removed: 0, failed: 0 });
+    mocks.readSessionDetail.mockResolvedValue({ session, turns: [] });
+    mocks.writeText.mockResolvedValue(undefined);
+
+    container = document.createElement("div");
+    document.body.append(container);
+    root = createRoot(container);
+    await act(async () => {
+      root.render(
+        <I18nProvider language="zh-CN">
+          <CollabPage />
+        </I18nProvider>
+      );
+    });
+    await flush();
+  });
+
+  afterEach(async () => {
+    await act(async () => root.unmount());
+    container.remove();
+    resetCollabProjectsStore();
+  });
+
+  function row(): HTMLElement {
+    const rows = container.querySelectorAll<HTMLElement>("li");
+    const target = Array.from(rows).find((entry) => entry.textContent?.includes(session.title));
+    expect(target, "会话行应已渲染").toBeTruthy();
+    return target!;
+  }
+
+  function moreButton(): HTMLElement {
+    const button = row().querySelector<HTMLElement>('button[aria-label="更多"]');
+    expect(button, "会话行应有「更多」按钮").toBeTruthy();
+    return button!;
+  }
+
+  async function openMenu(): Promise<void> {
+    await act(async () => moreButton().click());
+    await flush();
+  }
+
+  function menuItem(label: string): HTMLElement | undefined {
+    return Array.from(row().querySelectorAll<HTMLElement>('[role="menuitem"]'))
+      .find((entry) => entry.textContent?.trim() === label);
+  }
+
+  it("copies the link and only shows the toast", async () => {
+    await openMenu();
+    const copy = menuItem("复制链接");
+    expect(copy, "菜单应提供「复制链接」").toBeTruthy();
+
+    await act(async () => copy!.click());
+    await flush();
+
+    expect(mocks.writeText).toHaveBeenCalledWith(session.shareText);
+    expect(document.body.textContent).toContain("链接已复制");
+    expect(mocks.readSessionDetail).not.toHaveBeenCalled();
+    // The reader is the wide modal; nothing over the board may be open after copying.
+    expect(document.querySelector(".modal")).toBeNull();
+    expect(menuItem("复制链接")).toBeUndefined();
+  });
+
+  it("opens the reader when the row itself is clicked", async () => {
+    const title = Array.from(row().querySelectorAll<HTMLElement>("span"))
+      .find((entry) => entry.textContent?.trim() === session.title);
+    expect(title, "会话行应显示标题").toBeTruthy();
+
+    await act(async () => title!.click());
+    await flush();
+
+    expect(mocks.readSessionDetail).toHaveBeenCalledWith(session.id);
+  });
+
+  it("closes the menu without opening the reader when the backdrop is clicked", async () => {
+    await openMenu();
+    const backdrop = row().querySelector<HTMLElement>('button[aria-label="取消"]');
+    expect(backdrop, "菜单打开时应有遮罩").toBeTruthy();
+
+    await act(async () => backdrop!.click());
+    await flush();
+
+    expect(menuItem("复制链接")).toBeUndefined();
+    expect(mocks.readSessionDetail).not.toHaveBeenCalled();
+  });
+});
