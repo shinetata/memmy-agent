@@ -8,7 +8,7 @@ import { act } from "react";
 import type { ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { getCollabProjectsSnapshot, resetCollabProjectsStore } from "../../app/collab-projects-store.js";
+import { getCollabProjectsSnapshot, loadCollabProjects, resetCollabProjectsStore } from "../../app/collab-projects-store.js";
 import { I18nProvider } from "../../i18n/i18n-provider.js";
 import { CollabPage } from "../collab-page.js";
 
@@ -147,16 +147,29 @@ describe("project board", () => {
     return found!;
   }
 
-  it("keeps the local board usable when the cloud list fails", async () => {
-    // 云端异常（比如测试云未部署协作接口）不能把本地项目挡住。
+  it("keeps the local board usable and silent when the cloud list fails", async () => {
+    // 本地项目与云端无关：云端异常时照常渲染，也不该提示用户云端出问题了。
     mocks.listProjects.mockRejectedValue(new Error("云端返回错误码 50000"));
     await renderBoard();
 
     expect(document.body.textContent).toContain(PROJECT.name);
-    expect(document.body.textContent).toContain("云端暂时不可用");
-    // 本地任务照常展示，共享相关的请求不会被触发。
     expect(document.body.textContent).toContain(TASK.title);
+    expect(document.body.textContent).not.toContain("云端暂时不可用");
     expect(mocks.listSessions).not.toHaveBeenCalled();
+  });
+
+  it("tells the person when a shared project cannot reach the cloud", async () => {
+    // 已共享的项目依赖云端，刷新失败时提示共享内容读不到，并提供重试。
+    mocks.listProjects.mockResolvedValueOnce([CLOUD_PROJECT]);
+    await renderBoard();
+    mocks.listProjects.mockRejectedValueOnce(new Error("云端返回错误码 50000"));
+    await act(async () => {
+      await loadCollabProjects(mocks as never);
+    });
+    await flush();
+
+    expect(document.body.textContent).toContain("云端暂时不可用");
+    expect(document.body.textContent).toContain("重试");
   });
 
   it("lists a local project's own tasks without a sharing reminder", async () => {

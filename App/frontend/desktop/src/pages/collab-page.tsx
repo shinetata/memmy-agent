@@ -424,12 +424,7 @@ export function CollabPage() {
     <AppFrame title={project?.name ?? t("nav.collab")}>
       <div className={styles.page}>
         {!project ? (
-          snapshot.error !== null ? (
-            <div className={styles.empty} role="alert">
-              <p>{snapshot.error || t("collab.loadFailed")}</p>
-              <Button size="sm" onClick={() => collab && void loadCollabProjects(collab)}>{t("collab.retry")}</Button>
-            </div>
-          ) : snapshot.projects === null ? (
+          snapshot.projects === null ? (
             <p className={styles.loading}>{t("collab.loading")}</p>
           ) : (
             <div className={styles.empty}>
@@ -442,8 +437,8 @@ export function CollabPage() {
           <>
             <div className={styles.scroller}>
               <div className={styles.wrap}>
-                {/* 项目在本机，云端只承载共享内容：云端不可用时本机看板照常使用，只提示共享功能暂不可用。 */}
-                {snapshot.error !== null ? (
+                {/* 只有已共享的项目才依赖云端；本地项目不提示云端异常，等开启共享时再报错。 */}
+                {shared !== null && snapshot.error !== null ? (
                   <div className={styles.cloudNotice} role="status">
                     <span>{t("collab.cloudUnavailable", { message: snapshot.error })}</span>
                     <Button size="sm" variant="ghost" onClick={() => collab && void loadCollabProjects(collab)}>
