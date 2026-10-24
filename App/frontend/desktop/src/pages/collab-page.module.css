@@ -1577,9 +1577,10 @@
   gap: 12px;
   min-height: 0;
   padding: 18px 16px 24px;
-  border-left: 1px solid var(--collab-line);
+  /* 与主窗口同一底色，只靠一条中性细线分区：面板不再铺一层 oat 底色，避免看起来像另一个窗口 */
+  border-left: 1px solid rgba(0, 0, 0, 0.07);
   overflow-y: auto;
-  background: var(--collab-surface);
+  background: transparent;
 }
 
 .configHead {
@@ -1606,6 +1607,8 @@
   border: 1px solid var(--collab-line);
   border-radius: 12px;
   background: var(--color-background-paper, #fff);
+  /* 面板与卡片同为白底，靠这条极轻的投影把卡片托起来，不靠色差 */
+  box-shadow: 0 1px 2px rgba(17, 29, 28, 0.04);
 }
 
 .configCardHead {
