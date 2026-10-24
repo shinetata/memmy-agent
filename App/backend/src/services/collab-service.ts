@@ -9,6 +9,8 @@ import { dirname, join } from "node:path";
 import type { ApiErrorCode } from "./error-envelope.js";
 import { LocalSessionReadError, type LocalSessionReader } from "../adapters/outbound/agent-source/session-reference/local-session-reader.js";
 import { ensureDirectory, uniqueProjectDirectory } from "./project-directory.js";
+import { MAX_PROJECT_INSTRUCTIONS_CHARS } from "@memmy/local-api-contracts";
+import type { ProjectInstructionsService } from "./project-instructions-service.js";
 
 const CLOUD_TIMEOUT_MS = 20_000;
 /** A delete slower than this is worth a log line: the cloud call and the links write are the only things in it. */
@@ -92,6 +94,11 @@ export interface CollabServiceOptions {
   now?: () => Date;
   /** An association's upload finished with new sessions in the cloud; the owner organizes their history then. */
   onSessionsUploaded?: (projectId: string) => void;
+  /**
+   * 项目指令的本机存储。协作项目的指令以云端为准，读到或保存时同步一份到本机，
+   * 项目里的任务（Memmy 任务与其他 Agent 的会话）据此注入；未提供时只做云端读写。
+   */
+  projectInstructions?: ProjectInstructionsService;
 }
 
 export interface CollabProject {
@@ -106,6 +113,8 @@ export interface CollabProject {
    * online project behave like a local one: tasks, sessions and the sidebar's expandable task list.
    */
   localProjectId: string | null;
+  /** 项目指令全文；成员只读。未设定时为空串。 */
+  instructions: string;
 }
 
 export interface CollabProjectSession {
@@ -413,6 +422,12 @@ export interface CollabService {
   setJoinMode(projectId: string, joinMode: CollabJoinMode): Promise<{ joinMode: CollabJoinMode }>;
   /** Renames the project in the cloud, which is what every member's list reads. Owners only, enforced there. */
   renameProject(projectId: string, name: string): Promise<{ project: CollabProject }>;
+  /**
+   * Saves the project instructions in the cloud (owners and admins, enforced there) and keeps this computer's copy
+   * in step, so the tasks started here follow them. `directory` is the local project's folder: the board knows it and
+   * passes it, so the copy lands where this computer's tasks read it.
+   */
+  updateInstructions(projectId: string, text: string, directory?: string): Promise<{ project: CollabProject }>;
   approveRequest(projectId: string, userId: string): Promise<{ member: CollabMember }>;
   rejectRequest(projectId: string, userId: string): Promise<{ ok: true }>;
   setMemberRole(projectId: string, userId: string, role: Exclude<CollabRole, "owner">): Promise<{ member: CollabMember }>;
@@ -931,6 +946,40 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
   }
 
   /**
+   * Copies a project's cloud instructions to this computer, where its tasks read them.
+   * A failed copy must not fail the cloud call that carried the text: the board still shows it, and the next read
+   * of the project list tries again.
+   */
+  async function mirrorInstructions(projectId: string, instructions: string, directory: string | null | undefined): Promise<void> {
+    if (!options.projectInstructions || !directory) return;
+    try {
+      await options.projectInstructions.mirrorCloud(directory, instructions, projectId);
+    } catch (error) {
+      console.warn(`Project instructions not mirrored for ${projectId}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  /** 云端项目被删除或停止共享后，它的指令留在本机项目上继续生效。 */
+  async function demoteInstructions(directory: string | null | undefined): Promise<void> {
+    if (!options.projectInstructions || !directory) return;
+    try {
+      await options.projectInstructions.demoteToLocal(directory);
+    } catch (error) {
+      console.warn(`Project instructions not kept after unsharing: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  /** Leaving someone else's project ends the instructions this computer copied from it. */
+  async function forgetInstructions(directory: string | null | undefined): Promise<void> {
+    if (!options.projectInstructions || !directory) return;
+    try {
+      await options.projectInstructions.forget(directory);
+    } catch (error) {
+      console.warn(`Project instructions not cleared: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  /**
    * Projects the person is still in, so a sync stops sending sessions to one they were removed from. When the
    * cloud cannot answer, every project is kept: a failed listing must not look like being removed everywhere.
    */
@@ -981,6 +1030,8 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
       // Each project's local working project is recorded on this computer, next to its session links.
       const bound = await Promise.all(projects.map(async (project) => {
         const stored = await readLinks(project.id, account.accountId);
+        // The list is read at every launch, so this is where members pick up instructions the owner changed.
+        await mirrorInstructions(project.id, project.instructions, stored.workingDirectory);
         return { ...project, localProjectId: stored.localProjectId };
       }));
       return { projects: bound };
@@ -1148,10 +1199,13 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
     async deleteProject(projectId) {
       const account = requireAccount();
       const startedAt = now().getTime();
+      const before = await readLinks(projectId, account.accountId);
       await cloud(`/projects/${encodeURIComponent(projectId)}`, { method: "DELETE" });
       const cloudDoneAt = now().getTime();
       syncProgress.delete(projectId);
       await releaseBinding(projectId, account.accountId, "delete");
+      // 指令是所有者写的：云端项目没了，这条指令仍属于本机项目，转为本机指令而不是丢掉。
+      await demoteInstructions(before.workingDirectory);
       const finishedAt = now().getTime();
       if (finishedAt - startedAt > SLOW_DELETE_MS) {
         console.warn(`Deleting project ${projectId} took ${finishedAt - startedAt}ms (cloud ${cloudDoneAt - startedAt}ms, links ${finishedAt - cloudDoneAt}ms)`);
@@ -1161,9 +1215,11 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
 
     async leaveProject(projectId) {
       const account = requireAccount();
+      const before = await readLinks(projectId, account.accountId);
       await cloud(`/projects/${encodeURIComponent(projectId)}/leave`, { method: "POST", body: {} });
       syncProgress.delete(projectId);
       await releaseBinding(projectId, account.accountId, "leave");
+      await forgetInstructions(before.workingDirectory);
       // Sessions downloaded for references were readable only as a member.
       await rm(join(projectsDir, safeSegment(projectId), "sessions"), { recursive: true, force: true });
       return { ok: true };
@@ -1206,6 +1262,19 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
       // The binding stays as it is; only the name the board and the sidebar read comes back.
       const stored = await readLinks(projectId, account.accountId);
       return { project: { ...toProject(record(data.project)), localProjectId: stored.localProjectId } };
+    },
+
+    async updateInstructions(projectId, text, directory) {
+      const instructions = text.trim();
+      if ([...instructions].length > MAX_PROJECT_INSTRUCTIONS_CHARS) {
+        throw new CollabError("invalid_argument", `项目指令不超过 ${MAX_PROJECT_INSTRUCTIONS_CHARS} 字`);
+      }
+      const data = await cloud(`/projects/${encodeURIComponent(projectId)}`, { method: "PATCH", body: { instructions } });
+      const account = requireAccount();
+      const stored = await readLinks(projectId, account.accountId);
+      const project = { ...toProject(record(data.project)), localProjectId: stored.localProjectId };
+      await mirrorInstructions(projectId, project.instructions, directory ?? stored.workingDirectory);
+      return { project };
     },
 
     async approveRequest(projectId, userId) {
@@ -1815,7 +1884,9 @@ function toProject(raw: unknown): CollabProject {
     sessionCount: number(project.sessionCount),
     createdAt: nullableText(project.createdAt),
     // The cloud has no notion of this computer's project; listProjects fills it in from the local store.
-    localProjectId: null
+    localProjectId: null,
+    // A cloud from before instructions existed omits the field; the board then shows the empty state.
+    instructions: text(project.instructions).trim()
   };
 }
 

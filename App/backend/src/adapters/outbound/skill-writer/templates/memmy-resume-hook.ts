@@ -23,6 +23,7 @@ import {
   loadRuntimeL3,
   notifyRuntimeBoundary,
   openRuntimeSession,
+  readProjectInstructions,
   startRuntimeTurn
 } from "./memmy-workspace-bridge.mjs";
 
@@ -201,11 +202,35 @@ async function handleL3LifecycleEvent(payload) {
   }
   if (event === "postcompact") {
     await notifyRuntimeBoundary(session, "token_compaction");
-    writeLifecycleOutput(payload, "");
+    // 压缩会丢掉系统提示词之外的历史，项目指令要在压缩后重新给一次。
+    writeLifecycleOutput(payload, await projectInstructionsContext(payload));
     return;
   }
   const loaded = await loadRuntimeL3(session);
-  writeLifecycleOutput(payload, loaded.additionalContext);
+  writeLifecycleOutput(payload, [loaded.additionalContext, await projectInstructionsContext(payload)].filter(Boolean).join("\n\n"));
+}
+
+/**
+ * 项目指令：会话的工作目录属于某个项目时，把该项目的指令交给 Agent。
+ * 与其他进程共用一份文件，读不到就当作该项目没有设定指令，不影响本轮对话。
+ */
+async function projectInstructionsContext(payload) {
+  try {
+    const text = normalizeText(await readProjectInstructions({
+      configUrl: CONFIG_URL,
+      directory: workspacePath(payload) || null
+    }));
+    if (!text) return "";
+    return [
+      '<project_instructions source="memmy">',
+      "本项目设定了以下项目指令，在本项目中的任务里遵循：",
+      "",
+      text,
+      "</project_instructions>"
+    ].join("\n");
+  } catch {
+    return "";
+  }
 }
 
 function writeLifecycleOutput(payload, context) {

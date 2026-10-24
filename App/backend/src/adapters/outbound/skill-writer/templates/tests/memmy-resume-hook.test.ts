@@ -355,6 +355,125 @@ describe("memmy resume hook stop capture", () => {
     }
   }, 30000);
 
+  it("injects the project instructions of the working directory on session start and after compaction", async () => {
+    tempDir = mkdtempSync(join(tmpdir(), "memmy-project-instructions-hook-"));
+    const server = createServer(async (request: IncomingMessage, response: ServerResponse) => {
+      await requestBody(request);
+      response.setHeader("content-type", "application/json");
+      if (request.url === "/api/v1/health") {
+        response.end(JSON.stringify({ features: { l3WorldModelProtocolVersions: [2] } }));
+        return;
+      }
+      if (request.url === "/api/v1/sessions/open") {
+        response.end(JSON.stringify({ sessionId: "memory-session", projectId: `ws_${"b".repeat(64)}` }));
+        return;
+      }
+      if (request.url?.startsWith("/api/v1/l3-world-model/sessions/memory-session/context?")) {
+        response.end(JSON.stringify({ sessionId: "memory-session", memoryVersion: 3, renderedContext: "", sourceMemoryIds: [] }));
+        return;
+      }
+      if (request.url?.startsWith("/api/v1/sessions/memory-session/l3-world-model-trace-head?")) {
+        response.end(JSON.stringify({ throughL1MemoryId: "l1-last", traceSeq: 9 }));
+        return;
+      }
+      if (request.url === "/api/v1/sessions/memory-session/l3-world-model-boundary") {
+        response.end(JSON.stringify({ batches: [] }));
+        return;
+      }
+      response.statusCode = 404;
+      response.end(JSON.stringify({ error: { message: "not found" } }));
+    });
+    await listen(server);
+    try {
+      const port = (server.address() as { port: number }).port;
+      const hookScriptPath = installHookFixture(tempDir, "claude_code", "claude-code", `http://127.0.0.1:${port}`, runtimeAsset);
+      // 项目指令与钩子读的是同一个位置：配置文件所在目录下的 project-instructions.json，键是项目的目录。
+      writeFileSync(join(tempDir, "project-instructions.json"), JSON.stringify({
+        version: 1,
+        projects: {
+          [tempDir]: {
+            text: "前端代码遵循《前端代码规范》，新增文案同步补充中英文。",
+            origin: "cloud",
+            cloudProjectId: "p-1",
+            updatedAt: "2026-10-24T12:00:00.000Z",
+          },
+        },
+      }));
+
+      const started = await runHook(hookScriptPath, {
+        hook_event_name: "SessionStart",
+        session_id: "host-session",
+        source: "startup",
+        cwd: tempDir,
+      });
+      expect(started.status).toBe(0);
+      const startContext = (JSON.parse(started.stdout) as Record<string, any>).hookSpecificOutput?.additionalContext;
+      expect(startContext).toContain('<project_instructions source="memmy">');
+      expect(startContext).toContain("前端代码遵循《前端代码规范》，新增文案同步补充中英文。");
+      expect(startContext).toContain("</project_instructions>");
+
+      // 压缩后系统提示词要重新拿到项目指令，否则压缩会把规则丢掉。
+      const compacted = await runHook(hookScriptPath, {
+        hook_event_name: "PostCompact",
+        session_id: "host-session",
+        cwd: tempDir,
+      });
+      expect(compacted.status).toBe(0);
+      const compactContext = (JSON.parse(compacted.stdout) as Record<string, any>).hookSpecificOutput?.additionalContext;
+      expect(compactContext).toContain("前端代码遵循《前端代码规范》");
+    } finally {
+      await close(server);
+    }
+  }, 30000);
+
+  it("leaves a session outside any project without project instructions", async () => {
+    tempDir = mkdtempSync(join(tmpdir(), "memmy-project-instructions-none-"));
+    const server = createServer(async (request: IncomingMessage, response: ServerResponse) => {
+      await requestBody(request);
+      response.setHeader("content-type", "application/json");
+      if (request.url === "/api/v1/health") {
+        response.end(JSON.stringify({ features: { l3WorldModelProtocolVersions: [2] } }));
+        return;
+      }
+      if (request.url === "/api/v1/sessions/open") {
+        response.end(JSON.stringify({ sessionId: "memory-session", projectId: `ws_${"b".repeat(64)}` }));
+        return;
+      }
+      if (request.url?.startsWith("/api/v1/l3-world-model/sessions/memory-session/context?")) {
+        response.end(JSON.stringify({ sessionId: "memory-session", memoryVersion: 3, renderedContext: "", sourceMemoryIds: [] }));
+        return;
+      }
+      response.statusCode = 404;
+      response.end(JSON.stringify({ error: { message: "not found" } }));
+    });
+    await listen(server);
+    try {
+      const port = (server.address() as { port: number }).port;
+      const hookScriptPath = installHookFixture(tempDir, "claude_code", "claude-code", `http://127.0.0.1:${port}`, runtimeAsset);
+      writeFileSync(join(tempDir, "project-instructions.json"), JSON.stringify({
+        version: 1,
+        projects: {
+          [join(tempDir, "some-project")]: {
+            text: "别的项目的指令",
+            origin: "local",
+            cloudProjectId: null,
+            updatedAt: "2026-10-24T12:00:00.000Z",
+          },
+        },
+      }));
+      const started = await runHook(hookScriptPath, {
+        hook_event_name: "SessionStart",
+        session_id: "host-session",
+        source: "startup",
+        cwd: tempDir,
+      });
+      expect(started.stdout).not.toContain("project_instructions");
+      expect(started.stdout).not.toContain("别的项目的指令");
+    } finally {
+      await close(server);
+    }
+  }, 30000);
+
   it("returns the host's empty success response when short-hook health cannot be parsed", async () => {
     tempDir = mkdtempSync(join(tmpdir(), "memmy-cursor-health-failure-"));
     const paths: string[] = [];

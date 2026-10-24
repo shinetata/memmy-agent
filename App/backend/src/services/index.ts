@@ -1,4 +1,5 @@
 import type { AccountChannel } from "@memmy/local-api-contracts";
+import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { AppStateStore } from "../infrastructure/app-state-store/index.js";
 import { type MemmyConfigWriter } from "../infrastructure/memmy-config/index.js";
@@ -58,6 +59,10 @@ import {
   type SkillDistributionService
 } from "./skill-distribution-service.js";
 import { createTurnService, type TurnService } from "./turn-service.js";
+import {
+  createProjectInstructionsService,
+  type ProjectInstructionsService
+} from "./project-instructions-service.js";
 
 export interface BackendServices {
   memoryClient: MemoryClient;
@@ -84,6 +89,8 @@ export interface BackendServices {
   asr: AsrService;
   /** Token quota. */
   tokenQuota: TokenQuotaService;
+  /** 项目指令：本地项目与协作项目共用的本机存储。 */
+  projectInstructions: ProjectInstructionsService;
 }
 
 export interface CreateBackendServicesOptions {
@@ -260,6 +267,10 @@ export function createBackendServices(options: CreateBackendServicesOptions): Ba
     tokenQuota: createTokenQuotaService({
       cloudClient: options.cloudClient,
       accountSessionRepository: options.appStateStore.repositories.accountSession
+    }),
+    projectInstructions: createProjectInstructionsService({
+      // 与 Memmy 任务、其他 Agent 的钩子读同一份文件：配置目录下的 project-instructions.json。
+      memmyConfigPath: options.memmyConfigPath ?? join(homedir(), ".memmy", "config.yaml")
     })
   };
 }

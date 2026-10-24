@@ -141,8 +141,13 @@ export function createLocalApiServer(options: CreateLocalApiServerOptions): Fast
   if (options.collab) {
     registerCollabRoutes(app, { collab: options.collab, items: options.collabItems, authenticateRuntimeToken });
   }
-  if (options.projectDirectory) {
-    registerProjectRoutes(app, { projectDirectory: options.projectDirectory, authenticateRuntimeToken });
+  // 项目指令与托管目录都是项目自己的接口，任一需要时都注册：指令不依赖托管目录。
+  if (options.projectDirectory || options.services.projectInstructions) {
+    registerProjectRoutes(app, {
+      projectDirectory: options.projectDirectory,
+      projectInstructions: options.services.projectInstructions,
+      authenticateRuntimeToken
+    });
   }
   registerByokTokenUsageRoutes(app, {
     byokTokenUsage: options.services.byokTokenUsage,

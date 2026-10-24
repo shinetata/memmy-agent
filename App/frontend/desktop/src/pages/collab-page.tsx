@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronRight, Cloud, Folder, Layers, Link2, MessageSquarePlus, MoreHorizontal, Pencil, Quote, Search, Settings, Trash2, UserPlus, Users, X } from "lucide-react";
+import { ChevronDown, ChevronRight, Cloud, Folder, Layers, Link2, MessageSquarePlus, MoreHorizontal, PanelRight, PanelRightClose, Pencil, Quote, Search, Settings, Trash2, UserPlus, Users, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import {
@@ -37,6 +37,11 @@ import { openAgentTaskInChat } from "../app/open-agent-task.js";
 import type { AgentTaskView } from "../state/agent-chat-slice.js";
 import { useOptionalAppState } from "../state/app-state.js";
 import { ApiRequestError } from "../api/http.js";
+import {
+  readProjectInstructions,
+  saveProjectInstructions,
+  type ProjectInstructions
+} from "../api/projects-client.js";
 import { useOptionalAgentRuntimeBridge } from "../app/agent-runtime-bridge.js";
 import { useApiClients } from "../app/providers.js";
 import { Button } from "../components/button.js";
@@ -64,6 +69,13 @@ const PROGRESS_POLL_MS = 1_200;
 const MAX_PROJECT_NAME_CHARS = 20;
 const MAX_LOCAL_SESSIONS = 500;
 const EMPTY_LINKS: CollabLinks = { groups: [], sessions: [] };
+/** 还没有设定指令时的空值，看板与弹窗共用。 */
+const EMPTY_PROJECT_INSTRUCTIONS: ProjectInstructions = {
+  text: "",
+  origin: null,
+  cloudProjectId: null,
+  updatedAt: null
+};
 /** Member filter: anyone, only me, or only the other members. */
 type MemberFilter = "all" | "me" | "others";
 type BoardTab = "sessions" | "items";
@@ -199,6 +211,11 @@ export function CollabPage() {
   /** Choosing which of the project's own Memmy sessions members may read. */
   const [taskPickerOpen, setTaskPickerOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  /** 看板右侧的项目配置：指令等项目的配置项在这里查看与编辑，与侧栏无关。 */
+  const [configOpen, setConfigOpen] = useState(true);
+  /** 项目指令：本机项目与协作项目共用同一份，协作项目以云端为准。 */
+  const [instructions, setInstructions] = useState<ProjectInstructions>(EMPTY_PROJECT_INSTRUCTIONS);
+  const [instructionsOpen, setInstructionsOpen] = useState(false);
   /** 「邀请」in the header and「项目成员」in the sidebar menu open the same dialog. */
   const [membersOpen, setMembersOpen] = useState(false);
   const [deleting, setDeleting] = useState<CollabProjectSession | null>(null);
@@ -249,6 +266,56 @@ export function CollabPage() {
     setSettingsOpen(false);
     setTaskPickerOpen(true);
   }, [projectId, snapshot.taskPickerFor]);
+
+  /**
+   * 项目指令由所有者与管理员维护；仅在本机的项目没有其他成员，本机的人就是所有者。
+   * 指令读取失败时按云端列表里的内容显示，只影响展示，注入仍以本机已同步的为准。
+   */
+  const canEditInstructions = !shared || shared.role === "owner" || shared.role === "admin";
+  const instructionsDirectory = project?.rootPath ?? null;
+  const runtimeConfig = clients?.runtimeConfig ?? null;
+  /** 云端列表里的指令：本机还没同步到时先按它显示。 */
+  const sharedInstructions = shared?.instructions ?? "";
+  const runtimeBaseUrl = runtimeConfig?.baseUrl ?? null;
+
+  // 项目一打开就读一次指令；协作项目的指令在读取项目列表时已同步到本机，读不到时退回云端列表里的内容。
+  // 依赖都是基本类型：客户端对象每次渲染可能都是新的，用它做依赖会反复触发读接口。
+  useEffect(() => {
+    if (!instructionsDirectory || !runtimeBaseUrl || !runtimeConfig) {
+      setInstructions({ ...EMPTY_PROJECT_INSTRUCTIONS, text: sharedInstructions });
+      return;
+    }
+    let cancelled = false;
+    void readProjectInstructions(runtimeConfig, instructionsDirectory)
+      .then((view) => {
+        if (cancelled) return;
+        setInstructions(view.text ? view : { ...view, text: sharedInstructions });
+      })
+      .catch(() => {
+        if (!cancelled) setInstructions({ ...EMPTY_PROJECT_INSTRUCTIONS, text: sharedInstructions });
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- runtimeConfig 的身份每渲染都可能变化，改看它的地址
+  }, [instructionsDirectory, runtimeBaseUrl, shared?.id, sharedInstructions]);
+
+  /**
+   * 保存指令：协作项目写云端（权限也在云端判定），再由后端同步回本机；仅在本机的项目直接写本机。
+   * 保存后对此后开始的会话生效。
+   */
+  async function saveInstructions(text: string): Promise<void> {
+    if (!instructionsDirectory) return;
+    if (sharedId && collab) {
+      const updated = await collab.setInstructions(sharedId, text, instructionsDirectory);
+      replaceCollabProject(updated);
+      setInstructions({ ...instructions, text: updated.instructions, origin: "cloud", cloudProjectId: updated.id });
+      return;
+    }
+    if (!runtimeConfig?.baseUrl) throw new Error(t("collab.instructions.saveFailed"));
+    const saved = await saveProjectInstructions(runtimeConfig, instructionsDirectory, text);
+    setInstructions(saved);
+  }
 
   // One request builds every page: the query and the member filter decide what `total` counts.
   useEffect(() => {
@@ -447,6 +514,7 @@ export function CollabPage() {
           )
         ) : (
           <>
+            {/* 看板与右侧的项目配置并排：配置属于项目，不随会话列表滚动。 */}
             <div className={styles.scroller}>
               <div className={styles.wrap}>
                 {notice !== null ? (
@@ -480,6 +548,15 @@ export function CollabPage() {
                       {t("collab.members.invite")}
                     </Button>
                   ) : null}
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    aria-label={configOpen ? t("collab.config.collapse") : t("collab.config.expand")}
+                    title={configOpen ? t("collab.config.collapse") : t("collab.config.expand")}
+                    onClick={() => setConfigOpen((open) => !open)}
+                  >
+                    <PanelRight size={15} aria-hidden="true" />
+                  </Button>
                   <Button
                     size="sm"
                     variant="ghost"
@@ -726,12 +803,31 @@ export function CollabPage() {
                 )}
               </div>
             </div>
+            {configOpen ? (
+              <ProjectConfigPanel
+                instructions={instructions}
+                canEdit={canEditInstructions}
+                onEdit={() => setInstructionsOpen(true)}
+                onCollapse={() => setConfigOpen(false)}
+              />
+            ) : null}
           </>
         )}
       </div>
 
       {/* Overlays mount on the body, like the app's other menus and dialogs, so the sidebar never covers them. */}
       {typeof document === "undefined" ? null : createPortal(<>
+      {project ? (
+        <ProjectInstructionsDialog
+          open={instructionsOpen}
+          instructions={instructions}
+          canEdit={canEditInstructions}
+          onClose={() => setInstructionsOpen(false)}
+          onSave={saveInstructions}
+          onSaved={() => showToast(t("collab.instructions.saved"))}
+          onFailed={(message) => showToast(message || t("collab.instructions.saveFailed"))}
+        />
+      ) : null}
       {project ? (
         <ProjectBoardSettingsDialog
           open={settingsOpen}
@@ -995,6 +1091,169 @@ function ProjectTaskPickerDialog(props: {
               </li>
             ))}
           </ul>
+        </div>
+      )}
+    </Modal>
+  );
+}
+
+/** 项目指令的上限，与云端和注入侧一致：全文注入，长度决定每轮的开销。 */
+const MAX_INSTRUCTION_CHARS = 2_000;
+
+/**
+ * 看板右侧的项目配置。项目里的配置项放在这里查看：先有指令，知识库、技能与外部资料随后加入；
+ * 所有者与管理员可以直接编辑，成员只读。
+ */
+function ProjectConfigPanel(props: {
+  instructions: ProjectInstructions;
+  canEdit: boolean;
+  onEdit: () => void;
+  onCollapse: () => void;
+}) {
+  const { t } = useTranslation();
+  const text = props.instructions.text.trim();
+  return (
+    <aside className={styles.config} aria-label={t("collab.config.title")}>
+      <div className={styles.configHead}>
+        <b className={styles.configTitle}>{t("collab.config.title")}</b>
+        <button
+          type="button"
+          className={styles.configIcon}
+          aria-label={t("collab.config.collapse")}
+          title={t("collab.config.collapse")}
+          onClick={props.onCollapse}
+        >
+          <PanelRightClose size={15} aria-hidden="true" />
+        </button>
+      </div>
+      <div className={styles.configCards}>
+        <section className={styles.configCard}>
+          <div className={styles.configCardHead}>
+            <span className={styles.configCardTitle}>{t("collab.config.instructions")}</span>
+            {props.canEdit ? (
+              <button
+                type="button"
+                className={styles.configIcon}
+                aria-label={t("collab.config.instructionsEdit")}
+                title={t("collab.config.instructionsEdit")}
+                onClick={props.onEdit}
+              >
+                <Pencil size={13} aria-hidden="true" />
+              </button>
+            ) : null}
+          </div>
+          <button type="button" className={styles.configCardBody} onClick={props.onEdit}>
+            {text ? (
+              <span className={styles.configText}>{text}</span>
+            ) : (
+              <span className={styles.configEmpty}>{t("collab.config.instructionsEmpty")}</span>
+            )}
+          </button>
+        </section>
+      </div>
+    </aside>
+  );
+}
+
+/**
+ * 项目指令的编辑与查看。所有者与管理员保存后对此后开始的会话生效；成员打开时只读。
+ */
+function ProjectInstructionsDialog(props: {
+  open: boolean;
+  instructions: ProjectInstructions;
+  canEdit: boolean;
+  onClose: () => void;
+  onSave: (text: string) => Promise<void>;
+  onSaved: () => void;
+  onFailed: (message: string) => void;
+}) {
+  const { t } = useTranslation();
+  const [draft, setDraft] = useState(props.instructions.text);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  /** 打开时总是从当前生效的指令开始改，取消了不留草稿。 */
+  useEffect(() => {
+    if (!props.open) return;
+    setDraft(props.instructions.text);
+    setError(null);
+  }, [props.open, props.instructions.text]);
+
+  const used = [...draft.trim()].length;
+  const tooLong = used > MAX_INSTRUCTION_CHARS;
+  const unchanged = draft.trim() === props.instructions.text.trim();
+  const editorRef = useRef<HTMLTextAreaElement | null>(null);
+  useEffect(() => {
+    if (!props.open || !props.canEdit) return;
+    editorRef.current?.focus();
+  }, [props.open, props.canEdit]);
+
+  async function save() {
+    if (saving || tooLong) return;
+    setSaving(true);
+    setError(null);
+    try {
+      await props.onSave(draft.trim());
+      props.onSaved();
+      props.onClose();
+    } catch (cause) {
+      setError(messageOf(cause) || t("collab.instructions.saveFailed"));
+      props.onFailed(messageOf(cause));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Modal
+      open={props.open}
+      title={t("collab.instructions.title")}
+      onClose={props.onClose}
+      closeLabel={t("common.close")}
+      closeContent={<X size={16} aria-hidden="true" />}
+      className={styles.createModal}
+      backdropClassName={styles.backdrop}
+      footer={(
+        <>
+          <span />
+          <span className={styles.footerButtons}>
+            {props.canEdit ? (
+              <>
+                <Button onClick={props.onClose}>{t("common.cancel")}</Button>
+                <Button variant="primary" disabled={saving || tooLong || unchanged} onClick={() => void save()}>
+                  {t("collab.instructions.save")}
+                </Button>
+              </>
+            ) : (
+              <Button onClick={props.onClose}>{t("collab.instructions.close")}</Button>
+            )}
+          </span>
+        </>
+      )}
+    >
+      <p className={styles.dialogHint}>
+        {props.canEdit ? t("collab.instructions.editHint") : t("collab.instructions.readHint")}
+      </p>
+      {props.canEdit ? (
+        <>
+          <textarea
+            ref={editorRef}
+            className={styles.instructionsInput}
+            aria-label={t("collab.instructions.title")}
+            value={draft}
+            maxLength={MAX_INSTRUCTION_CHARS * 2}
+            placeholder={t("collab.instructions.placeholder")}
+            onChange={(event) => setDraft(event.target.value)}
+          />
+          <div className={styles.instructionsMeta}>
+            <span className={tooLong ? styles.instructionsOver : undefined}>
+              {t("collab.instructions.counter", { count: String(used), max: String(MAX_INSTRUCTION_CHARS) })}
+            </span>
+            {error ? <span className={styles.instructionsError} role="alert">{t("collab.instructions.saveFailed")}</span> : null}
+          </div>
+        </>
+      ) : (
+        <div className={styles.instructionsReadonly}>
+          {props.instructions.text.trim() || t("collab.instructions.empty")}
         </div>
       )}
     </Modal>

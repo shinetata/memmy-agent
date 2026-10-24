@@ -13,7 +13,11 @@ const ProjectSchema = z.object({
    * The local Memmy project this online project runs tasks in, or null until it is bound. A backend that predates
    * the binding omits it, which must not fail the whole list.
    */
-  localProjectId: z.string().nullish().transform((value) => value ?? null)
+  localProjectId: z.string().nullish().transform((value) => value ?? null),
+  /**
+   * 项目指令全文，成员只读。早于该字段的后端不返回，按空指令处理，避免整份列表因此读不出来。
+   */
+  instructions: z.string().nullish().transform((value) => value ?? "")
 });
 
 const ProjectSessionSchema = z.object({
@@ -206,6 +210,11 @@ export interface CollabClient {
   /** Renames the project for every member; only the owner may do it, and the cloud enforces that. */
   renameProject(projectId: string, name: string): Promise<CollabProject>;
   /**
+   * Saves the project instructions (owners and admins). `directory` is the local project's folder, so the copy the
+   * tasks read lands where they look for it.
+   */
+  setInstructions(projectId: string, text: string, directory?: string): Promise<CollabProject>;
+  /**
    * The folder this project's tasks run in, created on demand for a project that predates binding or was just
    * joined. `name` names the managed folder after the project, since that folder is what a task page shows.
    * `chosen` means the person picked the folder, which may already hold their own files and projects.
@@ -296,6 +305,17 @@ export function createHttpCollabClient(config: RuntimeConfig): CollabClient {
         path: `/api/collab/projects/${encodeURIComponent(projectId)}`,
         schema: z.object({ project: ProjectSchema }),
         body: { name },
+        init: { method: "PATCH" }
+      });
+      return result.project;
+    },
+
+    async setInstructions(projectId, text, directory) {
+      const result = await requestJson({
+        config,
+        path: `/api/collab/projects/${encodeURIComponent(projectId)}`,
+        schema: z.object({ project: ProjectSchema }),
+        body: { instructions: text, ...(directory ? { directory } : {}) },
         init: { method: "PATCH" }
       });
       return result.project;

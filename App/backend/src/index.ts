@@ -197,7 +197,9 @@ export async function createLocalBackend(options: CreateLocalBackendOptions): Pr
       localSessions: createLocalSessionReader({ registry: createBuiltinAgentSourceRegistry() }),
       ...(process.env.MEMMY_SESSION_LINK_BASE_URL?.trim() ? { linkBaseUrl: process.env.MEMMY_SESSION_LINK_BASE_URL.trim() } : {}),
       // The owner's own association is organized as soon as it is uploaded; other members' wait for the owner's pass.
-      onSessionsUploaded: (projectId) => void collabItems.organizeAfterUpload(projectId)
+      onSessionsUploaded: (projectId) => void collabItems.organizeAfterUpload(projectId),
+      // 协作项目的指令以云端为准，读到或保存时同步到本机，项目里的任务按它注入。
+      projectInstructions: services.projectInstructions
     });
     // Groups associated with an online project pick up new sessions, and associated sessions their new turns.
     collabSyncTimer = setInterval(() => {

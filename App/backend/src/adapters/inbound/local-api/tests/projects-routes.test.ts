@@ -11,6 +11,10 @@ import {
   createProjectDirectoryService,
   type ProjectDirectoryService
 } from "../../../../services/project-directory-service.js";
+import {
+  createProjectInstructionsService,
+  type ProjectInstructionsService
+} from "../../../../services/project-instructions-service.js";
 import { createLocalApiServer } from "../server.js";
 
 let app: FastifyInstance | undefined;
@@ -53,6 +57,43 @@ describe("project local api routes", () => {
 
     expect(response.statusCode).toBeGreaterThanOrEqual(400);
   });
+
+  it("reads and saves a project's instructions, keyed by the project folder", async () => {
+    const root = await mkdtemp(join(tmpdir(), "memmy-project-instructions-routes-"));
+    roots.push(root);
+    const instructions = createProjectInstructionsService({ filePath: join(root, "project-instructions.json") });
+    app = createServer(undefined, instructions);
+    const directory = join(root, "memmy");
+
+    const empty = await injectJson("GET", `/api/projects/instructions?directory=${encodeURIComponent(directory)}`);
+    expect(empty.statusCode).toBe(200);
+    expect(empty.json()).toEqual({ text: "", origin: null, cloudProjectId: null, updatedAt: null });
+
+    const saved = await injectJson("PUT", "/api/projects/instructions", {
+      directory,
+      text: "本项目负责 Memmy 桌面端的研发。"
+    });
+    expect(saved.statusCode).toBe(200);
+    expect(saved.json()).toMatchObject({ text: "本项目负责 Memmy 桌面端的研发。", origin: "local" });
+
+    const read = await injectJson("GET", `/api/projects/instructions?directory=${encodeURIComponent(directory)}`);
+    expect(read.json()).toMatchObject({ text: "本项目负责 Memmy 桌面端的研发。" });
+  });
+
+  it("rejects instructions that are too long or a folder that is not absolute", async () => {
+    const root = await mkdtemp(join(tmpdir(), "memmy-project-instructions-limit-"));
+    roots.push(root);
+    app = createServer(undefined, createProjectInstructionsService({ filePath: join(root, "project-instructions.json") }));
+
+    const tooLong = await injectJson("PUT", "/api/projects/instructions", {
+      directory: join(root, "memmy"),
+      text: "字".repeat(2_001)
+    });
+    expect(tooLong.statusCode).toBe(400);
+
+    const relative = await injectJson("GET", "/api/projects/instructions?directory=memmy");
+    expect(relative.statusCode).toBeGreaterThanOrEqual(400);
+  });
 });
 
 async function injectJson(method: string, url: string, payload?: unknown) {
@@ -65,14 +106,18 @@ async function injectJson(method: string, url: string, payload?: unknown) {
   });
 }
 
-function createServer(projectDirectory?: ProjectDirectoryService): FastifyInstance {
+function createServer(
+  projectDirectory?: ProjectDirectoryService,
+  projectInstructions?: ProjectInstructionsService
+): FastifyInstance {
   const services = {
     bootstrap: {
       async getBootstrap() {
         throw new Error("bootstrap not used");
       }
     },
-    progressBus: createProgressBus()
+    progressBus: createProgressBus(),
+    ...(projectInstructions ? { projectInstructions } : {})
   } as unknown as BackendServices;
 
   return createLocalApiServer({

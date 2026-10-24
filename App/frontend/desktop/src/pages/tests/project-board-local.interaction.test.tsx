@@ -213,8 +213,8 @@ describe("project board", () => {
   it("asks which of the project's own sessions to sync after sharing starts", async () => {
     await renderBoard();
 
-    // Sharing lives in the project settings, so the sessions tab carries no reminder button.
-    await act(async () => iconButton("项目配置").click());
+    // Sharing lives in the project settings (右侧是项目配置), so the sessions tab carries no reminder button.
+    await act(async () => iconButton("项目设置").click());
     // The settings row uses a switch, not a checkbox.
     await act(async () => document.querySelector<HTMLElement>(".modal-body [role='switch']")!.click());
     await flush();

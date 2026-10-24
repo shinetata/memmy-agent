@@ -25,11 +25,14 @@ import {
 import { join } from "node:path";
 import { lstat, readFile, realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { isAbsolute, parse, resolve } from "node:path";
+import { dirname, isAbsolute, parse, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import YAML from "yaml";
 import {
+  PROJECT_INSTRUCTIONS_FILE_NAME,
   normalizeWorkspaceUri,
+  parseProjectInstructionsFile,
+  projectInstructionsAt,
   renderL3WorldModelContext,
   type L3WorldModelRequestEnvelope,
 } from "@memmy/local-api-contracts";
@@ -158,6 +161,31 @@ async function openLegacyRuntimeSession(
     workspaceRoot: null,
     config,
   };
+}
+
+/**
+ * The project instructions for a session's working directory, from the file the desktop backend keeps.
+ *
+ * <p>Hooks run inside the other agents, so they read the file instead of asking Memmy: an agent's first turn must
+ * not wait on another process. The file is small and only changes when someone saves the project's instructions.</p>
+ */
+export async function readProjectInstructions(input: {
+  configUrl: URL;
+  directory?: string | null;
+}): Promise<string> {
+  const directory = input.directory?.trim();
+  if (!directory) return "";
+  const snapshot = objectValue(await readJson(input.configUrl));
+  const configPath = text(snapshot.memmy_config_path) || resolve(homedir(), ".memmy", "config.yaml");
+  const raw = await readFile(join(dirname(configPath), PROJECT_INSTRUCTIONS_FILE_NAME), "utf8").catch(() => "");
+  if (!raw.trim()) return "";
+  try {
+    const file = parseProjectInstructionsFile(JSON.parse(raw));
+    return (projectInstructionsAt(file, directory)?.text ?? "").trim();
+  } catch {
+    // A hook must never break the host agent's turn because a file elsewhere is unreadable.
+    return "";
+  }
 }
 
 export async function loadRuntimeL3(session: RuntimeSession): Promise<LoadedRuntimeSession> {

@@ -19,7 +19,8 @@
 
 .page {
   display: flex;
-  flex-direction: column;
+  /* 看板与会话列表并排：左侧会话列表滚动，右侧项目配置留在原位 */
+  flex-direction: row;
   height: 100%;
   min-height: 0;
   color: var(--collab-ink);
@@ -28,8 +29,15 @@
 
 .scroller {
   flex: 1;
+  min-width: 0;
   min-height: 0;
   overflow-y: auto;
+}
+
+/* 没有项目时的加载与空态：横向容器里仍占满整行，居中由各自的对齐负责 */
+.page > .loading,
+.page > .empty {
+  flex: 1;
 }
 
 .wrap {
@@ -1559,4 +1567,166 @@
   flex: none;
   margin-top: 3px;
   color: var(--collab-accent-deep);
+}
+
+/* 项目配置：卡片式列表，宽 300px，可收起（PRD 3.8） */
+.config {
+  display: flex;
+  flex: 0 0 300px;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+  padding: 18px 16px 24px;
+  border-left: 1px solid var(--collab-line);
+  overflow-y: auto;
+  background: var(--collab-surface);
+}
+
+.configHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-top: 6px;
+}
+
+.configTitle {
+  color: var(--collab-ink);
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.configCards {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.configCard {
+  border: 1px solid var(--collab-line);
+  border-radius: 12px;
+  background: var(--color-background-paper, #fff);
+}
+
+.configCardHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 12px 0;
+}
+
+.configCardTitle {
+  color: var(--collab-ink-2);
+  font-size: 12.5px;
+  font-weight: 700;
+}
+
+.configIcon {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--collab-ter);
+  cursor: pointer;
+}
+
+.configIcon:hover {
+  background: var(--collab-active);
+  color: var(--collab-accent-deep);
+}
+
+.configCardBody {
+  display: block;
+  width: 100%;
+  padding: 6px 12px 12px;
+  border: 0;
+  background: transparent;
+  color: var(--collab-muted);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+/* 指令卡片只露前三行，全文在「项目指令」里看 */
+.configText {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--collab-ink-2);
+  font-size: 12.5px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.configEmpty {
+  color: var(--collab-ter);
+  font-size: 12.5px;
+  line-height: 1.65;
+}
+
+.dialogHint {
+  margin: 0 0 12px;
+  color: var(--collab-muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+/* 指令输入框：高度留出一屏可读的行数，长指令不必边写边滚 */
+.instructionsInput {
+  width: 100%;
+  min-height: 148px;
+  padding: 11px 12px;
+  border: 1px solid var(--collab-line);
+  border-radius: 10px;
+  background: var(--color-background-paper, #fff);
+  color: var(--collab-ink);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.7;
+  resize: vertical;
+}
+
+.instructionsInput:focus {
+  border-color: var(--collab-accent);
+  outline: none;
+}
+
+.instructionsMeta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 8px;
+  color: var(--collab-ter);
+  font-size: 12px;
+}
+
+.instructionsOver,
+.instructionsError {
+  color: var(--color-danger, #c0392b);
+}
+
+.instructionsReadonly {
+  max-height: 46vh;
+  padding: 12px 14px;
+  border: 1px solid var(--collab-line-soft);
+  border-radius: 10px;
+  overflow-y: auto;
+  color: var(--collab-ink-2);
+  font-size: 13px;
+  line-height: 1.75;
+  white-space: pre-wrap;
+}
+
+@media (max-width: 900px) {
+  .config {
+    flex-basis: 240px;
+    padding: 16px 12px 20px;
+  }
 }
