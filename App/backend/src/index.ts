@@ -185,7 +185,7 @@ export async function createLocalBackend(options: CreateLocalBackendOptions): Pr
         memberName: session.profile.nickname
       };
     };
-    // Development override: the online-project cloud can be a local stand-in while it is not deployed yet.
+    // The online-project cloud base can point at another environment through this override.
     const collabCloudBaseUrl = process.env.MEMMY_COLLAB_CLOUD_URL?.trim() || cloudConfig.baseUrl;
     // Work items come from the owner's agent model, so its quota pays for them and members' Memmy only reads.
     const collabItems = createCollabItemsService({
