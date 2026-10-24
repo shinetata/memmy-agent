@@ -3611,7 +3611,8 @@ export function ProjectTargetPicker(props: {
   const selectedLabel = props.registryState === "corrupt"
     ? t("home.project.registryUnavailable")
     : props.selectedProject
-      ? workspaceFolderName(props.selectedProject.rootPath)
+      // 项目可以重命名，显示名称以项目名为准；没有名称时才退回目录名。
+      ? props.selectedProject.name.trim() || workspaceFolderName(props.selectedProject.rootPath)
       : t("home.project.optional");
   const visibleProjects = props.registryState === "ready"
     ? filterProjectTargetPickerProjects(props.projects, query, props.sessions)
