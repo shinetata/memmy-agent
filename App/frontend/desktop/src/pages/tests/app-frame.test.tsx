@@ -1132,6 +1132,32 @@ describe("AppFrame", () => {
     expect(source).toContain("canRemove={!sharedLocalProjectIds.has(projectContextMenu.projectId)}");
   });
 
+  it("lets members leave a shared project instead of stopping the owner's share", () => {
+    const source = readFileSync(resolve(__dirname, "..", "app-frame.tsx"), "utf8");
+    const menu = source.slice(source.indexOf("function ProjectContextMenu"), source.indexOf("function MenuButton"));
+
+    // Members live in the board's invite dialog, not the project menu; only the owner stops sharing,
+    // everyone else leaves the project.
+    expect(menu).not.toContain('appFrame.project.members');
+    expect(menu).toContain('props.sharedRole !== "owner"');
+    expect(menu.indexOf('t("appFrame.project.leave")')).toBeGreaterThan(-1);
+    expect(menu.indexOf('t("appFrame.project.leave")')).toBeLessThan(menu.indexOf('t("appFrame.project.stopSharing")'));
+    // A folder chosen when joining gets a project record of its own, so no local project and its tasks are adopted.
+    expect(source).toContain('{ mode: "existing", path: directory.localDirectory, name: project.name, allowShared: true }');
+  });
+
+  it("renames a project from its menu, and only the owner renames a shared one", () => {
+    const source = readFileSync(resolve(__dirname, "..", "app-frame.tsx"), "utf8");
+    const menu = source.slice(source.indexOf("function ProjectContextMenu"), source.indexOf("function MenuButton"));
+
+    expect(menu).toContain('label={t("appFrame.project.rename")}');
+    // A member reads the owner's name; a local project is always this person's to rename.
+    expect(source).toContain("return !shared || shared.role === \"owner\";");
+    // A shared project renames the cloud first, so every member reads the new name, then the local record follows.
+    expect(source).toContain("await collabClient.renameProject(shared.id, name)");
+    expect(source).toContain("await updateProject(project.id, { name });");
+  });
+
   it("keeps one project row with separate expand and open hit areas", () => {
     const appFrameSource = readFileSync(resolve(__dirname, "..", "app-frame.tsx"), "utf8");
     // Sharing is a property of a project, not a second kind of row: the cloud row is gone.
@@ -1146,8 +1172,8 @@ describe("AppFrame", () => {
     expect(rowBlock).toContain("props.onToggle()");
     expect(rowBlock).toContain("props.onOpenBoard()");
     expect(rowBlock).toContain("app-frame-project-row__main");
-    // A shared project keeps the same row with a small cloud mark.
-    expect(rowBlock).toContain("app-frame-project-row__shared");
+    // Sharing is not a row badge: the row carries no extra mark, only the project and its actions.
+    expect(rowBlock).not.toContain("app-frame-project-row__shared");
   });
 
   it("uses one font size and hover-only top-level disclosure icons", () => {

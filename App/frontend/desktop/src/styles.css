@@ -11716,14 +11716,6 @@ body.memmy-platform-windows :is(
   transition: padding-right var(--duration-fast);
 }
 
-/* A shared project keeps the same row; a small cloud mark says members can read its sessions. */
-.app-frame-project-row__shared {
-  display: flex;
-  flex: none;
-  align-items: center;
-  color: color-mix(in srgb, var(--color-text-ink) 38%, transparent);
-}
-
 .app-frame-project-row:hover .app-frame-project-row__main,
 .app-frame-project-row:focus-within .app-frame-project-row__main {
   padding-right: calc(var(--sidebar-rail-action) + var(--sidebar-row-action-reserve));

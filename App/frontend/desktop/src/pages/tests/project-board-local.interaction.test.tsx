@@ -162,7 +162,8 @@ describe("project board", () => {
 
     // Sharing lives in the project settings, so the sessions tab carries no reminder button.
     await act(async () => iconButton("项目配置").click());
-    await act(async () => document.querySelector<HTMLInputElement>(".modal-body input[type='checkbox']")!.click());
+    // The settings row uses a switch, not a checkbox.
+    await act(async () => document.querySelector<HTMLElement>(".modal-body [role='switch']")!.click());
     await flush();
 
     expect(mocks.createProject).toHaveBeenCalledWith(PROJECT.name, PROJECT.rootPath);

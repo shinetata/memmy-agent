@@ -2,6 +2,7 @@
 .page,
 .createModal,
 .pickModal,
+.membersModal,
 .backdrop,
 .toast {
   --collab-ink: var(--color-text-ink, #111d1c);
@@ -631,6 +632,10 @@
   width: min(880px, calc(100vw - 32px));
 }
 
+:global(.modal).membersModal {
+  width: min(460px, calc(100vw - 32px));
+}
+
 .footerButtons {
   display: flex;
   gap: 8px;
@@ -666,39 +671,6 @@
   line-height: 1.6;
 }
 
-/* 新建项目：共享是项目的一个开关，不是另一类项目 */
-.shareField {
-  display: flex;
-  align-items: flex-start;
-  gap: 9px;
-  margin-top: 18px;
-  cursor: pointer;
-}
-
-.shareField input {
-  flex: none;
-  margin: 2px 0 0;
-  width: 15px;
-  height: 15px;
-  accent-color: var(--color-action-sky, #2f81f7);
-  cursor: pointer;
-}
-
-.shareText {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-  gap: 3px;
-}
-
-.shareLabel {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  color: var(--collab-ink-2);
-  font-size: 12.5px;
-  font-weight: 700;
-}
 
 .dirField {
   display: flex;
@@ -1098,16 +1070,173 @@
   color: var(--collab-muted);
 }
 
+/* 新建 / 加入项目：同一个弹窗的两种模式，顶部用一组分段标签切换 */
+.projectTabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 14px;
+  padding: 3px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--collab-ter) 14%, transparent);
+}
+
+.projectTab {
+  flex: 1;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--collab-muted);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background-color var(--duration-fast) ease, color var(--duration-fast) ease;
+}
+
+.projectTabOn {
+  background: var(--color-background-paper, #fff);
+  color: var(--collab-ink-2);
+  box-shadow: 0 1px 2px rgba(17, 29, 28, 0.08);
+}
+
+/* 标签下面紧跟字段时，字段自己那 18px 上边距会显得空，收掉 */
+.projectTabs + .field {
+  margin-top: 0;
+}
+
+/* 项目配置：行式列表，左侧标题与说明、右侧控件，行间细线（与设置页同一套排布） */
+.settingsRows {
+  margin-top: 2px;
+}
+
+.settingsRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 15px 2px;
+  border-bottom: 1px solid var(--collab-line-soft);
+}
+
+.settingsRow:first-child {
+  border-top: 1px solid var(--collab-line);
+}
+
+/* 末行不再画线，避免页脚上方出现一条像空行的分隔 */
+.settingsRow:last-child {
+  border-bottom: 0;
+}
+
+.settingsRowText {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.settingsRowTitle {
+  color: var(--collab-ink-2);
+  font-size: 13.5px;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.settingsRowDesc {
+  color: var(--collab-ter);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+/* 本机目录这类路径用等宽字，长短一眼可比 */
+.settingsRowPath {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11.5px;
+}
+
+.settingsRowControl {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+}
+
+/* 行内的输入框：与右侧按钮同高，不把行撑开 */
+.settingsRowInput {
+  width: 220px;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--collab-line);
+  border-radius: 9px;
+  background: var(--color-background-paper, #fff);
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+}
+
+.settingsRowInput::placeholder {
+  color: var(--collab-ter);
+}
+
+.settingsRowInput:focus {
+  outline: none;
+  border-color: var(--collab-accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--collab-accent) 18%, transparent);
+}
+
+/* 开关：36×20 的圆角滑块，和设置页一致 */
+.settingsSwitch {
+  position: relative;
+  width: 36px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--collab-ter) 42%, transparent);
+  cursor: pointer;
+  transition: background-color var(--duration-fast) ease;
+}
+
+.settingsSwitch::after {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(17, 29, 28, 0.24);
+  content: "";
+  transition: transform var(--duration-fast) ease;
+}
+
+.settingsSwitchOn {
+  background: var(--collab-accent-deep);
+}
+
+.settingsSwitchOn::after {
+  transform: translateX(16px);
+}
+
+.settingsSwitch:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.settingsSwitch:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--collab-accent) 60%, transparent);
+  outline-offset: 2px;
+}
+
 /* A slow cloud should look like work happening, not a dead switch. */
 .settingsBusy {
   margin: 10px 0 0;
   color: var(--collab-muted);
   font-size: 12.5px;
-}
-
-.settingsActions {
-  display: flex;
-  margin-top: 14px;
 }
 
 .stopSharing {
@@ -1203,4 +1332,212 @@
 .tasksCount {
   color: var(--collab-ter);
   font-size: 12.5px;
+}
+
+/* 项目成员：复制邀请链接、获得链接者、加入申请与成员行 */
+.inviteButton {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 42px;
+}
+
+.joinModeRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: -4px;
+  color: var(--collab-muted);
+  font-size: 13px;
+}
+
+.inlinePicker {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 2px 4px 6px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--collab-ink-2);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.inlinePicker:hover:not(:disabled) {
+  background: var(--collab-surface);
+}
+
+.inlinePicker:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.inlineMenu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 21;
+  min-width: 132px;
+  padding: 5px;
+  border-radius: 10px;
+  background: var(--color-background-paper, #fff);
+  box-shadow: 0 14px 34px rgba(15, 26, 25, 0.16), 0 0 0 1px var(--collab-line);
+}
+
+/* The modal body is a 14px-gap grid with 16px sides; the line runs edge to edge like the prototype's. */
+.membersDivider {
+  height: 1px;
+  margin: 0 -16px;
+  background: var(--collab-line-soft);
+}
+
+.membersEmpty {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0;
+  color: var(--collab-muted);
+  font-size: 13px;
+}
+
+.membersEmpty p {
+  margin: 0;
+}
+
+.memberSection + .memberSection {
+  padding-top: 6px;
+  border-top: 1px solid var(--collab-line-soft);
+}
+
+.memberSectionTitle {
+  margin: 8px 0 2px;
+  color: var(--collab-muted);
+  font-size: 12.5px;
+  font-weight: 700;
+}
+
+.memberRow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 0;
+}
+
+.memberText {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.memberName,
+.memberHint {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.memberName {
+  color: var(--collab-ink);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.memberHint {
+  color: var(--collab-ter);
+  font-size: 12px;
+}
+
+.roleTag {
+  flex: none;
+  padding: 3px 9px;
+  border: 1px solid var(--collab-line);
+  border-radius: 7px;
+  background: var(--collab-surface);
+  color: var(--collab-ink-2);
+  font-size: 12.5px;
+}
+
+.roleText {
+  flex: none;
+  color: var(--collab-muted);
+  font-size: 13px;
+}
+
+/* 加入项目 */
+.joinCard {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 16px;
+  border: 1px solid var(--collab-line);
+  border-radius: 14px;
+  background: var(--collab-surface);
+}
+
+.joinCardIcon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border: 1px solid var(--collab-line);
+  border-radius: 11px;
+  background: var(--color-background-paper, #fff);
+  color: var(--collab-accent-deep);
+}
+
+.joinCardName {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--collab-ink);
+  font-size: 16px;
+  font-weight: 750;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.avatarStack {
+  display: flex;
+  flex: none;
+}
+
+.avatarStack .avatar {
+  border: 2px solid var(--color-background-paper, #fff);
+}
+
+.avatarStack .avatar + .avatar {
+  margin-left: -8px;
+}
+
+.joinNotes {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.joinNote {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  color: var(--collab-muted);
+  font-size: 13.5px;
+  line-height: 1.6;
+}
+
+.joinNoteIcon {
+  flex: none;
+  margin-top: 3px;
+  color: var(--collab-accent-deep);
 }

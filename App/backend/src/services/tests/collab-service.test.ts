@@ -708,6 +708,36 @@ describe("collab service", () => {
     expect(calls.map((call) => new URL(call.url).pathname)).toEqual(["/api/collab/projects/p-1/sessions"]);
   });
 
+  it("renames a shared project in the cloud and keeps its binding", async () => {
+    const { fetcher, calls } = fakeFetch({
+      "PATCH /api/collab/projects/p-1": () => ({
+        code: 0,
+        data: {
+          project: { id: "p-1", name: "新名字", role: "owner", memberCount: 2, sessionCount: 0, createdAt: null },
+          joinMode: "approval"
+        }
+      })
+    });
+    const svc = service(fetcher);
+    await svc.bindLocalProject("p-1", "local-9");
+    calls.length = 0;
+
+    const renamed = await svc.renameProject("p-1", "  新名字  ");
+
+    // The name travels trimmed, and the binding stays so the board keeps its local project.
+    expect((calls[0]?.body as { name: string }).name).toBe("新名字");
+    expect(calls.map((call) => `${call.method} ${new URL(call.url).pathname}`)).toEqual(["PATCH /api/collab/projects/p-1"]);
+    expect(renamed.project).toMatchObject({ id: "p-1", name: "新名字", localProjectId: "local-9" });
+  });
+
+  it("rejects an empty project name before reaching the cloud", async () => {
+    const { fetcher, calls } = fakeFetch({});
+    const svc = service(fetcher);
+
+    await expect(svc.renameProject("p-1", "   ")).rejects.toThrow("请填写项目名称");
+    expect(calls).toHaveLength(0);
+  });
+
   it("deletes the cloud project and keeps the local project usable", async () => {
     const local: LocalAgentSession[] = [localSession("claude_code", "a1", "/repo", "2026-10-22T01:00:00.000Z")];
     const deleted: string[] = [];

@@ -124,6 +124,48 @@ const ItemsResponseSchema = z.object({
 });
 const ItemResponseSchema = z.object({ item: ItemSchema });
 const SaveItemResponseSchema = z.object({ item: ItemSchema, changed: z.boolean() });
+const RoleSchema = z.enum(["owner", "admin", "member"]);
+const JoinModeSchema = z.enum(["direct", "approval"]);
+const MemberSchema = z.object({
+  userId: z.string(),
+  name: z.string(),
+  role: RoleSchema,
+  /** The signed-in person, labelled「（你）」. */
+  mine: z.boolean(),
+  joinedAt: z.string().nullable()
+});
+const JoinRequestSchema = z.object({
+  userId: z.string(),
+  name: z.string(),
+  /** Whose invite link the person applied through. */
+  inviterName: z.string(),
+  createdAt: z.string().nullable()
+});
+const MembersResponseSchema = z.object({
+  project: ProjectSchema,
+  joinMode: JoinModeSchema,
+  /** Owners and admins set the join mode, review requests, and change or remove other members. */
+  canManage: z.boolean(),
+  members: z.array(MemberSchema),
+  requests: z.array(JoinRequestSchema)
+});
+const InviteSchema = z.object({ code: z.string(), link: z.string(), shareText: z.string() });
+const InvitePreviewSchema = z.object({
+  code: z.string(),
+  projectId: z.string(),
+  projectName: z.string(),
+  inviterName: z.string(),
+  memberCount: z.number(),
+  memberNames: z.array(z.string()),
+  joinMode: JoinModeSchema,
+  status: z.enum(["none", "pending", "member"])
+});
+const JoinResultSchema = z.object({
+  status: z.enum(["joined", "pending", "member"]),
+  projectId: z.string(),
+  /** Null while the request waits for review. */
+  project: ProjectSchema.nullable()
+});
 
 export type CollabProject = z.infer<typeof ProjectSchema>;
 export type CollabProjectSession = z.infer<typeof ProjectSessionSchema>;
@@ -144,6 +186,14 @@ export type CollabProjectTask = z.infer<typeof ProjectTaskSchema>;
 /** A work item: one Markdown file in the project's knowledge base, indexed by the cloud. */
 export type CollabItem = z.infer<typeof ItemSchema>;
 export type CollabItemsView = z.infer<typeof ItemsResponseSchema>;
+export type CollabRole = z.infer<typeof RoleSchema>;
+export type CollabJoinMode = z.infer<typeof JoinModeSchema>;
+export type CollabMember = z.infer<typeof MemberSchema>;
+export type CollabJoinRequest = z.infer<typeof JoinRequestSchema>;
+export type CollabMembers = z.infer<typeof MembersResponseSchema>;
+export type CollabInvite = z.infer<typeof InviteSchema>;
+export type CollabInvitePreview = z.infer<typeof InvitePreviewSchema>;
+export type CollabJoinResult = z.infer<typeof JoinResultSchema>;
 
 export interface CollabClient {
   listProjects(): Promise<CollabProject[]>;
@@ -153,11 +203,14 @@ export interface CollabClient {
   bindLocalProject(projectId: string, localProjectId: string): Promise<void>;
   /** Deletes the shared project and keeps the local project, so its tasks stay on this computer. */
   deleteProject(projectId: string): Promise<void>;
+  /** Renames the project for every member; only the owner may do it, and the cloud enforces that. */
+  renameProject(projectId: string, name: string): Promise<CollabProject>;
   /**
-   * The folder this project's tasks run in, created on demand for a project that predates binding. `name` names
-   * the managed folder after the project, since that folder is what a task page shows.
+   * The folder this project's tasks run in, created on demand for a project that predates binding or was just
+   * joined. `name` names the managed folder after the project, since that folder is what a task page shows.
+   * `chosen` means the person picked the folder, which may already hold their own files and projects.
    */
-  ensureWorkingDirectory(projectId: string, name?: string): Promise<string>;
+  ensureWorkingDirectory(projectId: string, name?: string): Promise<{ localDirectory: string; chosen: boolean }>;
   /** One page of a project's sessions, newest activity first; `total` counts every match. */
   listSessions(projectId: string, options?: { query?: string; member?: "me" | "others"; offset?: number; limit?: number }): Promise<CollabSessionPage>;
   /** A session and its turns, for reading it in the app. */
@@ -192,6 +245,21 @@ export interface CollabClient {
   readItem(projectId: string, itemId: string): Promise<CollabItem>;
   /** Saves a hand edit on top of `baseVersion`; a newer version in between fails with code "conflict". */
   saveItem(projectId: string, itemId: string, input: { markdown: string; baseVersion: number }): Promise<{ item: CollabItem; changed: boolean }>;
+  /** Who is in the project; owners and admins also get the join mode's pending requests. */
+  listMembers(projectId: string): Promise<CollabMembers>;
+  /** The person's own invite link to the project. */
+  createInvite(projectId: string): Promise<CollabInvite>;
+  setJoinMode(projectId: string, joinMode: CollabJoinMode): Promise<CollabJoinMode>;
+  approveRequest(projectId: string, userId: string): Promise<CollabMember>;
+  rejectRequest(projectId: string, userId: string): Promise<void>;
+  setMemberRole(projectId: string, userId: string, role: Exclude<CollabRole, "owner">): Promise<CollabMember>;
+  removeMember(projectId: string, userId: string): Promise<void>;
+  /** Leaves the project; the local project and this person's tasks stay. */
+  leaveProject(projectId: string): Promise<void>;
+  /** What a pasted invite link opens. */
+  previewInvite(reference: string): Promise<CollabInvitePreview>;
+  /** Joins at once or applies, as the project's join mode says; `directory` is where its tasks will run. */
+  joinProject(reference: string, directory?: string): Promise<CollabJoinResult>;
 }
 
 /** Online projects through the desktop's local API, which signs cloud requests with the person's account. */
@@ -214,11 +282,23 @@ export function createHttpCollabClient(config: RuntimeConfig): CollabClient {
       const result = await requestJson({
         config,
         path: `/api/collab/projects/${encodeURIComponent(projectId)}/working-directory`,
-        schema: z.object({ localDirectory: z.string() }),
+        // A backend from before joining existed does not say; its folders were never chosen at join time.
+        schema: z.object({ localDirectory: z.string(), chosen: z.boolean().optional() }),
         body: name ? { name } : {},
         init: { method: "POST" }
       });
-      return result.localDirectory;
+      return { localDirectory: result.localDirectory, chosen: result.chosen === true };
+    },
+
+    async renameProject(projectId, name) {
+      const result = await requestJson({
+        config,
+        path: `/api/collab/projects/${encodeURIComponent(projectId)}`,
+        schema: z.object({ project: ProjectSchema }),
+        body: { name },
+        init: { method: "PATCH" }
+      });
+      return result.project;
     },
 
     async deleteProject(projectId) {
@@ -375,6 +455,93 @@ export function createHttpCollabClient(config: RuntimeConfig): CollabClient {
         schema: SaveItemResponseSchema,
         body: input,
         init: { method: "PUT" }
+      });
+    },
+
+    async listMembers(projectId) {
+      return requestJson({ config, path: `/api/collab/projects/${encodeURIComponent(projectId)}/members`, schema: MembersResponseSchema });
+    },
+
+    async createInvite(projectId) {
+      return requestJson({
+        config,
+        path: `/api/collab/projects/${encodeURIComponent(projectId)}/invite`,
+        schema: InviteSchema,
+        init: { method: "POST" }
+      });
+    },
+
+    async setJoinMode(projectId, joinMode) {
+      return (await requestJson({
+        config,
+        path: `/api/collab/projects/${encodeURIComponent(projectId)}`,
+        schema: z.object({ joinMode: JoinModeSchema }),
+        body: { joinMode },
+        init: { method: "PATCH" }
+      })).joinMode;
+    },
+
+    async approveRequest(projectId, userId) {
+      return (await requestJson({
+        config,
+        path: `/api/collab/projects/${encodeURIComponent(projectId)}/requests/${encodeURIComponent(userId)}/approve`,
+        schema: z.object({ member: MemberSchema }),
+        init: { method: "POST" }
+      })).member;
+    },
+
+    async rejectRequest(projectId, userId) {
+      await requestJson({
+        config,
+        path: `/api/collab/projects/${encodeURIComponent(projectId)}/requests/${encodeURIComponent(userId)}`,
+        schema: OkResponseSchema,
+        init: { method: "DELETE" }
+      });
+    },
+
+    async setMemberRole(projectId, userId, role) {
+      return (await requestJson({
+        config,
+        path: `/api/collab/projects/${encodeURIComponent(projectId)}/members/${encodeURIComponent(userId)}`,
+        schema: z.object({ member: MemberSchema }),
+        body: { role },
+        init: { method: "PATCH" }
+      })).member;
+    },
+
+    async removeMember(projectId, userId) {
+      await requestJson({
+        config,
+        path: `/api/collab/projects/${encodeURIComponent(projectId)}/members/${encodeURIComponent(userId)}`,
+        schema: OkResponseSchema,
+        init: { method: "DELETE" }
+      });
+    },
+
+    async leaveProject(projectId) {
+      await requestJson({
+        config,
+        path: `/api/collab/projects/${encodeURIComponent(projectId)}/leave`,
+        schema: OkResponseSchema,
+        init: { method: "POST" }
+      });
+    },
+
+    async previewInvite(reference) {
+      return (await requestJson({
+        config,
+        path: "/api/collab/invites/preview",
+        schema: z.object({ invite: InvitePreviewSchema }),
+        body: { reference }
+      })).invite;
+    },
+
+    async joinProject(reference, directory) {
+      return requestJson({
+        config,
+        path: "/api/collab/invites/join",
+        schema: JoinResultSchema,
+        body: { reference, ...(directory ? { directory } : {}) }
       });
     }
   };

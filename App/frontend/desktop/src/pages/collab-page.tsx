@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronRight, Cloud, Folder, Layers, Link2, MessageSquarePlus, MoreHorizontal, Pencil, Quote, Search, Settings, Trash2, Users, X } from "lucide-react";
+import { ChevronDown, ChevronRight, Cloud, Folder, Layers, Link2, MessageSquarePlus, MoreHorizontal, Pencil, Quote, Search, Settings, Trash2, UserPlus, Users, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import {
@@ -46,6 +46,7 @@ import { useTranslation } from "../i18n/use-translation.js";
 import { agentSourceDisplayName, agentSourceLogoUrl } from "./agent-source-logos.js";
 import { AppFrame } from "./app-frame.js";
 import { memberColor } from "./collab-member-color.js";
+import { ProjectMembersDialog } from "./collab-members-dialog.js";
 import styles from "./collab-page.module.css";
 import { MemoryMarkdown } from "./memory/memory-markdown.js";
 
@@ -194,6 +195,8 @@ export function CollabPage() {
   /** Choosing which of the project's own Memmy sessions members may read. */
   const [taskPickerOpen, setTaskPickerOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  /** 「邀请」in the header and「项目成员」in the sidebar menu open the same dialog. */
+  const [membersOpen, setMembersOpen] = useState(false);
   const [deleting, setDeleting] = useState<CollabProjectSession | null>(null);
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   /** Upload progress of a queued association; the list grows while it runs. */
@@ -448,6 +451,12 @@ export function CollabPage() {
                       : t("collab.board.localOnly")}
                   </span>
                   <span className={styles.grow} />
+                  {shared ? (
+                    <Button size="sm" variant="ghost" onClick={() => setMembersOpen(true)}>
+                      <UserPlus size={15} aria-hidden="true" />
+                      {t("collab.members.invite")}
+                    </Button>
+                  ) : null}
                   <Button
                     size="sm"
                     variant="ghost"
@@ -727,6 +736,17 @@ export function CollabPage() {
         />
       ) : null}
       {collab && shared ? (
+        <ProjectMembersDialog
+          open={membersOpen}
+          collab={collab}
+          projectId={shared.id}
+          onClose={() => setMembersOpen(false)}
+          onToast={showToast}
+          // The member count in the header and the sidebar follows approvals and removals.
+          onProjectChanged={replaceCollabProject}
+        />
+      ) : null}
+      {collab && shared ? (
         <ProjectTaskPickerDialog
           open={taskPickerOpen}
           collab={collab}
@@ -982,11 +1002,35 @@ function ProjectBoardSettingsDialog(props: {
   const [action, setAction] = useState<"sharing" | "stopping" | null>(null);
   /** Asking again before a shared project leaves the cloud, since members lose access. */
   const [confirmStop, setConfirmStop] = useState(false);
+  /** How many of the project's own sessions the cloud holds, shown as the sync row's detail. */
+  const [taskStats, setTaskStats] = useState<{ synced: number; total: number } | null>(null);
+  const { clients } = useApiClients();
   const sharedId = props.shared?.id ?? null;
+  const ownedByOther = Boolean(props.shared && props.shared.role !== "owner");
 
   useEffect(() => {
     if (props.open) setConfirmStop(false);
   }, [props.open, sharedId]);
+
+  // The sync row says what is already there, so opening the settings reads the project's own sessions once.
+  useEffect(() => {
+    if (!props.open || !sharedId || !props.collab) {
+      setTaskStats(null);
+      return;
+    }
+    let cancelled = false;
+    props.collab.listProjectTasks(sharedId)
+      .then((tasks) => {
+        if (cancelled) return;
+        setTaskStats({ synced: tasks.filter((task) => task.synced).length, total: tasks.length });
+      })
+      .catch(() => {
+        if (!cancelled) setTaskStats(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [props.open, sharedId, props.collab]);
 
   async function startSharing() {
     if (!props.collab || busy) return;
@@ -1043,7 +1087,6 @@ function ProjectBoardSettingsDialog(props: {
     <Modal
       open={props.open}
       title={t("collab.settings.title")}
-      subtitle={t("collab.settings.subtitle")}
       onClose={props.onClose}
       closeLabel={t("common.close")}
       closeContent={<X size={16} aria-hidden="true" />}
@@ -1053,51 +1096,83 @@ function ProjectBoardSettingsDialog(props: {
         <>
           <span />
           <span className={styles.footerButtons}>
-            <Button variant="ghost" onClick={props.onClose}>{t("collab.cancel")}</Button>
+            {/* 开关改动即时生效，没有可取消的东西 */}
+            <Button onClick={props.onClose}>{t("common.close")}</Button>
           </span>
         </>
       )}
     >
-      <div className={styles.field}>
-        <span>{t("collab.settings.project")}</span>
-        <div className={styles.dirField}>
-          <Folder size={15} aria-hidden="true" className={styles.dirIcon} />
-          <span className={styles.dirPath}>{props.project.name}</span>
+      {/* 行式列表：左侧标题与说明，右侧控件，行间细线；与设置页同一套排布 */}
+      <div className={styles.settingsRows}>
+        <div className={styles.settingsRow}>
+          <div className={styles.settingsRowText}>
+            <div className={styles.settingsRowTitle}>{props.project.name}</div>
+            <div className={`${styles.settingsRowDesc} ${styles.settingsRowPath}`} title={props.project.rootPath}>
+              {props.project.rootPath}
+            </div>
+          </div>
+          <div className={styles.settingsRowControl}>
+            <Button
+              size="sm"
+              disabled={!clients?.memmyAgent}
+              onClick={() => void clients?.memmyAgent?.revealProject(props.project.id, { timeoutMs: 15_000 })}
+            >
+              {t("collab.settings.reveal")}
+            </Button>
+          </div>
         </div>
-        <small className={styles.fieldHint}>{props.project.rootPath}</small>
+
+        <div className={styles.settingsRow}>
+          <div className={styles.settingsRowText}>
+            <div className={styles.settingsRowTitle}>{t("collab.create.share")}</div>
+            <div className={styles.settingsRowDesc}>
+              {ownedByOther
+                ? t("collab.settings.memberHint")
+                : sharedId ? t("collab.settings.shareOnHint") : t("collab.settings.shareOffHint")}
+            </div>
+          </div>
+          <div className={styles.settingsRowControl}>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={Boolean(sharedId)}
+              aria-label={t("collab.create.share")}
+              // Turning sharing off deletes the cloud project, which only its owner may do.
+              disabled={busy || ownedByOther || (!sharedId && !props.collab)}
+              onClick={() => {
+                if (sharedId) setConfirmStop(true);
+                else void startSharing();
+              }}
+              className={`${styles.settingsSwitch}${sharedId ? ` ${styles.settingsSwitchOn}` : ""}`}
+            />
+          </div>
+        </div>
+
+        {sharedId ? (
+          <div className={styles.settingsRow}>
+            <div className={styles.settingsRowText}>
+              <div className={styles.settingsRowTitle}>{t("collab.settings.sessionsRow")}</div>
+              <div className={styles.settingsRowDesc}>
+                {taskStats === null
+                  ? t("collab.settings.sessionsFallback")
+                  : taskStats.total === 0
+                    ? t("collab.settings.sessionsEmpty")
+                    : t("collab.settings.sessionsHint", {
+                      synced: String(taskStats.synced),
+                      total: String(taskStats.total)
+                    })}
+              </div>
+            </div>
+            <div className={styles.settingsRowControl}>
+              <Button size="sm" onClick={props.onPickSessions}>{t("collab.settings.pickSessions")}</Button>
+            </div>
+          </div>
+        ) : null}
       </div>
-      <label className={styles.shareField}>
-        <input
-          type="checkbox"
-          checked={Boolean(sharedId)}
-          disabled={busy}
-          onChange={(event) => {
-            if (event.target.checked) void startSharing();
-            else setConfirmStop(true);
-          }}
-        />
-        <span className={styles.shareText}>
-          <span className={styles.shareLabel}>
-            <Cloud size={13} aria-hidden="true" />
-            {t("collab.create.share")}
-          </span>
-          <small className={styles.fieldHint}>
-            {sharedId ? t("collab.settings.shareOnHint") : t("collab.create.shareHint")}
-          </small>
-        </span>
-      </label>
       {action ? (
         <p className={styles.settingsBusy} role="status">
           {action === "sharing" ? t("collab.settings.sharing") : t("collab.settings.stopping")}
         </p>
-      ) : null}
-      {sharedId ? (
-        <div className={styles.settingsActions}>
-          <Button size="sm" variant="ghost" onClick={props.onPickSessions}>
-            <Link2 size={14} aria-hidden="true" />
-            {t("collab.settings.pickSessions")}
-          </Button>
-        </div>
       ) : null}
       {confirmStop && sharedId ? (
         <section className={styles.stopSharing} role="alertdialog" aria-label={t("collab.settings.stopTitle")}>
@@ -1107,7 +1182,8 @@ function ProjectBoardSettingsDialog(props: {
             <Button size="sm" variant="ghost" disabled={busy} onClick={() => setConfirmStop(false)}>
               {t("collab.cancel")}
             </Button>
-            <Button size="sm" variant="primary" disabled={busy} onClick={() => void stopSharing()}>
+            {/* 删除云端项目是破坏性操作，和侧栏确认框一致用 danger */}
+            <Button size="sm" variant="danger" disabled={busy} onClick={() => void stopSharing()}>
               {t("appFrame.project.stopSharing")}
             </Button>
           </div>

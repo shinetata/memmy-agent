@@ -73,6 +73,9 @@ const ReadViewSchema = z.object({
 }).strict().refine((view) => Object.keys(view).length <= 1, "只能指定一种读取范围");
 const ReadSchema = z.object({ reference: z.string().trim().min(1).max(2_000), view: ReadViewSchema.optional() }).strict();
 const ItemIdSchema = z.string().regex(/^[A-Za-z0-9_-]{1,64}$/u, "事项 ID 无效");
+const RenameProjectSchema = z.object({
+  name: z.string().trim().min(1, "请填写项目名称").max(20, "项目名称不超过 20 个字")
+}).strict();
 const ProjectTasksSchema = z.object({
   /** Conversation ids of the project's Memmy sessions that members may read. */
   included: z.array(ConversationIdSchema).max(500)
@@ -80,6 +83,19 @@ const ProjectTasksSchema = z.object({
 const SaveItemSchema = z.object({
   markdown: z.string().trim().min(1, "事项内容不能为空").max(30_000, "事项内容过长"),
   baseVersion: z.number().int().min(0)
+}).strict();
+/** Cloud account IDs are numeric. */
+const UserIdSchema = z.string().regex(/^[0-9]{1,18}$/u, "成员 ID 无效");
+const UpdateProjectSchema = z.object({ joinMode: z.enum(["direct", "approval"]) }).strict();
+/** No one is made owner here: there is no ownership transfer. */
+const MemberRoleSchema = z.object({ role: z.enum(["admin", "member"]) }).strict();
+/** The pasted link, or the whole copied invite text. */
+const InviteReferenceSchema = z.string().trim().min(1, "请粘贴邀请链接").max(2_000);
+const PreviewInviteSchema = z.object({ reference: InviteReferenceSchema }).strict();
+const JoinSchema = z.object({
+  reference: InviteReferenceSchema,
+  /** The folder the person picked for the project's tasks; a managed folder is used when absent. */
+  directory: z.string().trim().min(1).max(4_000).optional()
 }).strict();
 
 export function registerCollabRoutes(app: FastifyInstance, options: RegisterCollabRoutesOptions): void {
@@ -155,6 +171,60 @@ export function registerCollabRoutes(app: FastifyInstance, options: RegisterColl
 
   app.delete<{ Params: { projectId: string } }>("/api/collab/projects/:projectId", guard, withErrorEnvelope(async (request, reply) =>
     reply.send(await options.collab.deleteProject(ProjectIdSchema.parse((request.params as { projectId: string }).projectId)))));
+
+  // One PATCH per project: `name` renames it for every member (owner only, enforced by the cloud), `joinMode` says
+  // how a link lets people in. Members, invite links, join requests and roles live below.
+  app.patch<{ Params: { projectId: string } }>("/api/collab/projects/:projectId", guard, withErrorEnvelope(async (request, reply) => {
+    const projectId = ProjectIdSchema.parse((request.params as { projectId: string }).projectId);
+    const body = request.body ?? {};
+    if (typeof (body as { name?: unknown }).name === "string") {
+      const input = RenameProjectSchema.parse(body);
+      return reply.send(await options.collab.renameProject(projectId, input.name));
+    }
+    const input = UpdateProjectSchema.parse(body);
+    return reply.send(await options.collab.setJoinMode(projectId, input.joinMode));
+  }));
+
+  app.get<{ Params: { projectId: string } }>("/api/collab/projects/:projectId/members", guard, withErrorEnvelope(async (request, reply) =>
+    reply.send(await options.collab.listMembers(ProjectIdSchema.parse((request.params as { projectId: string }).projectId)))));
+
+  app.post<{ Params: { projectId: string } }>("/api/collab/projects/:projectId/invite", guard, withErrorEnvelope(async (request, reply) =>
+    reply.send(await options.collab.createInvite(ProjectIdSchema.parse((request.params as { projectId: string }).projectId)))));
+
+  app.post<{ Params: { projectId: string } }>("/api/collab/projects/:projectId/leave", guard, withErrorEnvelope(async (request, reply) =>
+    reply.send(await options.collab.leaveProject(ProjectIdSchema.parse((request.params as { projectId: string }).projectId)))));
+
+  app.post<{ Params: { projectId: string; userId: string } }>("/api/collab/projects/:projectId/requests/:userId/approve", guard, withErrorEnvelope(async (request, reply) => {
+    const params = request.params as { projectId: string; userId: string };
+    return reply.send(await options.collab.approveRequest(ProjectIdSchema.parse(params.projectId), UserIdSchema.parse(params.userId)));
+  }));
+
+  app.delete<{ Params: { projectId: string; userId: string } }>("/api/collab/projects/:projectId/requests/:userId", guard, withErrorEnvelope(async (request, reply) => {
+    const params = request.params as { projectId: string; userId: string };
+    return reply.send(await options.collab.rejectRequest(ProjectIdSchema.parse(params.projectId), UserIdSchema.parse(params.userId)));
+  }));
+
+  app.patch<{ Params: { projectId: string; userId: string } }>("/api/collab/projects/:projectId/members/:userId", guard, withErrorEnvelope(async (request, reply) => {
+    const params = request.params as { projectId: string; userId: string };
+    const input = MemberRoleSchema.parse(request.body ?? {});
+    return reply.send(await options.collab.setMemberRole(ProjectIdSchema.parse(params.projectId), UserIdSchema.parse(params.userId), input.role));
+  }));
+
+  app.delete<{ Params: { projectId: string; userId: string } }>("/api/collab/projects/:projectId/members/:userId", guard, withErrorEnvelope(async (request, reply) => {
+    const params = request.params as { projectId: string; userId: string };
+    return reply.send(await options.collab.removeMember(ProjectIdSchema.parse(params.projectId), UserIdSchema.parse(params.userId)));
+  }));
+
+  // Joining starts from a pasted link: preview what it opens, then join or apply.
+  app.post("/api/collab/invites/preview", guard, withErrorEnvelope(async (request, reply) => {
+    const input = PreviewInviteSchema.parse(request.body ?? {});
+    return reply.send(await options.collab.previewInvite(input.reference));
+  }));
+
+  app.post("/api/collab/invites/join", guard, withErrorEnvelope(async (request, reply) => {
+    const input = JoinSchema.parse(request.body ?? {});
+    return reply.send(await options.collab.joinProject(input.reference, input.directory));
+  }));
 
   app.delete<{ Params: { projectId: string; sessionId: string } }>("/api/collab/projects/:projectId/sessions/:sessionId", guard, withErrorEnvelope(async (request, reply) => {
     const params = request.params as { projectId: string; sessionId: string };

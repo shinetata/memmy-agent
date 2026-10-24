@@ -3,7 +3,7 @@
  * requests with the person's account, reads local agent sessions through the Memory service when they associate
  * one, and saves a session a person references as a Markdown file an agent can read.
  */
-import { mkdir, readdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { ApiErrorCode } from "./error-envelope.js";
@@ -41,6 +41,9 @@ const SESSION_ID_PATTERN = /^[A-Za-z0-9-]{1,36}$/u;
 export const MEMMY_SOURCE_ID = "memmy";
 /** The ID ends at the path, the query, or whatever the person typed after pasting the link. */
 const SESSION_LINK_PATTERN = /\/s\/([A-Za-z0-9-]{1,36})(?=[/?#\s]|$)/u;
+/** An invite code alone, or inside the copied invite text: `…/i/<code>`. */
+const INVITE_CODE_PATTERN = /^[A-Za-z0-9_-]{16,32}$/u;
+const INVITE_LINK_PATTERN = /\/i\/([A-Za-z0-9_-]{16,32})(?=[/?#\s]|$)/u;
 /** Turns `sessions read` prints in full by default; earlier turns are listed by their question. */
 const OVERVIEW_TURNS = 5;
 /** Turns printed on each side of the one asked for with `around`, or the first one `find` hits. */
@@ -209,6 +212,66 @@ export interface CollabSyncProgress {
   failed: number;
 }
 
+export type CollabRole = "owner" | "admin" | "member";
+/** Who gets in with a link: anyone at once, or after an owner or admin approves. */
+export type CollabJoinMode = "direct" | "approval";
+
+export interface CollabMember {
+  userId: string;
+  name: string;
+  role: CollabRole;
+  /** The signed-in person, labelled「（你）」. */
+  mine: boolean;
+  joinedAt: string | null;
+}
+
+export interface CollabJoinRequest {
+  userId: string;
+  name: string;
+  /** Whose link the person applied through. */
+  inviterName: string;
+  createdAt: string | null;
+}
+
+export interface CollabMembers {
+  project: CollabProject;
+  joinMode: CollabJoinMode;
+  /** Owners and admins set the join mode, review requests, and change or remove other members. */
+  canManage: boolean;
+  members: CollabMember[];
+  /** Waiting for review; empty for members, who cannot review. */
+  requests: CollabJoinRequest[];
+}
+
+export interface CollabInvite {
+  code: string;
+  link: string;
+  /** What「复制邀请链接」puts on the clipboard. */
+  shareText: string;
+}
+
+/** What the join dialog shows before the person decides. */
+export interface CollabInvitePreview {
+  code: string;
+  projectId: string;
+  projectName: string;
+  inviterName: string;
+  memberCount: number;
+  /** The first few members, drawn as avatars on the project card. */
+  memberNames: string[];
+  joinMode: CollabJoinMode;
+  /** Already in the project, waiting for review, or neither. */
+  status: "none" | "pending" | "member";
+}
+
+export interface CollabJoinResult {
+  /** In at once, waiting for review, or already a member. */
+  status: "joined" | "pending" | "member";
+  projectId: string;
+  /** The project when the person is in it; null while the request waits. */
+  project: CollabProject | null;
+}
+
 /** What one upload put in the cloud, and when. */
 interface SyncedSession {
   cloudSessionId: string;
@@ -230,6 +293,11 @@ interface StoredLinks extends CollabLinks {
   removedSessions: string[];
   /** Where this project's tasks run when the person picked no folder; named after the project. */
   workingDirectory: string | null;
+  /**
+   * The person picked `workingDirectory` when they applied to join. Such a folder may already hold their own files
+   * and projects, so the project made for it later must be a record of its own over that folder.
+   */
+  directoryChosen: boolean;
   /** Last upload of each session, by session key. */
   synced: Record<string, SyncedSession>;
   /**
@@ -284,7 +352,7 @@ export interface CollabService {
    * The directory a project's tasks run in, created on demand; lets an older project gain a working project.
    * `name` names the managed folder after the project instead of its generated id.
    */
-  ensureWorkingDirectory(projectId: string, name?: string, directory?: string): Promise<{ localDirectory: string }>;
+  ensureWorkingDirectory(projectId: string, name?: string, directory?: string): Promise<{ localDirectory: string; chosen: boolean }>;
   /**
    * One page of a project's sessions, newest activity first. A `query` keeps the sessions whose title, last
    * question or member name matches any keyword, which is what the board's search box and the @ menu use.
@@ -338,6 +406,29 @@ export interface CollabService {
   searchSessions(input: SessionSearchInput): Promise<{ sessions: SessionSearchHit[] }>;
   /** Downloads the session into the project cache; a `view` also prints the turns it asks for. */
   readSession(reference: string, view?: SessionView): Promise<CollabSessionReference>;
+  /** Who is in the project and how people join it; owners and admins also get the requests waiting for them. */
+  listMembers(projectId: string): Promise<CollabMembers>;
+  /** The person's own invite link to the project; any member may invite. */
+  createInvite(projectId: string): Promise<CollabInvite>;
+  setJoinMode(projectId: string, joinMode: CollabJoinMode): Promise<{ joinMode: CollabJoinMode }>;
+  /** Renames the project in the cloud, which is what every member's list reads. Owners only, enforced there. */
+  renameProject(projectId: string, name: string): Promise<{ project: CollabProject }>;
+  approveRequest(projectId: string, userId: string): Promise<{ member: CollabMember }>;
+  rejectRequest(projectId: string, userId: string): Promise<{ ok: true }>;
+  setMemberRole(projectId: string, userId: string, role: Exclude<CollabRole, "owner">): Promise<{ member: CollabMember }>;
+  removeMember(projectId: string, userId: string): Promise<{ ok: true }>;
+  /**
+   * Leaves the project. Like a deleted project, the local project stays with this person's tasks; the binding and the
+   * sessions downloaded from it go.
+   */
+  leaveProject(projectId: string): Promise<{ ok: true }>;
+  /** Reads a pasted invite link (or its copied text) for the join dialog. */
+  previewInvite(reference: string): Promise<{ invite: CollabInvitePreview }>;
+  /**
+   * Joins through an invite. A chosen `directory` is kept for the project, so the local project made once the person
+   * is in — now, or after approval — runs its tasks there.
+   */
+  joinProject(reference: string, directory?: string): Promise<CollabJoinResult>;
 }
 
 export interface SessionSearchInput {
@@ -396,6 +487,15 @@ export function parseSessionReference(reference: string): string | null {
     return trimmed;
   }
   return SESSION_LINK_PATTERN.exec(trimmed)?.[1] ?? null;
+}
+
+/** Extracts the code from a pasted invite link, the copied invite text, or a bare code. */
+export function parseInviteReference(reference: string): string | null {
+  const trimmed = reference.trim();
+  if (INVITE_CODE_PATTERN.test(trimmed)) {
+    return trimmed;
+  }
+  return INVITE_LINK_PATTERN.exec(trimmed)?.[1] ?? null;
 }
 
 export type CollabCloudRequest = (
@@ -787,7 +887,7 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
     // Links saved by another account on this computer are not this person's.
     return stored && stored.projectId === projectId && stored.accountId === accountId
       ? stored
-      : { projectId, accountId, localProjectId: null, removedSessions: [], workingDirectory: null, groups: [], sessions: [], synced: {}, linkedAt: {} };
+      : { projectId, accountId, localProjectId: null, removedSessions: [], workingDirectory: null, directoryChosen: false, groups: [], sessions: [], synced: {}, linkedAt: {} };
   }
 
   async function readAllLinks(accountId: string): Promise<StoredLinks[]> {
@@ -808,6 +908,46 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
     const temporary = `${path}.${process.pid}.tmp`;
     await writeFile(temporary, `${JSON.stringify(stored, null, 2)}\n`, "utf8");
     await rename(temporary, path);
+  }
+
+  /**
+   * Forgets this computer's binding to a project the person is no longer in, after it was deleted or they left.
+   * Only the binding goes: the local project and its sessions remain usable as a plain local project, and the
+   * folder is remembered so rejoining runs there again. The cloud has already let the project go, so the person
+   * should not wait for a local rewrite that can sit behind a long upload; queue order keeps it ahead of any later
+   * sync, which is all it has to guarantee.
+   */
+  async function releaseBinding(projectId: string, accountId: string, reason: "delete" | "leave"): Promise<void> {
+    const stored = await readLinks(projectId, accountId);
+    stored.localProjectId = null;
+    stored.groups = [];
+    stored.sessions = [];
+    stored.synced = {};
+    stored.linkedAt = {};
+    stored.removedSessions = [];
+    void exclusive(() => writeLinks(stored)).catch((error: unknown) => {
+      console.warn(`Project links not cleared after ${reason}: ${error instanceof Error ? error.message : String(error)}`);
+    });
+  }
+
+  /**
+   * Projects the person is still in, so a sync stops sending sessions to one they were removed from. When the
+   * cloud cannot answer, every project is kept: a failed listing must not look like being removed everywhere.
+   */
+  async function stillJoined(projects: StoredLinks[]): Promise<StoredLinks[]> {
+    if (!projects.length) return projects;
+    const data = await cloud("/projects").catch(() => null);
+    if (!data) return projects;
+    const joined = new Set(list(data.projects).map((project) => text(record(project).id)));
+    return projects.filter((stored) => joined.has(stored.projectId));
+  }
+
+  function requireInviteCode(reference: string): string {
+    const code = parseInviteReference(reference);
+    if (!code) {
+      throw new CollabError("invalid_argument", "无法识别的邀请链接。请向项目成员重新获取。");
+    }
+    return code;
   }
 
   function withLink(raw: unknown): CollabProjectSession {
@@ -868,7 +1008,7 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
         stored.workingDirectory = localDirectory;
         await writeLinks(stored);
       }
-      return { localDirectory };
+      return { localDirectory, chosen: Boolean(directory) || (Boolean(existing) && stored.directoryChosen) };
     },
 
     async bindLocalProject(projectId, localProjectId) {
@@ -1011,24 +1151,112 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
       await cloud(`/projects/${encodeURIComponent(projectId)}`, { method: "DELETE" });
       const cloudDoneAt = now().getTime();
       syncProgress.delete(projectId);
-      // Only the binding goes: the local project and its sessions remain usable as a plain local project.
-      const stored = await readLinks(projectId, account.accountId);
-      stored.localProjectId = null;
-      stored.groups = [];
-      stored.sessions = [];
-      stored.synced = {};
-      stored.linkedAt = {};
-      stored.removedSessions = [];
-      // The cloud has already dropped the project, so the person should not wait for a local rewrite that can sit
-      // behind a long upload. Queue order keeps it ahead of any later sync, which is all it has to guarantee.
-      void exclusive(() => writeLinks(stored)).catch((error: unknown) => {
-        console.warn(`Project links not cleared after delete: ${error instanceof Error ? error.message : String(error)}`);
-      });
+      await releaseBinding(projectId, account.accountId, "delete");
       const finishedAt = now().getTime();
       if (finishedAt - startedAt > SLOW_DELETE_MS) {
         console.warn(`Deleting project ${projectId} took ${finishedAt - startedAt}ms (cloud ${cloudDoneAt - startedAt}ms, links ${finishedAt - cloudDoneAt}ms)`);
       }
       return { ok: true };
+    },
+
+    async leaveProject(projectId) {
+      const account = requireAccount();
+      await cloud(`/projects/${encodeURIComponent(projectId)}/leave`, { method: "POST", body: {} });
+      syncProgress.delete(projectId);
+      await releaseBinding(projectId, account.accountId, "leave");
+      // Sessions downloaded for references were readable only as a member.
+      await rm(join(projectsDir, safeSegment(projectId), "sessions"), { recursive: true, force: true });
+      return { ok: true };
+    },
+
+    async listMembers(projectId) {
+      const account = requireAccount();
+      const data = await cloud(`/projects/${encodeURIComponent(projectId)}/members`);
+      const stored = await readLinks(projectId, account.accountId);
+      return {
+        project: { ...toProject(data.project), localProjectId: stored.localProjectId },
+        joinMode: toJoinMode(data.joinMode),
+        canManage: data.canManage === true,
+        members: list(data.members).map(toMember),
+        requests: list(data.requests).map(toJoinRequest)
+      };
+    },
+
+    async createInvite(projectId) {
+      const data = await cloud(`/projects/${encodeURIComponent(projectId)}/invite`, { method: "POST", body: {} });
+      const code = text(data.code);
+      if (!INVITE_CODE_PATTERN.test(code)) {
+        throw new CollabError("internal", "邀请链接生成失败，请稍后重试");
+      }
+      const link = `${linkBase}/i/${code}`;
+      const name = text(data.projectName);
+      return { code, link, shareText: name ? `【Memmy】邀请你加入协作项目「${name}」 ${link}` : `【Memmy】邀请你加入协作项目 ${link}` };
+    },
+
+    async setJoinMode(projectId, joinMode) {
+      const data = await cloud(`/projects/${encodeURIComponent(projectId)}`, { method: "PATCH", body: { joinMode } });
+      return { joinMode: toJoinMode(data.joinMode) };
+    },
+
+    async renameProject(projectId, name) {
+      const trimmed = name.trim();
+      if (!trimmed) throw new CollabError("invalid_argument", "请填写项目名称");
+      const data = await cloud(`/projects/${encodeURIComponent(projectId)}`, { method: "PATCH", body: { name: trimmed } });
+      const account = requireAccount();
+      // The binding stays as it is; only the name the board and the sidebar read comes back.
+      const stored = await readLinks(projectId, account.accountId);
+      return { project: { ...toProject(record(data.project)), localProjectId: stored.localProjectId } };
+    },
+
+    async approveRequest(projectId, userId) {
+      const data = await cloud(`/projects/${encodeURIComponent(projectId)}/requests/${encodeURIComponent(userId)}/approve`, { method: "POST", body: {} });
+      return { member: toMember(data.member) };
+    },
+
+    async rejectRequest(projectId, userId) {
+      await cloud(`/projects/${encodeURIComponent(projectId)}/requests/${encodeURIComponent(userId)}`, { method: "DELETE" });
+      return { ok: true };
+    },
+
+    async setMemberRole(projectId, userId, role) {
+      const data = await cloud(`/projects/${encodeURIComponent(projectId)}/members/${encodeURIComponent(userId)}`, { method: "PATCH", body: { role } });
+      return { member: toMember(data.member) };
+    },
+
+    async removeMember(projectId, userId) {
+      await cloud(`/projects/${encodeURIComponent(projectId)}/members/${encodeURIComponent(userId)}`, { method: "DELETE" });
+      return { ok: true };
+    },
+
+    async previewInvite(reference) {
+      const code = requireInviteCode(reference);
+      const data = await cloud(`/invites/${encodeURIComponent(code)}`);
+      return { invite: toInvitePreview(data.invite) };
+    },
+
+    async joinProject(reference, directory) {
+      const account = requireAccount();
+      const code = requireInviteCode(reference);
+      const data = await cloud(`/invites/${encodeURIComponent(code)}/join`, { method: "POST", body: {} });
+      const status = data.status === "joined" || data.status === "pending" || data.status === "member" ? data.status : null;
+      const project = data.project === undefined || data.project === null ? null : toProject(data.project);
+      const projectId = project?.id || text(data.projectId);
+      if (!status || !projectId) {
+        throw new CollabError("internal", "加入项目的结果无法识别，请稍后重试");
+      }
+      const chosen = directory?.trim() ? await prepareWorkingDirectory(onlineWorkdirRoot, projectId, projectId, directory) : null;
+      const stored = await exclusive(async () => {
+        const latest = await readLinks(projectId, account.accountId);
+        // A project this computer already runs keeps its folder; otherwise the latest choice wins, so a person who
+        // applied with a folder and again without one gets a managed folder.
+        if (!latest.localProjectId && (chosen || latest.directoryChosen)) {
+          latest.workingDirectory = chosen;
+          latest.directoryChosen = chosen !== null;
+          await writeLinks(latest);
+        }
+        return latest;
+      });
+      return { status, projectId, project: project ? { ...project, localProjectId: stored.localProjectId } : null };
     },
 
     syncProjectTasks(projectId) {
@@ -1038,7 +1266,8 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
         if (!account) return total;
         const projects = await readAllLinks(account.accountId);
         // One board only waits for its own project: syncing the others first is what made opening a board slow.
-        const scoped = projectId ? projects.filter((stored) => stored.projectId === projectId) : projects;
+        // A board only opens on a project the person is in, so only the full sync checks membership.
+        const scoped = projectId ? projects.filter((stored) => stored.projectId === projectId) : await stillJoined(projects);
         for (const stored of scoped) {
           const tasks = await projectTaskSessions(stored);
           if (!tasks.length) continue;
@@ -1056,7 +1285,7 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
         const account = options.getAccount();
         const total: CollabSyncResult = { uploaded: 0, removed: 0, failed: 0 };
         if (!account) return total;
-        const projects = await readAllLinks(account.accountId);
+        const projects = await stillJoined(await readAllLinks(account.accountId));
         if (!projects.length) return total;
         // The Memory service only holds the other agents' sessions; Memmy's own tasks must still sync without it.
         // A cached list is enough here: forcing a rescan every minute would re-walk every agent's history.
@@ -1536,6 +1765,7 @@ function parseStoredLinks(content: string): StoredLinks | null {
     localProjectId: nullableText(raw.localProjectId),
     removedSessions: list(raw.removedSessions).filter((id): id is string => typeof id === "string"),
     workingDirectory: nullableText(raw.workingDirectory),
+    directoryChosen: raw.directoryChosen === true,
     groups: list(raw.groups).map(record).map((group) => ({
       sourceId: text(group.sourceId),
       groupId: text(group.groupId),
@@ -1580,12 +1810,59 @@ function toProject(raw: unknown): CollabProject {
   return {
     id: text(project.id),
     name: text(project.name),
-    role: text(project.role),
+    role: toRole(project.role),
     memberCount: number(project.memberCount),
     sessionCount: number(project.sessionCount),
     createdAt: nullableText(project.createdAt),
     // The cloud has no notion of this computer's project; listProjects fills it in from the local store.
     localProjectId: null
+  };
+}
+
+/** The cloud stores roles in upper case; everything on this side compares lower case. */
+function toRole(raw: unknown): CollabRole {
+  const role = text(raw).toLowerCase();
+  return role === "owner" || role === "admin" ? role : "member";
+}
+
+/** Asking for approval is the default, so anything unrecognised reads as the safer mode. */
+function toJoinMode(raw: unknown): CollabJoinMode {
+  return text(raw).toLowerCase() === "direct" ? "direct" : "approval";
+}
+
+function toMember(raw: unknown): CollabMember {
+  const member = record(raw);
+  return {
+    userId: text(member.userId),
+    name: text(member.name),
+    role: toRole(member.role),
+    mine: member.mine === true,
+    joinedAt: nullableText(member.joinedAt)
+  };
+}
+
+function toJoinRequest(raw: unknown): CollabJoinRequest {
+  const request = record(raw);
+  return {
+    userId: text(request.userId),
+    name: text(request.name),
+    inviterName: text(request.inviterName),
+    createdAt: nullableText(request.createdAt)
+  };
+}
+
+function toInvitePreview(raw: unknown): CollabInvitePreview {
+  const invite = record(raw);
+  const status = invite.status === "member" || invite.status === "pending" ? invite.status : "none";
+  return {
+    code: text(invite.code),
+    projectId: text(invite.projectId),
+    projectName: text(invite.projectName),
+    inviterName: text(invite.inviterName),
+    memberCount: number(invite.memberCount),
+    memberNames: list(invite.memberNames).filter((name): name is string => typeof name === "string"),
+    joinMode: toJoinMode(invite.joinMode),
+    status
   };
 }
 

@@ -102,10 +102,10 @@ describe("new project dialog", () => {
     input.dispatchEvent(new Event("input", { bubbles: true }));
   }
 
-  function shareCheckbox(): HTMLInputElement {
-    const input = document.querySelector<HTMLInputElement>("input[type='checkbox']");
-    expect(input, "共享勾选框应已渲染").toBeTruthy();
-    return input!;
+  function shareSwitch(): HTMLElement {
+    const control = document.querySelector<HTMLElement>(".modal-body [role='switch']");
+    expect(control, "共享开关应已渲染").toBeTruthy();
+    return control!;
   }
 
   function submitButton(): HTMLElement {
@@ -116,7 +116,7 @@ describe("new project dialog", () => {
   }
 
   it("creates only the local project while sharing is off", async () => {
-    expect(shareCheckbox().checked).toBe(false);
+    expect(shareSwitch().getAttribute("aria-checked")).toBe("false");
     await act(async () => type(nameInput(), "demo"));
     await act(async () => submitButton().click());
     await flush();
@@ -141,7 +141,7 @@ describe("new project dialog", () => {
   it("creates the cloud record once sharing is ticked", async () => {
     await act(async () => type(nameInput(), "demo"));
     await act(async () => {
-      shareCheckbox().click();
+      shareSwitch().click();
     });
     await act(async () => submitButton().click());
     await flush();

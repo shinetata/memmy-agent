@@ -1,4 +1,4 @@
-import { BookOpen, Cloud, LayoutPanelLeft } from "lucide-react";
+import { BookOpen, LayoutPanelLeft } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type MouseEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import {
@@ -28,6 +28,7 @@ import {
   loadCollabProjects,
   markCollabProjectBound,
   removeCollabProject,
+  replaceCollabProject,
   requestCreateProject,
   selectCollabProject,
   sharedProjectFor,
@@ -57,6 +58,7 @@ import { isWindowsDesktopPlatform } from "../utils/window-fullscreen.js";
 import { isComposingKeyboardEvent } from "../utils/keyboard.js";
 import { ImChannelTitleIcon, imChannelTitleDisplay } from "../integrations/integration-meta.js";
 import { CollabCreateProjectDialog } from "./collab-create-project-dialog.js";
+import { CollabJoinProjectDialog } from "./collab-join-project-dialog.js";
 import { ImprovementProgramModal } from "./improvement-program-modal.js";
 import { writeMemorySubPage } from "./memory-sub-page-storage.js";
 import { SearchPalette } from "../components/search-palette.js";
@@ -84,7 +86,7 @@ import {
 } from "./memory/memory-prototype-icons.js";
 import { AppContentTopbar } from "./app-content-topbar.js";
 import { SETTINGS_BROWSER_EXTENSION_EVENT, SETTINGS_EXCEL_CONNECTION_EVENT, SETTINGS_NAV_ITEMS, writeSettingsMemoryBudgetFocus, type SettingsTabId } from "./settings-nav.js";
-import { ArrowDown, Check, CheckCheck, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, CloudOff, Folder, FolderOpen, FolderPlus, ListFilter, MoreHorizontal, MousePointer2, Plus, RotateCcw } from "lucide-react";
+import { ArrowDown, Check, CheckCheck, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, CloudOff, Folder, FolderOpen, FolderPlus, ListFilter, LogOut, MoreHorizontal, MousePointer2, Pencil, Plus, RotateCcw, UserPlus, Users } from "lucide-react";
 
 export interface SettingsSidebarNav {
   activeTab: SettingsTabId;
@@ -260,8 +262,12 @@ const projectCreateMenuSize: SidebarMenuSize = {
 };
 const sidebarMenuOverlayZIndex = 9999;
 const SIDEBAR_PROFILE_NAME_MAX_VISUAL_WIDTH = 10;
+/** Project names are shown in a narrow row, so they follow what the create dialog accepts. */
+const MAX_PROJECT_NAME_CHARS = 20;
 const SIDEBAR_PROFILE_META_MAX_VISUAL_WIDTH = 12;
 const ACCOUNT_DISPLAY_ELLIPSIS = "…";
+/** Coming back to the window rereads online projects at most this often, so an approved request shows up. */
+const COLLAB_FOCUS_REFRESH_MS = 30_000;
 const standaloneRenderTaskStateCoordinator: AgentTaskStateCoordinator = {
   refreshTaskState: () => undefined,
   focusTask: () => undefined,
@@ -318,9 +324,15 @@ export function AppFrame(props: AppFrameProps) {
     collabLoadedForAccount.current = state.account.userId;
     void loadCollabProjects(collabClient);
   }, [collabClient, state.account.userId]);
-  // An online project created before binding existed, or whose local project went missing, gets one here so
-  // its row can hold tasks. A failed attempt is not retried until the next launch.
+  // An online project created before binding existed, whose local project went missing, or that the person just
+  // joined (at once, or once their request was approved) gets one here so its row can hold tasks. A failed attempt
+  // is not retried until the next launch.
+  /** The project whose name is being edited in the sidebar row. */
+  const [renamingProjectId, setRenamingProjectId] = useState<string | null>(null);
+  const [projectRenameDraft, setProjectRenameDraft] = useState("");
   const collabBindAttempts = useRef<Set<string>>(new Set());
+  /** A project joined from the join dialog: its board opens once its local project exists. */
+  const openBoardWhenBound = useRef<string | null>(null);
   useEffect(() => {
     if (!collabClient) return;
     const pending = (collabSnapshot.projects ?? []).filter((project) => (
@@ -334,12 +346,20 @@ export function AppFrame(props: AppFrameProps) {
           const directory = await collabClient.ensureWorkingDirectory(project.id, project.name);
           const outcome = await taskStateCoordinator.mutateProject({
             kind: "create",
-            input: { mode: "blank", path: directory, name: project.name }
+            // A folder the person chose when joining may hold their own files and projects: the shared project
+            // gets a record of its own there, so it never adopts a local project and uploads its tasks.
+            input: directory.chosen
+              ? { mode: "existing", path: directory.localDirectory, name: project.name, allowShared: true }
+              : { mode: "blank", path: directory.localDirectory, name: project.name }
           });
           const localProjectId = outcome.status === "committed" ? outcome.project?.id : undefined;
           if (!localProjectId) continue;
           await collabClient.bindLocalProject(project.id, localProjectId);
           markCollabProjectBound(project.id, localProjectId);
+          if (openBoardWhenBound.current === project.id) {
+            openBoardWhenBound.current = null;
+            openProjectBoard(localProjectId);
+          }
         } catch {
           // The row still opens the board; tasks are the only thing missing.
         }
@@ -347,8 +367,44 @@ export function AppFrame(props: AppFrameProps) {
     })();
   }, [collabClient, collabSnapshot.projects, taskStateCoordinator]);
 
+  // A request approved while Memmy is open shows up the next time the person comes back to the window.
+  const collabRefreshedAt = useRef(0);
+  useEffect(() => {
+    if (!collabClient || !state.account.userId) return;
+    const refresh = () => {
+      if (Date.now() - collabRefreshedAt.current < COLLAB_FOCUS_REFRESH_MS) return;
+      collabRefreshedAt.current = Date.now();
+      void loadCollabProjects(collabClient);
+    };
+    collabRefreshedAt.current = Date.now();
+    window.addEventListener("focus", refresh);
+    return () => window.removeEventListener("focus", refresh);
+  }, [collabClient, state.account.userId]);
+
+  /**
+   * A rename by the owner changes what every member reads. Their local project keeps the name on their own
+   * computer, so it follows the cloud's name whenever the two differ and nobody is editing this row.
+   */
+  const renamedProjects = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (!state.agent.projects.length) return;
+    for (const shared of collabSnapshot.projects ?? []) {
+      if (!shared.localProjectId) continue;
+      if (renamedProjects.current.has(`${shared.id}:${shared.name}`)) continue;
+      const local = state.agent.projects.find((project) => project.id === shared.localProjectId);
+      if (!local || local.name === shared.name) continue;
+      if (renamingProjectId === local.id) continue;
+      renamedProjects.current.add(`${shared.id}:${shared.name}`);
+      void updateProject(local.id, { name: shared.name });
+    }
+  }, [collabSnapshot.projects, state.agent.projects, renamingProjectId]);
+
   const [searchPaletteOpen, setSearchPaletteOpen] = useState(false);
   const [createProjectOpen, setCreateProjectOpen] = useState(false);
+  const [joinProjectOpen, setJoinProjectOpen] = useState(false);
+  /** The online project the person is about to leave, while the confirmation is open. */
+  const [leaveOnlineProjectId, setLeaveOnlineProjectId] = useState<string | null>(null);
+  const [leavingOnlineProject, setLeavingOnlineProject] = useState(false);
   // The sidebar, the board's empty state and the board header all ask for this dialog through one flag.
   const createPending = collabSnapshot.createPending;
   useEffect(() => {
@@ -806,6 +862,37 @@ export function AppFrame(props: AppFrameProps) {
   }
 
   /**
+   * Leaves a project someone else owns. The local project stays with this person's tasks, as after the owner stops
+   * sharing; sessions already shared stay in the project for the others.
+   */
+  async function leaveOnlineProject(projectId: string) {
+    if (!projectId || !collabClient || leavingOnlineProject) return;
+    setLeavingOnlineProject(true);
+    try {
+      try {
+        await collabClient.leaveProject(projectId);
+      } catch (error) {
+        // No longer in it: what the person asked for already holds.
+        if (!(error instanceof ApiRequestError && error.status === 404)) throw error;
+      }
+      removeCollabProject(projectId);
+      setLeaveOnlineProjectId(null);
+      await loadCollabProjects(collabClient);
+    } catch (error) {
+      showProjectOperationError(error);
+      setLeaveOnlineProjectId(null);
+    } finally {
+      setLeavingOnlineProject(false);
+    }
+  }
+
+  function joinProject() {
+    setProjectCreateMenuAnchor(null);
+    handleFirstSidebarInteraction();
+    setJoinProjectOpen(true);
+  }
+
+  /**
    * Opens the new-project dialog over the current page. Creating must not first switch the window to a board:
    * the background the person sees would change before they have decided anything.
    */
@@ -990,6 +1077,51 @@ export function AppFrame(props: AppFrameProps) {
     setArchiveConfirmSessionKey(null);
     setInlineRename({ sessionKey: task.sessionKey, original: task.title });
     setInlineRenameDraft(task.title);
+  }
+
+  function beginProjectRename(project: MemmyAgentProject) {
+    setProjectContextMenu(null);
+    setTaskContextMenu(null);
+    setTaskListMenuAnchor(null);
+    cancelInlineRename();
+    setRenamingProjectId(project.id);
+    setProjectRenameDraft(project.name);
+  }
+
+  function cancelProjectRename() {
+    setRenamingProjectId(null);
+    setProjectRenameDraft("");
+  }
+
+  function commitProjectRename() {
+    const projectId = renamingProjectId;
+    const next = projectRenameDraft.trim();
+    const project = state.agent.projects.find((item) => item.id === projectId);
+    cancelProjectRename();
+    if (!project || !next || next === project.name) return;
+    // A shared project's name is what every member reads, so the cloud is renamed first; the local record follows.
+    const shared = sharedProjectFor(collabSnapshot.projects, project.id);
+    if (shared) {
+      void renameSharedProject(shared, project, next);
+      return;
+    }
+    void updateProject(project.id, { name: next });
+  }
+
+  async function renameSharedProject(
+    shared: { id: string },
+    project: MemmyAgentProject,
+    name: string
+  ) {
+    if (!collabClient) return;
+    try {
+      const renamed = await collabClient.renameProject(shared.id, name);
+      replaceCollabProject(renamed);
+      // The board and the sidebar read the local record, so it takes the same name the cloud now holds.
+      await updateProject(project.id, { name });
+    } catch (error) {
+      showProjectOperationError(error);
+    }
   }
 
   function cancelInlineRename() {
@@ -1316,7 +1448,11 @@ export function AppFrame(props: AppFrameProps) {
                 selectedProjectId={selectedSidebarProjectId}
                 openBoardProjectId={boardProjectId}
                 onOpenProjectBoard={openProjectBoard}
-                sharedProjectIds={sharedLocalProjectIds}
+                renamingProjectId={renamingProjectId}
+                projectRenameDraft={projectRenameDraft}
+                onProjectRenameDraftChange={setProjectRenameDraft}
+                onProjectRenameCommit={commitProjectRename}
+                onProjectRenameCancel={cancelProjectRename}
                 showPreviews={state.agent.sidebarState.view.show_previews}
                 projectRegistryState={state.agent.projectRegistryState}
                 onToggleGroup={toggleSidebarGroup}
@@ -1349,7 +1485,11 @@ export function AppFrame(props: AppFrameProps) {
               projects={visibleProjectTree.projects}
               openBoardProjectId={boardProjectId}
               onOpenProjectBoard={openProjectBoard}
-              sharedProjectIds={sharedLocalProjectIds}
+              renamingProjectId={renamingProjectId}
+              projectRenameDraft={projectRenameDraft}
+              onProjectRenameDraftChange={setProjectRenameDraft}
+              onProjectRenameCommit={commitProjectRename}
+              onProjectRenameCancel={cancelProjectRename}
               tasks={[]}
               currentSessionKey={highlightedSessionKey}
               selectedProjectId={selectedSidebarProjectId}
@@ -1476,9 +1616,20 @@ export function AppFrame(props: AppFrameProps) {
               menu={projectContextMenu}
               project={state.agent.projects.find((project) => project.id === projectContextMenu.projectId) ?? null}
               sharedProjectId={sharedProjectFor(collabSnapshot.projects, projectContextMenu.projectId)?.id ?? null}
+              sharedRole={sharedProjectFor(collabSnapshot.projects, projectContextMenu.projectId)?.role ?? null}
+              onLeaveProject={(onlineProjectId) => {
+                setProjectContextMenu(null);
+                setLeaveOnlineProjectId(onlineProjectId);
+              }}
               // Removing a shared project locally would leave its cloud record without a home, so it stops
               // sharing first; the menu only offers removal once it is local again.
               canRemove={!sharedLocalProjectIds.has(projectContextMenu.projectId)}
+              // A shared project's name belongs to its owner; a local one is always this person's.
+              canRename={(() => {
+                const shared = sharedProjectFor(collabSnapshot.projects, projectContextMenu.projectId);
+                return !shared || shared.role === "owner";
+              })()}
+              onRename={(project) => beginProjectRename(project)}
               onUnshareProject={(onlineProjectId) => {
                 setProjectContextMenu(null);
                 setDeleteOnlineProjectId(onlineProjectId);
@@ -1684,6 +1835,20 @@ export function AppFrame(props: AppFrameProps) {
         onConfirm={() => void unshareProject(deleteOnlineProjectId ?? "")}
       />
       <ConfirmDialog
+        open={leaveOnlineProjectId != null}
+        title={t("collab.leave.title")}
+        message={t("collab.leave.message", {
+          name: collabSnapshot.projects?.find((project) => project.id === leaveOnlineProjectId)?.name ?? ""
+        })}
+        cancelLabel={t("collab.cancel")}
+        confirmLabel={t("appFrame.project.leave")}
+        confirmVariant="danger"
+        confirmDisabled={leavingOnlineProject}
+        icon={null}
+        onCancel={() => setLeaveOnlineProjectId(null)}
+        onConfirm={() => void leaveOnlineProject(leaveOnlineProjectId ?? "")}
+      />
+      <ConfirmDialog
         open={removeProject != null}
         title={t("appFrame.project.remove")}
         message={removeProject ? t("appFrame.project.removeConfirm", {
@@ -1728,6 +1893,25 @@ export function AppFrame(props: AppFrameProps) {
         onCancel={() => setDeleteConfirmTask(null)}
         onConfirm={() => void confirmDeleteArchivedTask()}
       />
+      <CollabJoinProjectDialog
+        open={joinProjectOpen}
+        onCreateProject={() => {
+          setJoinProjectOpen(false);
+          setCreateProjectOpen(true);
+        }}
+        onClose={() => setJoinProjectOpen(false)}
+        onJoined={(project) => {
+          if (project.localProjectId) {
+            // Already a member with a project on this computer: just open it.
+            openProjectBoard(project.localProjectId);
+            return;
+          }
+          // A project left earlier in this run gets another binding attempt now that the person is back in.
+          collabBindAttempts.current.delete(project.id);
+          openBoardWhenBound.current = project.id;
+          addCollabProject(project);
+        }}
+      />
       <CollabCreateProjectDialog
         open={createProjectOpen}
         onClose={() => setCreateProjectOpen(false)}
@@ -1737,6 +1921,11 @@ export function AppFrame(props: AppFrameProps) {
           openProjectBoard(localProjectId);
         }}
         onShared={(project) => addCollabProject(project)}
+        onJoinProject={() => {
+          // 同一个弹窗的另一种模式：关掉新建、打开加入，位置与尺寸都不变。
+          setCreateProjectOpen(false);
+          setJoinProjectOpen(true);
+        }}
         onShareFailed={(reason) => {
           // The project is usable on this computer; only sharing needs another try from its settings.
           console.warn(`Project created without sharing: ${reason}`);
@@ -2062,9 +2251,13 @@ function ProjectTreeSection(props: {
   projects: ProjectSidebarNode[];
   /** The project whose board is open, so its row is highlighted. */
   openBoardProjectId?: string | null;
+  /** The project being renamed in place, with its draft and the three handlers the row needs. */
+  renamingProjectId?: string | null;
+  projectRenameDraft?: string;
+  onProjectRenameDraftChange?: (value: string) => void;
+  onProjectRenameCommit?: () => void;
+  onProjectRenameCancel?: () => void;
   onOpenProjectBoard?: (projectId: string) => void;
-  /** Local projects whose sessions are shared with members, which show a cloud badge. */
-  sharedProjectIds?: ReadonlySet<string>;
   tasks: AgentTaskView[];
   currentSessionKey: string | null;
   selectedProjectId: string | null;
@@ -2181,7 +2374,11 @@ function ProjectTreeSection(props: {
                       props.selectedProjectId === node.project.id
                       || props.openBoardProjectId === node.project.id
                     }
-                    shared={Boolean(props.sharedProjectIds?.has(node.project.id))}
+                    renaming={props.renamingProjectId === node.project.id}
+                    renameDraft={props.projectRenameDraft ?? ""}
+                    onRenameDraftChange={(value) => props.onProjectRenameDraftChange?.(value)}
+                    onCommitRename={() => props.onProjectRenameCommit?.()}
+                    onCancelRename={() => props.onProjectRenameCancel?.()}
                     onToggle={() => props.onToggleProject(projectKey)}
                     onOpenBoard={() => props.onOpenProjectBoard?.(node.project.id)}
                     onContextMenu={(event) => props.onProjectContextMenu(event, node.project.id)}
@@ -2349,8 +2546,12 @@ function ProjectRow(props: {
   collapsed: boolean;
   /** The board of this project is open, or a blank new task targets it. */
   selected: boolean;
-  /** Whether this project's sessions are shared with members. */
-  shared: boolean;
+  /** This row is being renamed in place, so the name is an input instead of text. */
+  renaming: boolean;
+  renameDraft: string;
+  onRenameDraftChange: (value: string) => void;
+  onCommitRename: () => void;
+  onCancelRename: () => void;
   onToggle: () => void;
   onOpenBoard: () => void;
   onContextMenu: (event: MouseEvent) => void;
@@ -2404,16 +2605,18 @@ function ProjectRow(props: {
         }}
         onContextMenu={props.onContextMenu}
       >
-        <SidebarMarqueeText text={props.project.name} className="app-frame-project-title" />
-        {props.shared ? (
-          <span
-            className="app-frame-project-row__shared"
-            title={t("appFrame.project.shared")}
-            aria-label={t("appFrame.project.shared")}
-          >
-            <Cloud size={12} aria-hidden="true" />
-          </span>
-        ) : null}
+        {props.renaming ? (
+          <SidebarInlineRenameInput
+            value={props.renameDraft}
+            maxLength={MAX_PROJECT_NAME_CHARS}
+            ariaLabel={t("appFrame.project.rename")}
+            onChange={props.onRenameDraftChange}
+            onCommit={props.onCommitRename}
+            onCancel={props.onCancelRename}
+          />
+        ) : (
+          <SidebarMarqueeText text={props.project.name} className="app-frame-project-title" />
+        )}
       </button>
       <div className="app-frame-project-row__actions">
         <TaskIconButton label={t("appFrame.project.newTask")} tooltip={false} onClick={props.onNewTask}>
@@ -2795,7 +2998,7 @@ function SidebarWorkspacePickerMenu(props: {
   projects: MemmyAgentProject[];
   registryState: "ready" | "corrupt";
   onSelectProject: (projectId: string) => void;
-  /** Opens the one new-project dialog, which also decides whether the project is shared. */
+  /** Opens the one project dialog, which also switches to joining a shared project inside itself. */
   onNewProject: () => void;
 }) {
   const { t } = useTranslation();
@@ -3025,8 +3228,15 @@ function ProjectContextMenu(props: {
   sharedProjectId?: string | null;
   /** Deletes the shared record in the cloud; the local project stays with its sessions. */
   onUnshareProject?: (onlineProjectId: string) => void;
+  /** The person's role in the shared project: only its owner stops sharing, everyone else leaves. */
+  sharedRole?: string | null;
+  onProjectMembers?: (localProjectId: string) => void;
+  onLeaveProject?: (onlineProjectId: string) => void;
   /** False while the project is shared: its cloud record would outlive a local removal. */
   canRemove?: boolean;
+  /** False for a shared project the person does not own: its name is the owner's to change. */
+  canRename?: boolean;
+  onRename?: (project: MemmyAgentProject) => void;
   archiveTaskCount: number;
   onPin: (project: MemmyAgentProject) => void;
   onReveal: (project: MemmyAgentProject) => void;
@@ -3076,6 +3286,13 @@ function ProjectContextMenu(props: {
       style={overlayStyle}
       onClick={(event) => event.stopPropagation()}
     >
+      {props.canRename === false ? null : (
+        <MenuButton
+          icon={<Pencil size={13} />}
+          label={t("appFrame.project.rename")}
+          onClick={() => run(() => props.onRename?.(project))}
+        />
+      )}
       <MenuButton
         icon={<Pin size={13} />}
         label={project.pinned ? t("appFrame.project.unpin") : t("appFrame.project.pin")}
@@ -3097,7 +3314,16 @@ function ProjectContextMenu(props: {
         disabled={props.archiveTaskCount === 0}
         onClick={() => run(() => props.onArchive(project))}
       />
-      {props.sharedProjectId && props.onUnshareProject ? (
+      {props.sharedProjectId && props.sharedRole && props.sharedRole !== "owner" && props.onLeaveProject ? (
+        <>
+          <div className="app-frame-sidebar-menu__divider" role="separator" />
+          <MenuButton
+            icon={<LogOut size={13} />}
+            label={t("appFrame.project.leave")}
+            onClick={() => run(() => props.onLeaveProject!(props.sharedProjectId!))}
+          />
+        </>
+      ) : props.sharedProjectId && props.onUnshareProject ? (
         <>
           <div className="app-frame-sidebar-menu__divider" role="separator" />
           <MenuButton

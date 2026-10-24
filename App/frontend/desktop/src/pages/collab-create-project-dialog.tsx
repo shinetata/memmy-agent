@@ -23,6 +23,8 @@ export function CollabCreateProjectDialog(props: {
   onBindFailed: (reason: string) => void;
   /** The local project exists but sharing did not start; it opens without sharing. */
   onShareFailed: (reason: string) => void;
+  /** Switches the same dialog to joining a shared project; both entries live in one place now. */
+  onJoinProject?: () => void;
 }) {
   // Rendered by AppFrame, which also runs in tests and error states without providers.
   const { clients } = useOptionalApiClients();
@@ -43,6 +45,7 @@ export function CreateProjectModal(props: {
   onBound: (projectId: string, localProjectId: string) => void;
   onBindFailed: (reason: string) => void;
   onShareFailed: (reason: string) => void;
+  onJoinProject?: () => void;
 }) {
   const { t } = useTranslation();
   const bridge = useOptionalAgentRuntimeBridge();
@@ -134,7 +137,6 @@ export function CreateProjectModal(props: {
     <Modal
       open={props.open}
       title={t("collab.create.title")}
-      subtitle={t("collab.create.subtitle")}
       onClose={props.onClose}
       closeLabel={t("common.close")}
       closeContent={<X size={16} aria-hidden="true" />}
@@ -153,46 +155,74 @@ export function CreateProjectModal(props: {
         </>
       )}
     >
-      <label className={styles.field}>
-        <span>{t("collab.create.name")}</span>
-        <input
-          ref={inputRef}
-          value={name}
-          maxLength={40}
-          placeholder={t("collab.create.namePlaceholder")}
-          onChange={(event) => setName(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") void submit();
-          }}
-        />
-      </label>
-      <div className={styles.field}>
-        <span>{t("collab.create.dirOptional")}</span>
-        <div className={styles.dirField}>
-          <Folder size={15} aria-hidden="true" className={styles.dirIcon} />
-          <span className={`${styles.dirPath} ${directory ? "" : styles.dirPlaceholder}`}>
-            {directory ?? t("collab.create.dirUnset")}
-          </span>
-          <Button size="sm" variant="ghost" onClick={() => void chooseDirectory()}>
-            {directory ? t("collab.create.dirChange") : t("collab.create.dirPick")}
-          </Button>
-        </div>
-        <small className={styles.fieldHint}>{t("collab.create.dirHint")}</small>
+      <div className={styles.projectTabs} role="tablist">
+        <button type="button" role="tab" aria-selected="true" className={`${styles.projectTab} ${styles.projectTabOn}`}>
+          {t("collab.create.title")}
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected="false"
+          className={styles.projectTab}
+          onClick={props.onJoinProject}
+        >
+          {t("collab.join.pasteTitle")}
+        </button>
       </div>
-      <label className={styles.shareField}>
-        <input
-          type="checkbox"
-          checked={share}
-          onChange={(event) => setShare(event.target.checked)}
-        />
-        <span className={styles.shareText}>
-          <span className={styles.shareLabel}>
-            <Cloud size={13} aria-hidden="true" />
-            {t("collab.create.share")}
-          </span>
-          <small className={styles.fieldHint}>{t("collab.create.shareHint")}</small>
-        </span>
-      </label>
+      {/* 与项目配置同一套行式排布：左侧标题与说明，右侧输入框 / 按钮 / 开关 */}
+      <div className={styles.settingsRows}>
+        <div className={styles.settingsRow}>
+          <div className={styles.settingsRowText}>
+            {/* 字数限制写在输入框的占位里，说明位置不再重复一句 */}
+            <div className={styles.settingsRowTitle}>{t("collab.create.name")}</div>
+          </div>
+          <div className={styles.settingsRowControl}>
+            <input
+              ref={inputRef}
+              className={styles.settingsRowInput}
+              value={name}
+              maxLength={40}
+              placeholder={t("collab.create.namePlaceholder")}
+              onChange={(event) => setName(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") void submit();
+              }}
+            />
+          </div>
+        </div>
+
+        <div className={styles.settingsRow}>
+          <div className={styles.settingsRowText}>
+            <div className={styles.settingsRowTitle}>{t("collab.create.dirOptional")}</div>
+            {/* 选过目录就把路径显示在说明位置，不再另占一行 */}
+            <div className={`${styles.settingsRowDesc}${directory ? ` ${styles.settingsRowPath}` : ""}`} title={directory ?? undefined}>
+              {directory ?? t("collab.create.dirHint")}
+            </div>
+          </div>
+          <div className={styles.settingsRowControl}>
+            <Button size="sm" onClick={() => void chooseDirectory()}>
+              {directory ? t("collab.create.dirChange") : t("collab.create.dirPick")}
+            </Button>
+          </div>
+        </div>
+
+        <div className={styles.settingsRow}>
+          <div className={styles.settingsRowText}>
+            <div className={styles.settingsRowTitle}>{t("collab.create.share")}</div>
+            <div className={styles.settingsRowDesc}>{t("collab.settings.shareOffHint")}</div>
+          </div>
+          <div className={styles.settingsRowControl}>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={share}
+              aria-label={t("collab.create.share")}
+              onClick={() => setShare(!share)}
+              className={`${styles.settingsSwitch}${share ? ` ${styles.settingsSwitchOn}` : ""}`}
+            />
+          </div>
+        </div>
+      </div>
       {error ? <p className={styles.error} role="alert">{error}</p> : null}
     </Modal>
   );
