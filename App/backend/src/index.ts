@@ -185,15 +185,13 @@ export async function createLocalBackend(options: CreateLocalBackendOptions): Pr
         memberName: session.profile.nickname
       };
     };
-    // The online-project cloud base can point at another environment through this override.
-    const collabCloudBaseUrl = process.env.MEMMY_COLLAB_CLOUD_URL?.trim() || cloudConfig.baseUrl;
     // Work items come from the owner's agent model, so its quota pays for them and members' Memmy only reads.
     const collabItems = createCollabItemsService({
-      cloud: createCollabCloudRequest({ cloudBaseUrl: collabCloudBaseUrl, getAccount: getCloudAccount }),
+      cloud: createCollabCloudRequest({ cloudBaseUrl: cloudConfig.baseUrl, getAccount: getCloudAccount }),
       complete: createAgentModelCompleter(createCatalogAgentTaskModelResolver(appStateStore, memmyConfigWriter))
     });
     const collab = createCollabService({
-      cloudBaseUrl: collabCloudBaseUrl,
+      cloudBaseUrl: cloudConfig.baseUrl,
       getAccount: getCloudAccount,
       // The backend reads this machine's agent sessions itself, so association works without the Memory service.
       localSessions: createLocalSessionReader({ registry: createBuiltinAgentSourceRegistry() }),
