@@ -19,6 +19,10 @@ export interface CollabProjectsSnapshot {
    * once and clears the flag, so a project that was just shared asks which of its own sessions go to the cloud.
    */
   taskPickerFor: string | null;
+  /**
+   * 看板顶部的一次性提示文案（已本地化）：例如新建项目时勾了共享但云端不可用。看板显示几秒后自行清除。
+   */
+  notice: string | null;
 }
 
 let snapshot: CollabProjectsSnapshot = {
@@ -27,7 +31,8 @@ let snapshot: CollabProjectsSnapshot = {
   loading: false,
   error: null,
   createPending: false,
-  taskPickerFor: null
+  taskPickerFor: null,
+  notice: null
 };
 const listeners = new Set<() => void>();
 
@@ -82,6 +87,16 @@ export async function loadCollabProjects(client: CollabClient): Promise<void> {
   } finally {
     if (inFlight === run) inFlight = null;
   }
+}
+
+/** 在看板顶部显示一次性提示（传入已本地化的文案），由看板在几秒后清除。 */
+export function showCollabNotice(message: string): void {
+  update({ notice: message });
+}
+
+/** 清除看板顶部的一次性提示。 */
+export function dismissCollabNotice(): void {
+  if (snapshot.notice !== null) update({ notice: null });
 }
 
 /** Opens one project's board, named by its local project id. */
@@ -149,7 +164,8 @@ export function resetCollabProjectsStore(): void {
     loading: false,
     error: null,
     createPending: false,
-    taskPickerFor: null
+    taskPickerFor: null,
+    notice: null
   };
   listeners.clear();
 }

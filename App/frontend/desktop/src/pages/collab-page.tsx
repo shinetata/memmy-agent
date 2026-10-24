@@ -20,6 +20,7 @@ import {
 import {
   addCollabProject,
   consumeTaskPickerRequest,
+  dismissCollabNotice,
   getCollabProjectsSnapshot,
   loadCollabProjects,
   markCollabProjectBound,
@@ -55,6 +56,9 @@ export { memberColor };
 const TOAST_MS = 1_800;
 /** The board shows ten sessions at a time, so a long project stays scannable. */
 const SESSION_PAGE_SIZE = 10;
+/** 看板顶部的一次性提示停留时长。 */
+const BOARD_NOTICE_MS = 6_000;
+
 /** How often the board refreshes while an association uploads. */
 const PROGRESS_POLL_MS = 1_200;
 const MAX_PROJECT_NAME_CHARS = 20;
@@ -217,6 +221,14 @@ export function CollabPage() {
   useEffect(() => {
     if (collab) void loadCollabProjects(collab);
   }, [collab]);
+
+  // 一次性提示（如新建时云端不可用）停留几秒后自动消失，不需要用户手动关闭。
+  const notice = snapshot.notice;
+  useEffect(() => {
+    if (notice === null) return;
+    const timer = setTimeout(() => dismissCollabNotice(), BOARD_NOTICE_MS);
+    return () => clearTimeout(timer);
+  }, [notice]);
 
   // The board belongs to a project on this computer. Sharing only adds a cloud record to it.
   const project = projects.find((candidate) => candidate.id === snapshot.selectedId)
@@ -437,6 +449,11 @@ export function CollabPage() {
           <>
             <div className={styles.scroller}>
               <div className={styles.wrap}>
+                {notice !== null ? (
+                  <div className={styles.cloudNotice} role="alert">
+                    <span>{notice}</span>
+                  </div>
+                ) : null}
                 {/* 只有已共享的项目才依赖云端；本地项目不提示云端异常，等开启共享时再报错。 */}
                 {shared !== null && snapshot.error !== null ? (
                   <div className={styles.cloudNotice} role="status">

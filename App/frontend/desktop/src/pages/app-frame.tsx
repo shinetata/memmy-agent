@@ -32,6 +32,7 @@ import {
   requestCreateProject,
   selectCollabProject,
   sharedProjectFor,
+  showCollabNotice,
   subscribeCollabProjects
 } from "../app/collab-projects-store.js";
 import { ApiRequestError } from "../api/http.js";
@@ -1929,6 +1930,8 @@ export function AppFrame(props: AppFrameProps) {
         onShareFailed={(reason) => {
           // The project is usable on this computer; only sharing needs another try from its settings.
           console.warn(`Project created without sharing: ${reason}`);
+          // 看板顶部提示：协作项目服务暂不可用，等它恢复后可在项目配置里重试。
+          showCollabNotice(t("collab.notice.shareUnavailable"));
           dispatch(agentActions.operationFailed("sidebar", createAgentOperationError({
             source: "sidebar",
             message: "collab.create.shareFailed"

@@ -8,7 +8,7 @@ import { act } from "react";
 import type { ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { getCollabProjectsSnapshot, loadCollabProjects, resetCollabProjectsStore } from "../../app/collab-projects-store.js";
+import { getCollabProjectsSnapshot, loadCollabProjects, resetCollabProjectsStore, showCollabNotice } from "../../app/collab-projects-store.js";
 import { I18nProvider } from "../../i18n/i18n-provider.js";
 import { CollabPage } from "../collab-page.js";
 
@@ -170,6 +170,34 @@ describe("project board", () => {
 
     expect(document.body.textContent).toContain("云端暂时不可用");
     expect(document.body.textContent).toContain("重试");
+  });
+
+  it("shows a transient notice at the top of the board and clears it", async () => {
+    // 新建项目时勾了共享但云端失败：落到看板后提示一次，几秒后自动消失。
+    vi.useFakeTimers();
+    try {
+      showCollabNotice("协作项目服务暂时不可用，已先创建为本地项目；稍后可在项目配置中重试。");
+      await act(async () => {
+        root.render(
+          <I18nProvider language="zh-CN">
+            <CollabPage />
+          </I18nProvider>
+        );
+      });
+      await act(async () => {
+        vi.advanceTimersByTime(0);
+        await Promise.resolve();
+      });
+
+      expect(document.body.textContent).toContain("协作项目服务暂时不可用");
+      await act(async () => {
+        vi.advanceTimersByTime(6_000);
+      });
+      expect(getCollabProjectsSnapshot().notice).toBeNull();
+      expect(document.body.textContent).not.toContain("协作项目服务暂时不可用");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("lists a local project's own tasks without a sharing reminder", async () => {
