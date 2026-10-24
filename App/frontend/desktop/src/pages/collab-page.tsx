@@ -423,23 +423,34 @@ export function CollabPage() {
   return (
     <AppFrame title={project?.name ?? t("nav.collab")}>
       <div className={styles.page}>
-        {snapshot.error !== null ? (
-          <div className={styles.empty} role="alert">
-            <p>{snapshot.error || t("collab.loadFailed")}</p>
-            <Button size="sm" onClick={() => collab && void loadCollabProjects(collab)}>{t("collab.retry")}</Button>
-          </div>
-        ) : snapshot.projects === null ? (
-          <p className={styles.loading}>{t("collab.loading")}</p>
-        ) : !project ? (
-          <div className={styles.empty}>
-            <b>{t("collab.empty.title")}</b>
-            <p>{t("collab.empty.body")}</p>
-            <Button variant="primary" size="sm" onClick={() => requestCreateProject()}>{t("home.project.new")}</Button>
-          </div>
+        {!project ? (
+          snapshot.error !== null ? (
+            <div className={styles.empty} role="alert">
+              <p>{snapshot.error || t("collab.loadFailed")}</p>
+              <Button size="sm" onClick={() => collab && void loadCollabProjects(collab)}>{t("collab.retry")}</Button>
+            </div>
+          ) : snapshot.projects === null ? (
+            <p className={styles.loading}>{t("collab.loading")}</p>
+          ) : (
+            <div className={styles.empty}>
+              <b>{t("collab.empty.title")}</b>
+              <p>{t("collab.empty.body")}</p>
+              <Button variant="primary" size="sm" onClick={() => requestCreateProject()}>{t("home.project.new")}</Button>
+            </div>
+          )
         ) : (
           <>
             <div className={styles.scroller}>
               <div className={styles.wrap}>
+                {/* 项目在本机，云端只承载共享内容：云端不可用时本机看板照常使用，只提示共享功能暂不可用。 */}
+                {snapshot.error !== null ? (
+                  <div className={styles.cloudNotice} role="status">
+                    <span>{t("collab.cloudUnavailable", { message: snapshot.error })}</span>
+                    <Button size="sm" variant="ghost" onClick={() => collab && void loadCollabProjects(collab)}>
+                      {t("collab.retry")}
+                    </Button>
+                  </div>
+                ) : null}
                 <header className={styles.boardHeader}>
                   <span className={styles.boardIcon} aria-hidden="true">
                     {shared ? <Cloud size={22} /> : <Folder size={22} />}

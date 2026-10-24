@@ -707,6 +707,25 @@
   font-size: 12.5px;
 }
 
+/* 云端不可用的提示：项目在本机，不影响本地看板的使用 */
+.cloudNotice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 12px;
+  padding: 8px 10px;
+  border: 1px solid var(--collab-line, #e2e2e2);
+  border-radius: 8px;
+  background: var(--collab-surface-2, #fafafa);
+  color: var(--collab-sec, #666);
+  font-size: 12.5px;
+}
+
+.cloudNotice span {
+  flex: 1;
+  min-width: 0;
+}
+
 /* 关联其他 Agent 的会话 */
 .pickBody {
   display: flex;

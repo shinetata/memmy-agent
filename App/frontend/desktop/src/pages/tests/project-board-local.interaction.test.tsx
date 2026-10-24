@@ -147,6 +147,18 @@ describe("project board", () => {
     return found!;
   }
 
+  it("keeps the local board usable when the cloud list fails", async () => {
+    // 云端异常（比如测试云未部署协作接口）不能把本地项目挡住。
+    mocks.listProjects.mockRejectedValue(new Error("云端返回错误码 50000"));
+    await renderBoard();
+
+    expect(document.body.textContent).toContain(PROJECT.name);
+    expect(document.body.textContent).toContain("云端暂时不可用");
+    // 本地任务照常展示，共享相关的请求不会被触发。
+    expect(document.body.textContent).toContain(TASK.title);
+    expect(mocks.listSessions).not.toHaveBeenCalled();
+  });
+
   it("lists a local project's own tasks without a sharing reminder", async () => {
     await renderBoard();
 

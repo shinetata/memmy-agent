@@ -72,7 +72,8 @@ export async function loadCollabProjects(client: CollabClient): Promise<void> {
       // The open project is local, so a reload must not move the board: only a vanished project clears it.
       update({ projects, loading: false, error: null });
     } catch (cause) {
-      update({ projects: [], loading: false, error: messageOf(cause) });
+      // 云端不可用时保留已有列表：项目就在本机，云端只决定能不能看共享内容。
+      update({ loading: false, error: messageOf(cause) });
     }
   })();
   inFlight = run;
