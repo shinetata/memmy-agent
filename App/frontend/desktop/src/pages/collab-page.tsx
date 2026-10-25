@@ -1248,11 +1248,7 @@ function ProjectInstructionsDialog(props: {
             <span className={tooLong ? styles.instructionsOver : undefined}>
               {t("collab.instructions.counter", { count: String(used), max: String(MAX_INSTRUCTION_CHARS) })}
             </span>
-            {error ? (
-              <span className={styles.instructionsError} role="alert">{t("collab.instructions.saveFailed")}</span>
-            ) : (
-              <span className={styles.instructionsHint}>{t("collab.instructions.costHint")}</span>
-            )}
+            {error ? <span className={styles.instructionsError} role="alert">{t("collab.instructions.saveFailed")}</span> : null}
           </div>
         </>
       ) : (
