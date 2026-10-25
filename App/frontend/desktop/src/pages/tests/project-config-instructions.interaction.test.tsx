@@ -223,12 +223,18 @@ describe("project board configuration", () => {
     expect(document.querySelector("textarea")).toBeNull();
   });
 
-  it("collapses the configuration panel from the board header", async () => {
+  it("keeps one control for the panel: collapse inside it, expand in the header", async () => {
     await renderBoard();
     expect(document.body.textContent).toContain("设定项目的背景与规范");
+    // 展开时只有面板标题栏里的收起入口，页头不再放一个作用相同的按钮。
+    expect(document.querySelector('button[aria-label="展开项目配置"]')).toBeNull();
+
     await act(async () => iconButton("收起项目配置").click());
     expect(document.body.textContent).not.toContain("设定项目的背景与规范");
-    // 收起后页头给出展开入口。
-    expect(iconButton("展开项目配置")).toBeTruthy();
+    // 收起后展开入口出现在页头，且面板里的收起入口随之消失。
+    expect(document.querySelector('button[aria-label="收起项目配置"]')).toBeNull();
+    await act(async () => iconButton("展开项目配置").click());
+    expect(document.body.textContent).toContain("设定项目的背景与规范");
+    expect(document.querySelector('button[aria-label="展开项目配置"]')).toBeNull();
   });
 });

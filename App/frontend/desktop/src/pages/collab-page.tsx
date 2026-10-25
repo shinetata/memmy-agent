@@ -548,15 +548,18 @@ export function CollabPage() {
                       {t("collab.members.invite")}
                     </Button>
                   ) : null}
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    aria-label={configOpen ? t("collab.config.collapse") : t("collab.config.expand")}
-                    title={configOpen ? t("collab.config.collapse") : t("collab.config.expand")}
-                    onClick={() => setConfigOpen((open) => !open)}
-                  >
-                    <PanelRight size={15} aria-hidden="true" />
-                  </Button>
+                  {/* 收起与展开不同时出现：展开时入口在面板标题栏，收起后才回到这里，与 WorkBuddy 一致 */}
+                  {configOpen ? null : (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      aria-label={t("collab.config.expand")}
+                      title={t("collab.config.expand")}
+                      onClick={() => setConfigOpen(true)}
+                    >
+                      <PanelRight size={15} aria-hidden="true" />
+                    </Button>
+                  )}
                   <Button
                     size="sm"
                     variant="ghost"
