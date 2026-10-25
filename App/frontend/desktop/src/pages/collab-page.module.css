@@ -1715,6 +1715,16 @@
   color: var(--color-danger, #c0392b);
 }
 
+/* 上限不是存储限制，而是每轮上下文：这句话让编辑的人知道代价在哪 */
+.instructionsHint {
+  flex: 1;
+  min-width: 0;
+  text-align: right;
+  color: var(--collab-ter);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
 .instructionsReadonly {
   max-height: 46vh;
   padding: 12px 14px;

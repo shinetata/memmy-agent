@@ -28,8 +28,12 @@ import { z } from "zod";
 
 export const PROJECT_INSTRUCTIONS_FILE_NAME = "project-instructions.json";
 
-/** 与云端上限一致：指令全文注入，长度决定每轮的开销，见 PRD 2.7。 */
-export const MAX_PROJECT_INSTRUCTIONS_CHARS = 2_000;
+/**
+ * 与云端上限一致。指令全文注入每一轮的系统提示词，所以上限按「够写完项目的背景与规范」定：
+ * 1 万字与 WorkBuddy 一致。存储不是瓶颈（1 万字 UTF-8 约 30KB，云端 TEXT 列可用 64KB），
+ * 代价在每轮上下文：见 {@link MAX_PROJECT_INSTRUCTIONS_CHARS} 在注入侧的说明。
+ */
+export const MAX_PROJECT_INSTRUCTIONS_CHARS = 10_000;
 
 /** 一个项目最多记录多少条：多出的目录不会注入，也不会让文件无限增长。 */
 export const MAX_PROJECT_INSTRUCTIONS_ENTRIES = 200;

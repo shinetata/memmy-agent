@@ -126,8 +126,8 @@ describe("collab project instructions", () => {
       "PUT /api/collab/projects/p-1/binding": () => ({ ok: true })
     });
     await boundProject(svc, "p-1");
-    await expect(svc.updateInstructions("p-1", "字".repeat(2_001)))
-      .rejects.toThrow("不超过 2000 字");
+    await expect(svc.updateInstructions("p-1", "字".repeat(10_001)))
+      .rejects.toThrow("不超过 10000 字");
     expect(calls.some((call) => call.method === "PATCH")).toBe(false);
   });
 

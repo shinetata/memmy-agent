@@ -1097,8 +1097,8 @@ function ProjectTaskPickerDialog(props: {
   );
 }
 
-/** 项目指令的上限，与云端和注入侧一致：全文注入，长度决定每轮的开销。 */
-const MAX_INSTRUCTION_CHARS = 2_000;
+/** 项目指令的上限，与云端和注入侧一致（1 万字，与 WorkBuddy 相同）：全文注入，长度决定每轮的开销。 */
+const MAX_INSTRUCTION_CHARS = 10_000;
 
 /**
  * 看板右侧的项目配置。项目里的配置项放在这里查看：先有指令，知识库、技能与外部资料随后加入；
@@ -1248,7 +1248,11 @@ function ProjectInstructionsDialog(props: {
             <span className={tooLong ? styles.instructionsOver : undefined}>
               {t("collab.instructions.counter", { count: String(used), max: String(MAX_INSTRUCTION_CHARS) })}
             </span>
-            {error ? <span className={styles.instructionsError} role="alert">{t("collab.instructions.saveFailed")}</span> : null}
+            {error ? (
+              <span className={styles.instructionsError} role="alert">{t("collab.instructions.saveFailed")}</span>
+            ) : (
+              <span className={styles.instructionsHint}>{t("collab.instructions.costHint")}</span>
+            )}
           </div>
         </>
       ) : (

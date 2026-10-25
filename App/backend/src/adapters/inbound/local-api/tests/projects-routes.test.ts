@@ -87,7 +87,7 @@ describe("project local api routes", () => {
 
     const tooLong = await injectJson("PUT", "/api/projects/instructions", {
       directory: join(root, "memmy"),
-      text: "字".repeat(2_001)
+      text: "字".repeat(10_001)
     });
     expect(tooLong.statusCode).toBe(400);
 
