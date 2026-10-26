@@ -148,13 +148,13 @@ describe("collab service", () => {
     const svc = service(fetcher, { projectsDir: root });
     const reference = await svc.readSession(`【Memmy】重复分享返回 409 https://memmy.example/s/${cloudSession.id}`);
 
-    // 协作会话只在云端保存：读取不建目录、不写文件。
+    // 协作任务只在云端保存：读取不建目录、不写文件。
     expect(existsSync(join(root, "p-1"))).toBe(false);
     expect(reference.session.id).toBe(cloudSession.id);
-    expect(reference.text).toContain("已读取用户C的会话「重复分享返回 409」（Memmy 开发，");
+    expect(reference.text).toContain("已读取用户C的任务「重复分享返回 409」（Memmy 开发，");
     expect(reference.text).toContain("共 18 轮，云端保留最近 1 轮。");
     // The cloud says it dropped earlier turns to fit the session cap, so the reader says what it is showing.
-    expect(reference.text).toContain("该会话仅保留近期记录");
+    expect(reference.text).toContain("该任务仅保留近期记录");
     expect(reference.text).toContain("### 第 18 轮\n用户C：重复分享时接口返回 500，怎么处理？\n回复：改为返回 HTTP 409。\n执行步骤：Edit、Bash ×2");
   });
 
@@ -173,7 +173,7 @@ describe("collab service", () => {
     const read = (view: Parameters<typeof svc.readSession>[1]) => svc.readSession(cloudSession.id, view).then((reference) => reference.text);
 
     const overview = await read({});
-    expect(overview).toContain("已读取用户C的会话「重复分享返回 409」");
+    expect(overview).toContain("已读取用户C的任务「重复分享返回 409」");
     expect(overview).toContain("共 18 轮，云端保留最近 12 轮。");
     expect(overview).toContain("- 第 7 轮：第 7 个问题");
     expect(overview).toContain("- 第 13 轮：第 13 个问题");
@@ -188,7 +188,7 @@ describe("collab service", () => {
     expect(found).not.toContain("### 第 7 轮");
 
     const missing = await read({ find: "重复分享改为 404" });
-    expect(missing).toContain("这个会话中没有找到「重复分享改为 404」");
+    expect(missing).toContain("这个任务中没有找到「重复分享改为 404」");
     expect(missing).toContain("- 第 7 轮：第 7 个问题");
     expect(missing).not.toContain("### ");
 
@@ -362,7 +362,7 @@ describe("collab service", () => {
   });
 
   it("uploads only the most recent 20 sessions of what the person associated", async () => {
-    // 云端每人每项目只保留 20 个：更早的会话不上传，省掉传完再被删的往返。
+    // 云端每人每项目只保留 20 个：更早的任务不上传，省掉传完再被删的往返。
     const start = Date.UTC(2026, 9, 22, 10, 0, 0);
     const local = Array.from({ length: 25 }, (_, index) => localSession(
       "codex", `c-${String(index).padStart(2, "0")}`, null, new Date(start - index * 60_000).toISOString()));
@@ -907,7 +907,7 @@ describe("collab service", () => {
     await expect(service(fetcher).readSession(cloudSession.id)).rejects.toMatchObject({ code: "not_found", message: "项目或会话不存在，或你不是该项目的成员" });
     const offline = (async () => { throw new TypeError("fetch failed"); }) as typeof fetch;
     await expect(service(offline).listProjects()).rejects.toMatchObject({ message: "暂时无法连接 Memmy 云端，请稍后重试。" });
-    await expect(service(fetcher, { localSessions: null }).listLocalSessions({})).rejects.toMatchObject({ message: "无法读取本机会话，请重启 Memmy 后重试。" });
+    await expect(service(fetcher, { localSessions: null }).listLocalSessions({})).rejects.toMatchObject({ message: "无法读取本机任务，请重启 Memmy 后重试。" });
   });
 });
 

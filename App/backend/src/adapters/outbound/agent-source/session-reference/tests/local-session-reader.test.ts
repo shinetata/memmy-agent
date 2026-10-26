@@ -31,7 +31,7 @@ describe("local session reader", () => {
     for (let index = 0; index < 40; index += 1) {
       const id = `c-${String(index).padStart(2, "0")}`;
       const at = new Date(start - index * 60_000).toISOString();
-      // 最前面 6 个是空会话，和真实目录里没有人工提问的会话一样，占窗口但不进列表。
+      // 最前面 6 个是空记录，和真实目录里没有人工提问的记录一样，占窗口但不进列表。
       messages.push(index < 6
         ? message("codex", id, "system", "boot", at, "/repo")
         : message("codex", id, "user", `第 ${index} 个问题`, at, "/repo"));
@@ -41,7 +41,7 @@ describe("local session reader", () => {
     const { sessions } = await reader.available({ limit: 30 });
 
     expect(sessions).toHaveLength(30);
-    // 补上的是更早的会话，空会话不会出现在列表里。
+    // 补上的是更早的任务，空记录不会出现在列表里。
     expect(sessions.map((session) => session.conversationId))
       .toEqual(Array.from({ length: 30 }, (_, index) => `c-${String(index + 6).padStart(2, "0")}`));
   });
@@ -154,7 +154,7 @@ describe("local session reader", () => {
   it("strips host-injected blocks and automation ids from titles", () => {
     expect(cleanQuestion("<environment_context>cwd</environment_context>帮我拉起服务")).toBe("帮我拉起服务");
     expect(cleanQuestion("Automation: MemOS 社区周报 Automation ID: abc")).toBe("MemOS 社区周报");
-    // 会话之间互相引用时留下的注释与引用前缀，不该出现在标题里
+    // 任务之间互相引用时留下的注释与引用前缀，不该出现在标题里
     expect(cleanQuestion("<!-- reply 2 --> > conversation_id 写入项目记忆时还是必填？ <!-- reply --> > 否"))
       .toBe("conversation_id 写入项目记忆时还是必填？ 否");
   });

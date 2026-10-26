@@ -3,7 +3,7 @@
  * requests with the person's account, reads local agent sessions through the Memory service when they associate
  * one, and reads a referenced session online for an agent.
  *
- * 协作会话只在云端保存，本机不保留正文副本：读取、引用、检索都现查云端，离线时不可用。
+ * 协作任务只在云端保存，本机不保留正文副本：读取、引用、检索都现查云端，离线时不可用。
  */
 import { mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -36,8 +36,8 @@ const UPLOAD_CONCURRENCY = 4;
 const READ_MANY_CHUNK = 20;
 const LINKS_FILE = "links.json";
 /**
- * 每名成员在一个项目内最多保留的会话数（云端 `CollabLimits.MAX_SESSIONS_PER_MEMBER`），
- * 新建的 Memmy 任务与关联的 Agent 会话共用。超出这个数量的会话不上传：云端本来就会按最近交互挤掉。
+ * 每名成员在一个项目内最多保留的任务数（云端 `CollabLimits.MAX_SESSIONS_PER_MEMBER`），
+ * 新建的 Memmy 任务与关联的 Agent 任务共用。超出这个数量的任务不上传：云端本来就会按最近交互挤掉。
  */
 const SESSIONS_PER_MEMBER = 20;
 /** Matches the cloud limits so an upload is never rejected for size. */
@@ -101,7 +101,7 @@ export interface CollabServiceOptions {
   now?: () => Date;
   /**
    * 项目指令的本机存储。协作项目的指令以云端为准，读到或保存时同步一份到本机，
-   * 项目里的任务（Memmy 任务与其他 Agent 的会话）据此注入；未提供时只做云端读写。
+   * 项目里的任务（Memmy 任务与其他 Agent 的任务）据此注入；未提供时只做云端读写。
    */
   projectInstructions?: ProjectInstructionsService;
 }
@@ -134,7 +134,7 @@ export interface CollabProjectSession {
   turnCount: number;
   lastActiveAt: string | null;
   /**
-   * 单会话超出云端容量上限时只保留最近轮次，详情里带这个标记；列表不带，按 false 处理。
+   * 单任务超出云端容量上限时只保留最近轮次，详情里带这个标记；列表不带，按 false 处理。
    */
   trimmed: boolean;
   /** The link a member pastes into another agent. */
@@ -578,13 +578,13 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
   /** Reads this machine's agent sessions; a session or agent that is gone reads as not found. */
   async function readLocal<T>(read: (reader: LocalSessionReader) => Promise<T>): Promise<T> {
     if (!options.localSessions) {
-      throw new CollabError("memory_layer_unavailable", "无法读取本机会话，请重启 Memmy 后重试。");
+      throw new CollabError("memory_layer_unavailable", "无法读取本机任务，请重启 Memmy 后重试。");
     }
     try {
       return await read(options.localSessions);
     } catch (error) {
       if (error instanceof LocalSessionReadError) throw new CollabError(error.code, error.message);
-      throw new CollabError("internal", "读取本机会话失败");
+      throw new CollabError("internal", "读取本机任务失败");
     }
   }
 
@@ -660,7 +660,7 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
   /** Uploads covered sessions that were never uploaded or changed since; a failure is retried by the next sync. */
   /** The sessions this project still has to upload: in its scope, not deleted, and changed since the last upload. */
   /**
-   * 要上传的会话：在本项目范围内、且首次上传或内容变了的那几条。只取最近交互的前 20 条，
+   * 要上传的任务：在本项目范围内、且首次上传或内容变了的那几条。只取最近交互的前 20 条，
    * 更早的传上去也会被云端清理掉。
    */
   function sessionsToUpload(stored: StoredLinks, local: readonly LocalAgentSession[]): LocalAgentSession[] {
@@ -823,7 +823,7 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
       return putCloudSession(projectId, MEMMY_SOURCE_ID, session.conversationId, task.title, task.updatedAt, task.turns);
     }
     if (preloaded === "missing") {
-      throw new CollabError("not_found", "本机已找不到该会话");
+      throw new CollabError("not_found", "本机已找不到该任务");
     }
     const local = preloaded
       ?? record(await readLocal((reader) => reader.read({ sourceId: session.sourceId, conversationId: session.conversationId })));
@@ -867,7 +867,7 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
   async function readMemmyTask(conversationId: string): Promise<{ title: string; updatedAt: string; turns: CollabSessionTurn[] }> {
     const records = await readSessionRecords(join(agentSessionsDir, `websocket_${conversationId}.jsonl`));
     if (!records) {
-      throw new CollabError("not_found", "无法读取该 Memmy 会话");
+      throw new CollabError("not_found", "无法读取该 Memmy 任务");
     }
     return { title: records.title, updatedAt: records.updatedAt, turns: records.turns.slice(-MAX_UPLOAD_TURNS).map(toUploadTurn) };
   }
@@ -985,8 +985,8 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
    * Projects the person is still in, so a sync stops sending sessions to one they were removed from. When the
    * cloud cannot answer, every project is kept: a failed listing must not look like being removed everywhere.
    *
-   * 被移出或退出后，云端已删除本人在这两个项目里的会话：本机随之解除关联、停止同步，并清掉旧版本留下的
-   * 会话缓存；本机项目、任务与文件保留。重新加入后，已删除的会话不会自动恢复。
+   * 被移出或退出后，云端已删除本人在这两个项目里的任务：本机随之解除关联、停止同步，并清掉旧版本留下的
+   * 缓存；本机项目、任务与文件保留。重新加入后，已删除的任务不会自动恢复。
    */
   async function stillJoined(projects: StoredLinks[]): Promise<StoredLinks[]> {
     if (!projects.length) return projects;
@@ -1043,7 +1043,7 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
   }
 
   /**
-   * 协作会话只在云端保存。旧版本把引用的会话写到每个项目的 sessions 目录，这里在启动时清掉这些遗留文件，
+   * 协作任务只在云端保存。旧版本把引用的任务写到每个项目的 sessions 目录，这里在启动时清掉这些遗留文件，
    * 之后读取不再生成新的副本。清理失败不影响后续使用。
    */
   async function removeLegacySessionCaches(): Promise<void> {
@@ -1251,7 +1251,7 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
       syncProgress.delete(projectId);
       await releaseBinding(projectId, account.accountId, "leave");
       await forgetInstructions(before.workingDirectory);
-      // 协作会话不在本机缓存正文，读取只现查云端；旧版本留下的缓存目录在这里一并清掉。
+      // 协作任务不在本机缓存正文，读取只现查云端；旧版本留下的缓存目录在这里一并清掉。
       await rm(join(projectsDir, safeSegment(projectId), "sessions"), { recursive: true, force: true });
       return { ok: true };
     },
@@ -1445,13 +1445,13 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
     async readSession(reference, view) {
       const id = parseSessionReference(reference);
       if (!id) {
-        throw new CollabError("invalid_argument", "无法识别的会话链接。请从 Memmy 中重新复制链接。");
+        throw new CollabError("invalid_argument", "无法识别的任务链接。请从 Memmy 中重新复制链接。");
       }
       // The cloud returns one `session` that also carries this session's `turns`.
       const data = record((await cloud(`/sessions/${encodeURIComponent(id)}`)).session);
       const session = withLink(data);
       const turns = list(data.turns).map(toTurn);
-      // 协作会话只在云端保留，读取结果直接交给调用方，不在本机写文件。
+      // 协作任务只在云端保留，读取结果直接交给调用方，不在本机写文件。
       return { session, text: renderSessionView(session, turns, now(), view ?? {}) };
     }
   };
@@ -1548,15 +1548,15 @@ export function renderSessionView(
   const total = session.turnCount || turns.length;
   const activity = session.lastActiveAt ? `最近交互 ${formatTime(new Date(session.lastActiveAt))}，` : "";
   const lines = [
-    `已读取${speaker}的会话「${session.title}」（${session.projectName}，${activity}读取于 ${formatTime(readAt)}）。`,
+    `已读取${speaker}的任务「${session.title}」（${session.projectName}，${activity}读取于 ${formatTime(readAt)}）。`,
     `共 ${total} 轮${turns.length < total ? `，云端保留最近 ${turns.length} 轮` : ""}。`
   ];
   if (session.trimmed) {
-    // 单会话超过容量或轮次上限时，云端只保留近期记录；来源 Agent 的原始会话不受影响。
-    lines.push("该会话仅保留近期记录；更早的轮次已按单会话上限清理，来源 Agent 的原始记录不受影响。");
+    // 单任务超过容量或轮次上限时，云端只保留近期记录；来源 Agent 的原始记录不受影响。
+    lines.push("该任务仅保留近期记录；更早的轮次已按单任务上限清理，来源 Agent 的原始记录不受影响。");
   }
   if (!numbered.length) {
-    lines.push("这个会话还没有可显示的轮次。");
+    lines.push("这个任务还没有可显示的轮次。");
     return lines.join("\n");
   }
   const { shown, note, outline } = selectTurns(numbered, view);
@@ -1609,7 +1609,7 @@ function selectTurns(numbered: readonly NumberedTurn[], view: SessionView): { sh
       return {
         shown: new Set<number>(),
         outline: true,
-        note: `这个会话中没有找到「${quoted}」：它可能不是要找的会话，或这部分内容还没有同步。以下只列各轮提问。`
+        note: `这个任务中没有找到「${quoted}」：它可能不是要找的任务，或这部分内容还没有同步。以下只列各轮提问。`
       };
     }
     const at = hits[0]!;

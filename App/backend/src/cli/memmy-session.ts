@@ -17,7 +17,7 @@ const DESKTOP_NOT_RUNNING = "无法连接 Memmy，请打开 Memmy 后重试。";
 // The agent's sandbox refused the connection before it reached Memmy, so opening Memmy would not help; running the
 // command outside the sandbox does.
 const SANDBOX_BLOCKED = "当前环境不允许连接本机的 Memmy，通常是 Agent 的沙箱（sandbox）关闭了网络访问，Memmy 本身可能正常运行。请用沙箱外权限重新运行这条命令，不需要重新打开 Memmy。";
-const NO_MATCH = "没有匹配的会话。可以换更短的关键词，或去掉 --member、--since 后重试；会话也可能还没有共享到项目。";
+const NO_MATCH = "没有匹配的任务。可以换更短的关键词，或去掉 --member、--since 后重试；任务也可能还没有共享到项目。";
 const USAGE = [
   "Usage:",
   "  memmy-session search <keywords> [--member <name>] [--project <project name>] [--since 30d] [--limit <n>]",
@@ -76,7 +76,7 @@ export async function runMemmySession(argv: readonly string[], deps: MemmySessio
   if (action === "read") {
     const reference = rest.join(" ").trim();
     if (!reference) {
-      throw new Error("read 需要 Memmy 会话链接或会话 ID");
+      throw new Error("read 需要 Memmy 任务链接或任务 ID");
     }
     const result = await localApi(deps, "POST", "/api/collab/sessions/read", { reference, view: readView(parsed) });
     return typeof result.text === "string" ? result.text : "";
@@ -109,7 +109,7 @@ function readView(parsed: ParsedArgs): Record<string, unknown> {
   }
   if (all) return { all: true };
   if (find !== undefined) {
-    if (!find.trim()) throw new Error("--find 需要会话中的一句原话");
+    if (!find.trim()) throw new Error("--find 需要任务中的一句原话");
     return { find: find.trim() };
   }
   if (around !== undefined) {

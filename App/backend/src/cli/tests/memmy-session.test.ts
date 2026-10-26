@@ -54,7 +54,7 @@ describe("memmy-session", () => {
     const url = new URL(lastUrl);
     expect(url.pathname).toBe("/api/collab/sessions/search");
     expect(Object.fromEntries(url.searchParams)).toEqual({ q: "重复分享", member: "用户C", limit: "3" });
-    expect(await run(["search", "nothing"], { fetch: fetcher, runtimeConfigPath })).toMatch(/^没有匹配的会话。/u);
+    expect(await run(["search", "nothing"], { fetch: fetcher, runtimeConfigPath })).toMatch(/^没有匹配的任务。/u);
   });
 
   it("names every project a merged result is shared to and passes --since through", async () => {
@@ -108,7 +108,7 @@ describe("memmy-session", () => {
     const denied = (async () => new Response(JSON.stringify({ error: { code: "not_found", message: "项目或会话不存在，或你不是该项目的成员" } }), { status: 404 })) as typeof fetch;
     const runtimeConfigPath = runtimeFile({ baseUrl: "http://127.0.0.1:62315", localToken: "t" });
     await expect(run(["read", "abc"], { fetch: denied, runtimeConfigPath })).rejects.toThrow("项目或会话不存在，或你不是该项目的成员");
-    await expect(run(["read"], { runtimeConfigPath })).rejects.toThrow(/需要 Memmy 会话链接/u);
+    await expect(run(["read"], { runtimeConfigPath })).rejects.toThrow(/需要 Memmy 任务链接/u);
     expect(await run([], { runtimeConfigPath })).toMatch(/^Usage:/u);
     await expect(run(["list"], { runtimeConfigPath })).rejects.toThrow(/未知命令：list/u);
   });

@@ -12,8 +12,8 @@ export type { LocalSessionGroup } from "./session-group.js";
 
 const DEFAULT_SESSIONS_PER_SOURCE = 30;
 /**
- * 列表要的是会话数，而窗口按文件算：空会话、后台派生会话不出现在列表里。凑不满时按倍数向前扩大窗口，
- * 直到拿到要求数量的会话或到达这个上限。
+ * 列表要的是任务数，而窗口按文件算：空记录、后台派生的记录不出现在列表里。凑不满时按倍数向前扩大窗口，
+ * 直到拿到要求数量的任务或到达这个上限。
  */
 const RECENT_SCAN_FACTORS = [1, 2, 4] as const;
 /** A wider window used only when the recent list comes up short. */
@@ -194,7 +194,7 @@ export async function readRecentSessions(adapter: SourceAdapter, limit: number):
     }
     const grouper = createSessionGrouper(adapter);
     let sessions: LocalSession[] = [];
-    // 窗口里的空会话、后台派生会话不计入列表，所以不能把窗口大小当成条数：凑不满就向前补。
+    // 窗口里的空记录、后台派生的记录不计入列表，所以不能把窗口大小当成条数：凑不满就向前补。
     for (const factor of RECENT_SCAN_FACTORS) {
       const window = Math.min(WIDE_SESSIONS_PER_SOURCE, limit * factor);
       const builders = new Map<string, SessionBuilder>();
@@ -213,7 +213,7 @@ export async function readRecentSessions(adapter: SourceAdapter, limit: number):
         break;
       }
     }
-    // 扫描按最近优先返回，多出来的都是更早的会话。
+    // 扫描按最近优先返回，多出来的都是更早的任务。
     return sessions.slice(0, limit);
   } catch {
     return [];
@@ -317,14 +317,14 @@ function finishSession(adapter: SourceAdapter, grouper: SessionGrouper, conversa
 }
 
 /**
- * 会话的第一条用户消息常常是宿主注入的上下文（AGENTS.md、推荐插件、环境说明、文件清单），
+ * 任务的第一条用户消息常常是宿主注入的上下文（AGENTS.md、推荐插件、环境说明、文件清单），
  * 直接拿来当标题会出现大量重复且无意义的条目。这里把它剥掉，留下人真正问的那句。
  */
 export function cleanQuestion(text: string): string {
   let value = text;
   // 宿主注入的整块内容：已知标签 + 任意带属性/无属性的成对标签
   value = value.replace(/<(recommended_plugins|environment_context|user_instructions|system[_-]reminder|pasted_content|local-command-[a-z]+)(?:\s[^>]*)?>[\s\S]*?<\/\1>/giu, " ");
-  // HTML 注释与引用前缀：Agent 之间互相引用会话时留下 `<!-- reply 2 --> > 原话` 这类排版标记，不该出现在标题里
+  // HTML 注释与引用前缀：Agent 之间互相引用任务时留下 `<!-- reply 2 --> > 原话` 这类排版标记，不该出现在标题里
   value = value.replace(/<!--[\s\S]*?-->/gu, " ");
   value = value.replace(/(^|[\n。！？；：])\s*>\s*/gu, "$1 ");
   // 自动任务：只保留任务名，去掉 ID 与 memory 路径
@@ -385,7 +385,7 @@ function collapse(text: string): string {
   return text.replace(/\s+/gu, " ").trim();
 }
 
-/** 选一个能代表会话的标题：优先人问的第一句，否则退回到目录或时间。 */
+/** 选一个能代表任务的标题：优先人问的第一句，否则退回到目录或时间。 */
 function pickTitle(
   questions: readonly string[],
   adapter: SourceAdapter,
