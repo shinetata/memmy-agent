@@ -138,8 +138,7 @@ describe("collab members", () => {
       workingDirectory: "/work/memmy",
       groups: [{ sourceId: "claude_code", groupId: "/repo", excluded: [] }],
       sessions: [],
-      synced: {},
-      linkedAt: {}
+      synced: {}
     }));
 
     expect(await svc.leaveProject("p-1")).toEqual({ ok: true });
@@ -166,7 +165,7 @@ describe("collab members", () => {
     mkdirSync(join(projectsDir, "p-1"), { recursive: true });
     writeFileSync(join(projectsDir, "p-1", "links.json"), JSON.stringify({
       projectId: "p-1", accountId: "u-b", localProjectId: null, removedSessions: [], workingDirectory: null,
-      groups: [], sessions: [{ sourceId: "codex", conversationId: "c1" }], synced: {}, linkedAt: {}
+      groups: [], sessions: [{ sourceId: "codex", conversationId: "c1" }], synced: {}
     }));
 
     expect(await svc.syncLinkedSessions()).toEqual({ uploaded: 0, removed: 0, failed: 0 });

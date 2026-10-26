@@ -92,8 +92,6 @@ export interface CollabServiceOptions {
   agentSessionsDir?: string;
   fetcher?: typeof fetch;
   now?: () => Date;
-  /** An association's upload finished with new sessions in the cloud; the owner organizes their history then. */
-  onSessionsUploaded?: (projectId: string) => void;
   /**
    * 项目指令的本机存储。协作项目的指令以云端为准，读到或保存时同步一份到本机，
    * 项目里的任务（Memmy 任务与其他 Agent 的会话）据此注入；未提供时只做云端读写。
@@ -309,11 +307,6 @@ interface StoredLinks extends CollabLinks {
   directoryChosen: boolean;
   /** Last upload of each session, by session key. */
   synced: Record<string, SyncedSession>;
-  /**
-   * When each group or session link was made, by link key. Turns from before it are the session's history: the
-   * cloud does not write them into project memory, the owner's Memmy organizes them into items instead.
-   */
-  linkedAt: Record<string, string>;
 }
 
 /** What one upload pass did: the counts, and the sessions it stored for the links file. */
@@ -696,7 +689,7 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
         next += 1;
         const session = pending[index]!;
         try {
-          const cloudSessionId = await uploadSession(stored.projectId, session, await preload(session), historyBoundary(stored, session));
+          const cloudSessionId = await uploadSession(stored.projectId, session, await preload(session));
           synced[sessionKey(session)] = {
             cloudSessionId,
             updatedAt: session.updatedAt,
@@ -760,7 +753,6 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
         completed: result.uploaded + result.failed,
         failed: result.failed
       });
-      if (result.uploaded) options.onSessionsUploaded?.(projectId);
     } catch {
       reportProgress(projectId, { running: false });
     }
@@ -808,14 +800,12 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
   async function uploadSession(
     projectId: string,
     session: { sourceId: string; conversationId: string },
-    preloaded: PreloadedSession = null,
-    historyBefore: string | null = null
+    preloaded: PreloadedSession = null
   ): Promise<string> {
     if (session.sourceId === MEMMY_SOURCE_ID) {
-      // Memmy's own tasks are not an external agent source; their turns live in this agent's session files. A task
-      // started in the project has no history.
+      // Memmy's own tasks are not an external agent source; their turns live in this agent's session files.
       const task = await readMemmyTask(session.conversationId);
-      return putCloudSession(projectId, MEMMY_SOURCE_ID, session.conversationId, task.title, task.updatedAt, task.turns, null);
+      return putCloudSession(projectId, MEMMY_SOURCE_ID, session.conversationId, task.title, task.updatedAt, task.turns);
     }
     if (preloaded === "missing") {
       throw new CollabError("not_found", "本机已找不到该会话");
@@ -823,7 +813,7 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
     const local = preloaded
       ?? record(await readLocal((reader) => reader.read({ sourceId: session.sourceId, conversationId: session.conversationId })));
     const turns = list(local.turns).slice(-MAX_UPLOAD_TURNS).map(toUploadTurn);
-    return putCloudSession(projectId, session.sourceId, session.conversationId, text(local.title), isoOrNull(local.updatedAt), turns, historyBefore);
+    return putCloudSession(projectId, session.sourceId, session.conversationId, text(local.title), isoOrNull(local.updatedAt), turns);
   }
 
   /**
@@ -873,13 +863,12 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
     sourceSessionId: string,
     title: string,
     lastActiveAt: string | null,
-    turns: CollabSessionTurn[],
-    historyBefore: string | null
+    turns: CollabSessionTurn[]
   ): Promise<string> {
     const data = await cloud(`/projects/${encodeURIComponent(projectId)}/sessions`, {
       method: "PUT",
       timeoutMs: UPLOAD_TIMEOUT_MS,
-      body: { sessions: [{ source, sourceSessionId, title, lastActiveAt, turns, historyBefore }] }
+      body: { sessions: [{ source, sourceSessionId, title, lastActiveAt, turns }] }
     });
     return text(record(list(data.sessions)[0]).id);
   }
@@ -902,7 +891,7 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
     // Links saved by another account on this computer are not this person's.
     return stored && stored.projectId === projectId && stored.accountId === accountId
       ? stored
-      : { projectId, accountId, localProjectId: null, removedSessions: [], workingDirectory: null, directoryChosen: false, groups: [], sessions: [], synced: {}, linkedAt: {} };
+      : { projectId, accountId, localProjectId: null, removedSessions: [], workingDirectory: null, directoryChosen: false, groups: [], sessions: [], synced: {} };
   }
 
   async function readAllLinks(accountId: string): Promise<StoredLinks[]> {
@@ -938,7 +927,6 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
     stored.groups = [];
     stored.sessions = [];
     stored.synced = {};
-    stored.linkedAt = {};
     stored.removedSessions = [];
     void exclusive(() => writeLinks(stored)).catch((error: unknown) => {
       console.warn(`Project links not cleared after ${reason}: ${error instanceof Error ? error.message : String(error)}`);
@@ -1118,7 +1106,6 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
         }
         stored.groups = links.groups;
         stored.sessions = links.sessions;
-        stored.linkedAt = stampLinks(stored.linkedAt, links, now().toISOString());
 
         // The selection is saved before any upload, so closing the board or the app never loses it.
         const pending = sessionsToUpload(stored, [...local, ...tasks]);
@@ -1387,7 +1374,6 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
             stored.removedSessions.push(conversationId);
           }
           stored.sessions = stored.sessions.filter((link) => sessionKey(link) !== key);
-          stored.linkedAt = stampLinks(stored.linkedAt, stored, now().toISOString());
           const group = stored.groups.find((link) => link.sourceId === sourceId && link.groupId === synced.groupId);
           if (group && !group.excluded.includes(conversationId)) group.excluded.push(conversationId);
           await writeLinks(stored);
@@ -1688,42 +1674,6 @@ function linkCandidates(stored: StoredLinks, local: readonly LocalAgentSession[]
   return [...candidates.values()];
 }
 
-function groupLinkKey(link: { sourceId: string; groupId: string }): string {
-  return `group\u0000${link.sourceId}\u0000${link.groupId}`;
-}
-
-function sessionLinkKey(link: { sourceId: string; conversationId: string }): string {
-  return `session\u0000${link.sourceId}\u0000${link.conversationId}`;
-}
-
-/** Link times for the links as they are now: a link kept keeps its time, a new one is made `at`. */
-export function stampLinks(previous: Readonly<Record<string, string>>, links: CollabLinks, at: string): Record<string, string> {
-  const keys = [...links.groups.map(groupLinkKey), ...links.sessions.map(sessionLinkKey)];
-  return Object.fromEntries(keys.map((key) => [key, previous[key] ?? at]));
-}
-
-/**
- * Where a session's history ends: when it joined the project through the earliest link that covers it. A session
- * that appears in a linked group later has no turns before that, so it has no history. Links saved before link
- * times were kept have none, and their sessions upload as before, without history.
- */
-export function historyBoundary(stored: Pick<StoredLinks, "groups" | "sessions" | "linkedAt">, session: LocalAgentSession): string | null {
-  if (session.sourceId === MEMMY_SOURCE_ID) return null;
-  const times: string[] = [];
-  if (stored.sessions.some((link) => sessionKey(link) === sessionKey(session))) {
-    const at = stored.linkedAt[sessionLinkKey(session)];
-    if (at) times.push(at);
-  }
-  const group = session.group
-    ? stored.groups.find((link) => link.sourceId === session.sourceId && link.groupId === session.group!.id && !link.excluded.includes(session.conversationId))
-    : undefined;
-  if (group) {
-    const at = stored.linkedAt[groupLinkKey(group)];
-    if (at) times.push(at);
-  }
-  return times.length ? times.reduce((earliest, at) => (Date.parse(at) < Date.parse(earliest) ? at : earliest)) : null;
-}
-
 interface MemmySessionRecords {
   conversationId: string;
   projectId: string;
@@ -1844,8 +1794,7 @@ function parseStoredLinks(content: string): StoredLinks | null {
       sourceId: text(session.sourceId),
       conversationId: text(session.conversationId)
     })).filter((session) => session.sourceId && session.conversationId),
-    synced,
-    linkedAt: Object.fromEntries(Object.entries(record(raw.linkedAt)).filter((entry): entry is [string, string] => typeof entry[1] === "string"))
+    synced
   };
 }
 

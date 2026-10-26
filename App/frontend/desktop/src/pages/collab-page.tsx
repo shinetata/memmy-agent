@@ -4,8 +4,6 @@ import { createPortal } from "react-dom";
 import {
   createHttpCollabClient,
   type CollabClient,
-  type CollabItem,
-  type CollabItemsView,
   type CollabLinks,
   type CollabProject,
   type CollabProjectSession,
@@ -54,7 +52,6 @@ import { AppFrame } from "./app-frame.js";
 import { memberColor } from "./collab-member-color.js";
 import { ProjectMembersDialog } from "./collab-members-dialog.js";
 import styles from "./collab-page.module.css";
-import { MemoryMarkdown } from "./memory/memory-markdown.js";
 
 export { memberColor };
 
@@ -78,7 +75,6 @@ const EMPTY_PROJECT_INSTRUCTIONS: ProjectInstructions = {
 };
 /** Member filter: anyone, only me, or only the other members. */
 type MemberFilter = "all" | "me" | "others";
-type BoardTab = "sessions" | "items";
 
 /** How an agent organizes its sessions, which names the groups in the picker. */
 export type GroupingKind = "directory" | "project" | "workspace" | "workbuddy";
@@ -187,8 +183,8 @@ export function localSessionKey(session: { sourceId: string; conversationId: str
 }
 
 /**
- * The board of one project: its header, the two tabs, and the session list. A project is local; when its sharing
- * switch is on, the sessions come from the cloud and the list also carries members, references and items.
+ * The board of one project: its header and the session list. A project is local; when its sharing switch is on,
+ * the sessions come from the cloud and the list also carries members and references.
  */
 export function CollabPage() {
   const { clients } = useApiClients();
@@ -200,7 +196,6 @@ export function CollabPage() {
   const collab = useMemo(() => (clients ? createHttpCollabClient(clients.runtimeConfig) : null), [clients]);
   const snapshot = useSyncExternalStore(subscribeCollabProjects, getCollabProjectsSnapshot, getCollabProjectsSnapshot);
   const [page, setPage] = useState<CollabSessionPage | null>(null);
-  const [tab, setTab] = useState<BoardTab>("sessions");
   const [member, setMember] = useState<MemberFilter>("all");
   const [query, setQuery] = useState("");
   const [searchDraft, setSearchDraft] = useState("");
@@ -571,238 +566,205 @@ export function CollabPage() {
                   </Button>
                 </header>
 
-                <div className={styles.tabs} role="tablist">
-                  <button
-                    type="button"
-                    role="tab"
-                    aria-selected={tab === "sessions"}
-                    className={`${styles.tab} ${tab === "sessions" ? styles.tabOn : ""}`}
-                    onClick={() => setTab("sessions")}
-                  >
-                    {t("collab.tab.sessions")}
-                  </button>
-                  <button
-                    type="button"
-                    role="tab"
-                    aria-selected={tab === "items"}
-                    className={`${styles.tab} ${tab === "items" ? styles.tabOn : ""}`}
-                    onClick={() => setTab("items")}
-                  >
-                    {t("collab.tab.items")}
-                  </button>
-                </div>
-
-                {tab === "sessions" ? (
+                {shared ? (
                   <>
-                    {shared ? (
-                      <>
-                        <div className={styles.toolbar}>
-                          <MemberFilterPicker
-                            value={member}
-                            options={memberOptions}
-                            onChange={setMember}
-                          />
-                          <label className={styles.searchBox}>
-                            <Search size={14} aria-hidden="true" className={styles.searchIcon} />
-                            <input
-                              value={searchDraft}
-                              placeholder={t("collab.sessions.searchPlaceholder")}
-                              aria-label={t("collab.sessions.searchPlaceholder")}
-                              onChange={(event) => {
-                                const next = event.target.value;
-                                setSearchDraft(next);
-                                // Clearing shows everything again at once; typing waits for a pause.
-                                if (!next.trim()) setQuery("");
-                              }}
-                              onKeyDown={(event) => {
-                                if (event.key === "Enter") setQuery(searchDraft.trim());
-                                if (event.key === "Escape") {
-                                  setSearchDraft("");
-                                  setQuery("");
-                                }
-                              }}
-                            />
-                            {searchDraft && searchDraft !== query ? (
-                              <button type="button" className={styles.searchGo} onClick={() => setQuery(searchDraft.trim())}>
-                                {t("collab.sessions.searchGo")}
-                              </button>
-                            ) : null}
-                          </label>
-                          <span className={styles.grow} />
-                          <Button size="sm" onClick={() => setPickOpen(true)}>
-                            <Link2 size={14} aria-hidden="true" />
-                            {t("collab.associate")}
-                          </Button>
-                        </div>
-
-                        {progress?.running ? (
-                          <div className={styles.syncStrip} role="status" aria-live="polite">
-                            <span className={styles.syncText}>
-                              {t("collab.sync.progress", {
-                                completed: String(progress.completed),
-                                total: String(progress.total)
-                              })}
-                            </span>
-                            <span className={styles.syncBar} aria-hidden="true">
-                              <span
-                                className={styles.syncBarFill}
-                                style={{ width: `${progress.total ? Math.round((progress.completed / progress.total) * 100) : 0}%` }}
-                              />
-                            </span>
-                          </div>
+                    <div className={styles.toolbar}>
+                      <MemberFilterPicker
+                        value={member}
+                        options={memberOptions}
+                        onChange={setMember}
+                      />
+                      <label className={styles.searchBox}>
+                        <Search size={14} aria-hidden="true" className={styles.searchIcon} />
+                        <input
+                          value={searchDraft}
+                          placeholder={t("collab.sessions.searchPlaceholder")}
+                          aria-label={t("collab.sessions.searchPlaceholder")}
+                          onChange={(event) => {
+                            const next = event.target.value;
+                            setSearchDraft(next);
+                            // Clearing shows everything again at once; typing waits for a pause.
+                            if (!next.trim()) setQuery("");
+                          }}
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter") setQuery(searchDraft.trim());
+                            if (event.key === "Escape") {
+                              setSearchDraft("");
+                              setQuery("");
+                            }
+                          }}
+                        />
+                        {searchDraft && searchDraft !== query ? (
+                          <button type="button" className={styles.searchGo} onClick={() => setQuery(searchDraft.trim())}>
+                            {t("collab.sessions.searchGo")}
+                          </button>
                         ) : null}
-                        {sessions === null ? (
-                          <p className={styles.loading}>{t("collab.loading")}</p>
-                        ) : sessions.length === 0 && filtering ? (
-                          // A filter with no hits is not an empty project: say what was searched and offer a way back.
-                          <div className={styles.empty}>
-                            <b>{t("collab.sessions.noMatch.title")}</b>
-                            <p>
-                              {query
-                                ? t("collab.sessions.noMatch.body", { query })
-                                : t("collab.sessions.noMatch.bodyMember")}
-                            </p>
-                            <Button size="sm" onClick={clearFilters}>{t("collab.sessions.noMatch.clear")}</Button>
-                          </div>
-                        ) : sessions.length === 0 ? (
-                          // An empty project is the one place to explain the tab: what it collects and what a
-                          // member can do with it. New projects start here, so it carries the first-run guidance.
-                          <section className={styles.guide} aria-label={t("collab.sessions.empty.title")}>
-                            <b className={styles.guideTitle}>{t("collab.sessions.empty.title")}</b>
-                            <p className={styles.guideLead}>{t("collab.sessions.empty.lead")}</p>
-                            <ul className={styles.guideList}>
-                              {([
-                                { key: "task", icon: <MessageSquarePlus size={15} aria-hidden="true" /> },
-                                { key: "associate", icon: <Link2 size={15} aria-hidden="true" /> },
-                                { key: "quote", icon: <Quote size={15} aria-hidden="true" /> },
-                                { key: "review", icon: <Users size={15} aria-hidden="true" /> }
-                              ] as const).map((item) => (
-                                <li key={item.key} className={styles.guideItem}>
-                                  <span className={styles.guideIcon} aria-hidden="true">{item.icon}</span>
-                                  <div className={styles.guideText}>
-                                    <b>{t(`collab.sessions.empty.${item.key}.title` as MessageKey)}</b>
-                                    <span>{t(`collab.sessions.empty.${item.key}.body` as MessageKey)}</span>
-                                  </div>
-                                </li>
-                              ))}
-                            </ul>
-                          </section>
-                        ) : (
-                          <>
-                          <ul className={styles.list}>
-                            {sessions.map((session) => {
-                              // Members see this person's nickname in their own Memmy, so show the nickname here too.
-                              const name = session.memberName || (session.mine ? t("collab.session.you") : "");
-                              const menuOpen = openMenuId === session.id;
-                              return (
-                                <li
-                                  key={session.id}
-                                  className={`${styles.row} ${styles.rowOpenable} ${menuOpen ? styles.rowMenuOpen : ""}`}
-                                  onClick={() => void openSession(session)}
-                                >
-                                  <span
-                                    className={styles.avatar}
-                                    style={{ background: memberColor(session.memberName || (session.mine ? t("collab.session.you") : "")) }}
-                                    aria-hidden="true"
-                                  >
-                                    {Array.from(name)[0] ?? "?"}
-                                  </span>
-                                  <div className={styles.rowText}>
-                                    <span className={styles.rowTitle}>{session.title}</span>
-                                    {session.lastQuestion ? <span className={styles.rowSummary}>{session.lastQuestion}</span> : null}
-                                  </div>
-                                  <span className={styles.meta}>
-                                    {[name, formatSessionTime(session.lastActiveAt)].filter(Boolean).join(" · ")}
-                                  </span>
+                      </label>
+                      <span className={styles.grow} />
+                      <Button size="sm" onClick={() => setPickOpen(true)}>
+                        <Link2 size={14} aria-hidden="true" />
+                        {t("collab.associate")}
+                      </Button>
+                    </div>
+
+                    {progress?.running ? (
+                      <div className={styles.syncStrip} role="status" aria-live="polite">
+                        <span className={styles.syncText}>
+                          {t("collab.sync.progress", {
+                            completed: String(progress.completed),
+                            total: String(progress.total)
+                          })}
+                        </span>
+                        <span className={styles.syncBar} aria-hidden="true">
+                          <span
+                            className={styles.syncBarFill}
+                            style={{ width: `${progress.total ? Math.round((progress.completed / progress.total) * 100) : 0}%` }}
+                          />
+                        </span>
+                      </div>
+                    ) : null}
+                    {sessions === null ? (
+                      <p className={styles.loading}>{t("collab.loading")}</p>
+                    ) : sessions.length === 0 && filtering ? (
+                      // A filter with no hits is not an empty project: say what was searched and offer a way back.
+                      <div className={styles.empty}>
+                        <b>{t("collab.sessions.noMatch.title")}</b>
+                        <p>
+                          {query
+                            ? t("collab.sessions.noMatch.body", { query })
+                            : t("collab.sessions.noMatch.bodyMember")}
+                        </p>
+                        <Button size="sm" onClick={clearFilters}>{t("collab.sessions.noMatch.clear")}</Button>
+                      </div>
+                    ) : sessions.length === 0 ? (
+                      // An empty project is the one place to explain the board: what it collects and what a
+                      // member can do with it. New projects start here, so it carries the first-run guidance.
+                      <section className={styles.guide} aria-label={t("collab.sessions.empty.title")}>
+                        <b className={styles.guideTitle}>{t("collab.sessions.empty.title")}</b>
+                        <p className={styles.guideLead}>{t("collab.sessions.empty.lead")}</p>
+                        <ul className={styles.guideList}>
+                          {([
+                            { key: "task", icon: <MessageSquarePlus size={15} aria-hidden="true" /> },
+                            { key: "associate", icon: <Link2 size={15} aria-hidden="true" /> },
+                            { key: "quote", icon: <Quote size={15} aria-hidden="true" /> },
+                            { key: "review", icon: <Users size={15} aria-hidden="true" /> }
+                          ] as const).map((item) => (
+                            <li key={item.key} className={styles.guideItem}>
+                              <span className={styles.guideIcon} aria-hidden="true">{item.icon}</span>
+                              <div className={styles.guideText}>
+                                <b>{t(`collab.sessions.empty.${item.key}.title` as MessageKey)}</b>
+                                <span>{t(`collab.sessions.empty.${item.key}.body` as MessageKey)}</span>
+                              </div>
+                            </li>
+                          ))}
+                        </ul>
+                      </section>
+                    ) : (
+                      <>
+                      <ul className={styles.list}>
+                        {sessions.map((session) => {
+                          // Members see this person's nickname in their own Memmy, so show the nickname here too.
+                          const name = session.memberName || (session.mine ? t("collab.session.you") : "");
+                          const menuOpen = openMenuId === session.id;
+                          return (
+                            <li
+                              key={session.id}
+                              className={`${styles.row} ${styles.rowOpenable} ${menuOpen ? styles.rowMenuOpen : ""}`}
+                              onClick={() => void openSession(session)}
+                            >
+                              <span
+                                className={styles.avatar}
+                                style={{ background: memberColor(session.memberName || (session.mine ? t("collab.session.you") : "")) }}
+                                aria-hidden="true"
+                              >
+                                {Array.from(name)[0] ?? "?"}
+                              </span>
+                              <div className={styles.rowText}>
+                                <span className={styles.rowTitle}>{session.title}</span>
+                                {session.lastQuestion ? <span className={styles.rowSummary}>{session.lastQuestion}</span> : null}
+                              </div>
+                              <span className={styles.meta}>
+                                {[name, formatSessionTime(session.lastActiveAt)].filter(Boolean).join(" · ")}
+                              </span>
+                              <button
+                                type="button"
+                                className={styles.moreButton}
+                                aria-label={t("collab.session.more")}
+                                title={t("collab.session.more")}
+                                aria-expanded={menuOpen}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  setOpenMenuId(menuOpen ? null : session.id);
+                                }}
+                              >
+                                <MoreHorizontal size={15} aria-hidden="true" />
+                              </button>
+                              {menuOpen ? (
+                                <>
+                                  {/*
+                                   * The row itself opens the session reader. Every click that belongs to the menu has to
+                                   * stop here, or copying a link also opens the session behind the toast.
+                                   */}
                                   <button
                                     type="button"
-                                    className={styles.moreButton}
-                                    aria-label={t("collab.session.more")}
-                                    title={t("collab.session.more")}
-                                    aria-expanded={menuOpen}
+                                    className={styles.menuScrim}
+                                    aria-label={t("collab.cancel")}
                                     onClick={(event) => {
                                       event.stopPropagation();
-                                      setOpenMenuId(menuOpen ? null : session.id);
+                                      setOpenMenuId(null);
                                     }}
-                                  >
-                                    <MoreHorizontal size={15} aria-hidden="true" />
-                                  </button>
-                                  {menuOpen ? (
-                                    <>
-                                      {/*
-                                       * The row itself opens the session reader. Every click that belongs to the menu has to
-                                       * stop here, or copying a link also opens the session behind the toast.
-                                       */}
-                                      <button
-                                        type="button"
-                                        className={styles.menuScrim}
-                                        aria-label={t("collab.cancel")}
-                                        onClick={(event) => {
-                                          event.stopPropagation();
-                                          setOpenMenuId(null);
-                                        }}
-                                      />
-                                      <div className={styles.menu} role="menu" onClick={(event) => event.stopPropagation()}>
-                                        <button type="button" role="menuitem" className={styles.menuItem} onClick={() => { setOpenMenuId(null); void copyLink(session); }}>
-                                          {t("collab.session.copyLink")}
+                                  />
+                                  <div className={styles.menu} role="menu" onClick={(event) => event.stopPropagation()}>
+                                    <button type="button" role="menuitem" className={styles.menuItem} onClick={() => { setOpenMenuId(null); void copyLink(session); }}>
+                                      {t("collab.session.copyLink")}
+                                    </button>
+                                    {session.mine ? (
+                                      <>
+                                        <div className={styles.menuSeparator} role="separator" />
+                                        <button type="button" role="menuitem" className={`${styles.menuItem} ${styles.menuItemDanger}`} onClick={() => { setOpenMenuId(null); setDeleting(session); }}>
+                                          {t("collab.session.delete")}
                                         </button>
-                                        {session.mine ? (
-                                          <>
-                                            <div className={styles.menuSeparator} role="separator" />
-                                            <button type="button" role="menuitem" className={`${styles.menuItem} ${styles.menuItemDanger}`} onClick={() => { setOpenMenuId(null); setDeleting(session); }}>
-                                              {t("collab.session.delete")}
-                                            </button>
-                                          </>
-                                        ) : null}
-                                      </div>
-                                    </>
-                                  ) : null}
-                                </li>
-                              );
+                                      </>
+                                    ) : null}
+                                  </div>
+                                </>
+                              ) : null}
+                            </li>
+                          );
+                        })}
+                      </ul>
+                      {total > SESSION_PAGE_SIZE ? (
+                        <nav className={styles.pager} aria-label={t("collab.sessions.pager")}>
+                          <span className={styles.pagerInfo}>
+                            {t("collab.sessions.pageInfo", {
+                              page: String(pageIndex + 1),
+                              pages: String(pageCount),
+                              total: String(total)
                             })}
-                          </ul>
-                          {total > SESSION_PAGE_SIZE ? (
-                            <nav className={styles.pager} aria-label={t("collab.sessions.pager")}>
-                              <span className={styles.pagerInfo}>
-                                {t("collab.sessions.pageInfo", {
-                                  page: String(pageIndex + 1),
-                                  pages: String(pageCount),
-                                  total: String(total)
-                                })}
-                              </span>
-                              <span className={styles.grow} />
-                              <Button size="sm" variant="ghost" disabled={pageIndex === 0} onClick={() => setPageIndex(pageIndex - 1)}>
-                                {t("collab.sessions.prevPage")}
-                              </Button>
-                              <Button size="sm" variant="ghost" disabled={pageIndex >= pageCount - 1} onClick={() => setPageIndex(pageIndex + 1)}>
-                                {t("collab.sessions.nextPage")}
-                              </Button>
-                            </nav>
-                          ) : total > 0 ? (
-                            <p className={styles.pagerInfo}>{t("collab.sessions.totalOnly", { total: String(total) })}</p>
-                          ) : null}
-                          </>
-                        )}
+                          </span>
+                          <span className={styles.grow} />
+                          <Button size="sm" variant="ghost" disabled={pageIndex === 0} onClick={() => setPageIndex(pageIndex - 1)}>
+                            {t("collab.sessions.prevPage")}
+                          </Button>
+                          <Button size="sm" variant="ghost" disabled={pageIndex >= pageCount - 1} onClick={() => setPageIndex(pageIndex + 1)}>
+                            {t("collab.sessions.nextPage")}
+                          </Button>
+                        </nav>
+                      ) : total > 0 ? (
+                        <p className={styles.pagerInfo}>{t("collab.sessions.totalOnly", { total: String(total) })}</p>
+                      ) : null}
                       </>
-                    ) : (
-                      <LocalProjectSessions
-                        tasks={localTasks}
-                        onOpenTask={(task) => {
-                          const dispatch = appState?.dispatch;
-                          if (!dispatch) return;
-                          void openAgentTaskInChat({ memmyAgent: clients?.memmyAgent, dispatch, task });
-                        }}
-                      />
                     )}
                   </>
-                ) : shared && collab ? (
-                  <CollabItemsPanel key={shared.id} collab={collab} projectId={shared.id} onToast={showToast} />
                 ) : (
-                  // Items come from project memory, which needs sharing; the notice says where to turn it on.
-                  <section className={styles.localNotice} aria-label={t("collab.tab.items")}>
-                    <b>{t("collab.items.empty.title")}</b>
-                    <p>{t("collab.items.empty.notShared")}</p>
-                  </section>
+                  <LocalProjectSessions
+                    tasks={localTasks}
+                    onOpenTask={(task) => {
+                      const dispatch = appState?.dispatch;
+                      if (!dispatch) return;
+                      void openAgentTaskInChat({ memmyAgent: clients?.memmyAgent, dispatch, task });
+                    }}
+                  />
                 )}
               </div>
             </div>
@@ -1475,271 +1437,6 @@ function ProjectBoardSettingsDialog(props: {
         </section>
       ) : null}
     </Modal>
-  );
-}
-
-/** How often the 事项 tab rereads items while MemOS is still processing one. */
-const ITEM_STATUS_POLL_MS = 3_000;
-/** How often an idle 事项 tab rereads, so a background pass shows up without the reader doing anything. */
-const ITEMS_REFRESH_MS = 60_000;
-
-/** The label of an item's state in project memory: 处理中, 已生效, 失败. */
-export function itemStatusKey(status: CollabItem["status"]): MessageKey {
-  if (status === "PROCESSING") return "collab.items.status.processing";
-  if (status === "FAILED") return "collab.items.status.failed";
-  return "collab.items.status.available";
-}
-
-/** The item's Markdown without its title, which the row already shows. */
-export function itemBodyMarkdown(markdown: string): string {
-  return markdown.replace(/^\s*#\s+[^\n]*\n?/u, "").trim();
-}
-
-/**
- * The 事项 tab: one Markdown file per item in the project's knowledge base. Everyone reads them; owners and admins
- * edit them; the owner's Memmy organizes sessions into them and can run a pass now instead of waiting for one.
- */
-function CollabItemsPanel(props: { collab: CollabClient; projectId: string; onToast: (message: string) => void }) {
-  const { collab, projectId, onToast } = props;
-  const { t } = useTranslation();
-  const [view, setView] = useState<CollabItemsView | null>(null);
-  const [failed, setFailed] = useState<string | null>(null);
-  const [openId, setOpenId] = useState<string | null>(null);
-  const [editingId, setEditingId] = useState<string | null>(null);
-
-  const load = useCallback(async () => {
-    try {
-      setView(await collab.listItems(projectId));
-      setFailed(null);
-    } catch (cause) {
-      setFailed(messageOf(cause));
-    }
-  }, [collab, projectId]);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
-
-  // A saved item reads 处理中 until MemOS has parsed the new version; keep rereading until it settles.
-  const processing = view?.items.some((item) => item.status === "PROCESSING") ?? false;
-  useEffect(() => {
-    if (!processing) return undefined;
-    const timer = setInterval(() => void load(), ITEM_STATUS_POLL_MS);
-    return () => clearInterval(timer);
-  }, [processing, load]);
-
-  // Organizing happens on its own timer, so an open board also rereads now and then to show what changed. Not while
-  // an item is being edited, so a refresh never competes with typing.
-  const editing = editingId !== null;
-  useEffect(() => {
-    if (processing || editing) return undefined;
-    const timer = setInterval(() => void load(), ITEMS_REFRESH_MS);
-    return () => clearInterval(timer);
-  }, [processing, editing, load]);
-
-  function saved(item: CollabItem, changed: boolean) {
-    setView((current) => current && { ...current, items: current.items.map((entry) => (entry.id === item.id ? item : entry)) });
-    setEditingId(null);
-    onToast(changed ? t("collab.items.edit.saved") : t("collab.items.edit.unchanged"));
-  }
-
-  if (failed !== null && view === null) {
-    return (
-      <div className={styles.empty} role="alert">
-        <p>{failed}</p>
-        <Button size="sm" onClick={() => void load()}>{t("collab.retry")}</Button>
-      </div>
-    );
-  }
-  if (view === null) return <p className={styles.loading}>{t("collab.loading")}</p>;
-
-  return (
-    <>
-      <div className={styles.toolbar}>
-        <span className={styles.itemsStatus}>
-          {view.organizedAt
-            ? t("collab.items.organizedAt", { time: formatSessionTime(view.organizedAt) })
-            : t("collab.items.neverOrganized")}
-          {view.pendingSessions ? ` · ${t("collab.items.pending", { count: String(view.pendingSessions) })}` : ""}
-        </span>
-      </div>
-      {view.lastError ? (
-        <p className={styles.itemsError} role="status">{t("collab.items.lastError", { message: view.lastError })}</p>
-      ) : null}
-      {view.items.length === 0 ? (
-        <div className={styles.empty}>
-          <b>{t("collab.items.empty.title")}</b>
-          <p>{view.canOrganize ? t("collab.items.empty.owner") : t("collab.items.empty.member")}</p>
-        </div>
-      ) : (
-        <ul className={styles.list}>
-          {view.items.map((item) => {
-            const open = openId === item.id;
-            return (
-              <li key={item.id} className={styles.itemBlock}>
-                <button
-                  type="button"
-                  className={`${styles.row} ${styles.rowOpenable} ${styles.itemRow}`}
-                  aria-expanded={open}
-                  onClick={() => {
-                    setOpenId(open ? null : item.id);
-                    if (open) setEditingId(null);
-                  }}
-                >
-                  {open ? <ChevronDown size={15} aria-hidden="true" /> : <ChevronRight size={15} aria-hidden="true" />}
-                  <div className={styles.rowText}>
-                    <span className={styles.rowTitle}>{item.name}</span>
-                    {item.summary ? <span className={styles.rowSummary}>{item.summary}</span> : null}
-                    {item.latest ? <span className={styles.itemLatest}>{t("collab.items.latest", { text: item.latest })}</span> : null}
-                  </div>
-                  <ItemStatusBadge item={item} />
-                  <span className={styles.meta}>{formatSessionTime(item.updatedAt)}</span>
-                </button>
-                {open && editingId === item.id ? (
-                  <CollabItemEditor
-                    collab={collab}
-                    projectId={projectId}
-                    itemId={item.id}
-                    onCancel={() => setEditingId(null)}
-                    onSaved={saved}
-                  />
-                ) : open ? (
-                  <CollabItemDetail item={item} canEdit={view.canEdit} onEdit={() => setEditingId(item.id)} />
-                ) : null}
-              </li>
-            );
-          })}
-        </ul>
-      )}
-    </>
-  );
-}
-
-function ItemStatusBadge(props: { item: CollabItem }) {
-  const { item } = props;
-  const { t } = useTranslation();
-  const tone = item.status === "PROCESSING" ? styles.itemStatusProcessing : item.status === "FAILED" ? styles.itemStatusFailed : styles.itemStatusAvailable;
-  return (
-    <span className={`${styles.itemStatus} ${tone}`} title={item.statusMessage ?? undefined}>
-      {t(itemStatusKey(item.status))}
-    </span>
-  );
-}
-
-function CollabItemDetail(props: { item: CollabItem; canEdit: boolean; onEdit: () => void }) {
-  const { item, canEdit, onEdit } = props;
-  const { t } = useTranslation();
-  const time = formatSessionTime(item.updatedAt);
-  const byline = item.updatedBy?.kind === "edit"
-    ? t("collab.items.updatedBy.edit", { time, name: item.updatedBy.name })
-    : t("collab.items.updatedBy.organize", { time });
-  return (
-    <div className={styles.itemDetail}>
-      {item.status === "FAILED" && item.statusMessage ? (
-        <p className={styles.itemsError} role="status">{t("collab.items.failedReason", { message: item.statusMessage })}</p>
-      ) : null}
-      <MemoryMarkdown text={itemBodyMarkdown(item.markdown)} />
-      <div className={styles.itemFooter}>
-        <span className={styles.itemMeta}>{byline}</span>
-        <span className={styles.grow} />
-        {canEdit ? (
-          <Button size="sm" onClick={onEdit}>
-            <Pencil size={13} aria-hidden="true" />
-            {t("collab.items.edit")}
-          </Button>
-        ) : null}
-      </div>
-    </div>
-  );
-}
-
-/**
- * Edits one item's Markdown. It opens the latest version and saves on top of it; when someone saved in between,
- * the editor switches to their version and keeps the unsaved draft beside it.
- */
-function CollabItemEditor(props: {
-  collab: CollabClient;
-  projectId: string;
-  itemId: string;
-  onCancel: () => void;
-  onSaved: (item: CollabItem, changed: boolean) => void;
-}) {
-  const { collab, projectId, itemId, onCancel, onSaved } = props;
-  const { t } = useTranslation();
-  const [base, setBase] = useState<CollabItem | null>(null);
-  const [draft, setDraft] = useState("");
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  /** The draft that lost to a newer version, kept so nothing typed is lost. */
-  const [lostDraft, setLostDraft] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    collab.readItem(projectId, itemId).then((latest) => {
-      if (cancelled) return;
-      setBase(latest);
-      setDraft(latest.markdown);
-    }, (cause: unknown) => {
-      if (!cancelled) setError(messageOf(cause));
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [collab, projectId, itemId]);
-
-  async function confirm() {
-    if (!base) return;
-    setSaving(true);
-    setError(null);
-    try {
-      const result = await collab.saveItem(projectId, base.id, { markdown: draft, baseVersion: base.version });
-      onSaved(result.item, result.changed);
-    } catch (cause) {
-      if (cause instanceof ApiRequestError && cause.code === "conflict") {
-        const latest = await collab.readItem(projectId, base.id).catch(() => null);
-        if (latest) {
-          setLostDraft(draft);
-          setBase(latest);
-          setDraft(latest.markdown);
-          return;
-        }
-      }
-      setError(messageOf(cause) || t("collab.items.edit.failed"));
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  return (
-    <div className={styles.itemDetail}>
-      {lostDraft !== null ? (
-        <div className={styles.itemsError} role="alert">
-          <p className={styles.itemConflict}>{t("collab.items.edit.conflict")}</p>
-          <details>
-            <summary>{t("collab.items.edit.yourDraft")}</summary>
-            <pre className={styles.itemDraft}>{lostDraft}</pre>
-          </details>
-        </div>
-      ) : null}
-      {error ? <p className={styles.itemsError} role="alert">{error}</p> : null}
-      {base ? (
-        <textarea
-          className={styles.itemTextarea}
-          value={draft}
-          spellCheck={false}
-          aria-label={t("collab.items.edit.label")}
-          onChange={(event) => setDraft(event.target.value)}
-        />
-      ) : error ? null : <p className={styles.loading}>{t("collab.loading")}</p>}
-      <div className={styles.itemFooter}>
-        <span className={styles.itemMeta}>{t("collab.items.edit.hint")}</span>
-        <span className={styles.grow} />
-        <Button size="sm" variant="ghost" disabled={saving} onClick={onCancel}>{t("collab.items.edit.cancel")}</Button>
-        <Button size="sm" variant="primary" disabled={saving || !base || !draft.trim()} onClick={() => void confirm()}>
-          {saving ? t("collab.items.edit.saving") : t("collab.items.edit.confirm")}
-        </Button>
-      </div>
-    </div>
   );
 }
 

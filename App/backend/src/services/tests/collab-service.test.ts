@@ -5,12 +5,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import { LocalSessionReadError, type LocalSessionReader } from "../../adapters/outbound/agent-source/session-reference/local-session-reader.js";
 import {
   createCollabService,
-  historyBoundary,
   linkedSessionKeys,
   pageOf,
   parseSessionReference,
   sessionKey,
-  stampLinks,
   type CollabServiceOptions,
   type LocalAgentSession
 } from "../collab-service.js";
@@ -645,45 +643,24 @@ describe("collab service", () => {
     expect(await svc.getSyncProgress("p-1")).toMatchObject({ completed: 4, failed: 1 });
   });
 
-  it("sends when each session joined the project, keeps that time across saves, and reports a finished association", async () => {
+  it("uploads a linked group and a session linked later", async () => {
     const local = [
       localSession("claude_code", "a1", "/repo", "2026-10-22T01:00:00.000Z"),
       localSession("codex", "c1", null, "2026-10-22T01:00:00.000Z")
     ];
     const { fetcher, calls } = linkFetch(local);
-    let clock = new Date("2026-10-22T06:00:00.000Z");
-    const finished: string[] = [];
-    const svc = service(fetcher, { now: () => clock, onSessionsUploaded: (projectId) => finished.push(projectId) });
+    const svc = service(fetcher);
     const group = { sourceId: "claude_code", groupId: "/repo", excluded: [] };
 
     await svc.saveLinks("p-1", { groups: [group], sessions: [] });
     await waitForUploads(svc, "p-1");
-    clock = new Date("2026-10-22T07:00:00.000Z");
     await svc.saveLinks("p-1", { groups: [group], sessions: [{ sourceId: "codex", conversationId: "c1" }] });
     await waitForUploads(svc, "p-1");
 
-    const uploads = calls.filter((call) => call.method === "PUT").map((call) => (call.body as { sessions: Array<{ sourceSessionId: string; historyBefore: string | null }> }).sessions[0]!);
-    // The group keeps the time it was linked; the session linked an hour later has its own.
-    expect(uploads.map((upload) => [upload.sourceSessionId, upload.historyBefore])).toEqual([
-      ["a1", "2026-10-22T06:00:00.000Z"],
-      ["c1", "2026-10-22T07:00:00.000Z"]
-    ]);
-    expect(finished).toEqual(["p-1", "p-1"]);
-  });
-
-  it("ends history at the earliest link covering a session, and gives Memmy tasks none", () => {
-    const links = {
-      groups: [{ sourceId: "claude_code", groupId: "/repo", excluded: ["skipped"] }],
-      sessions: [{ sourceId: "claude_code", conversationId: "a1" }]
-    };
-    const linkedAt = stampLinks(stampLinks({}, { groups: links.groups, sessions: [] }, "2026-10-22T07:00:00.000Z"), links, "2026-10-22T06:00:00.000Z");
-    const stored = { ...links, linkedAt };
-    expect(historyBoundary(stored, localSession("claude_code", "a1", "/repo", ""))).toBe("2026-10-22T06:00:00.000Z");
-    expect(historyBoundary(stored, localSession("claude_code", "a2", "/repo", ""))).toBe("2026-10-22T07:00:00.000Z");
-    expect(historyBoundary(stored, localSession("claude_code", "skipped", "/repo", ""))).toBeNull();
-    expect(historyBoundary(stored, localSession("memmy", "task-1", null, ""))).toBeNull();
-    // Links saved before link times were kept upload as they did, without history.
-    expect(historyBoundary({ ...links, linkedAt: {} }, localSession("claude_code", "a2", "/repo", ""))).toBeNull();
+    const uploads = calls.filter((call) => call.method === "PUT").map((call) => (call.body as { sessions: Array<Record<string, unknown>> }).sessions[0]!);
+    expect(uploads.map((upload) => upload.sourceSessionId)).toEqual(["a1", "c1"]);
+    // The upload carries the session itself and nothing about when it joined the project.
+    expect(Object.keys(uploads[0]!).sort()).toEqual(["lastActiveAt", "source", "sourceSessionId", "title", "turns"]);
   });
 
   it("offers @ candidates from one project only, never across projects", async () => {

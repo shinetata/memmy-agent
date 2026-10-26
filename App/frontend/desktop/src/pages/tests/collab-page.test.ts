@@ -7,8 +7,6 @@ import {
   groupCheckState,
   groupingKind,
   isSessionChecked,
-  itemBodyMarkdown,
-  itemStatusKey,
   localSessionKey,
   toggleGroupLink,
   toggleSessionLink
@@ -82,14 +80,5 @@ describe("collab page helpers", () => {
     expect(formatSessionTime(null)).toBe("");
     expect(formatSessionTime("not a date")).toBe("");
     expect(formatSessionTime("2026-10-21T13:30:00.000Z")).toMatch(/^10\/2[12] \d{2}:30$/u);
-  });
-
-  it("labels an item by its state in project memory and drops its title from the body", () => {
-    expect(["PROCESSING", "AVAILABLE", "FAILED"].map((status) => itemStatusKey(status as "PROCESSING"))).toEqual([
-      "collab.items.status.processing",
-      "collab.items.status.available",
-      "collab.items.status.failed"
-    ]);
-    expect(itemBodyMarkdown("# 知识库分享\n\n**摘要**：分享\n\n## 演变轨迹\n- 10/23 上线\n")).toBe("**摘要**：分享\n\n## 演变轨迹\n- 10/23 上线");
   });
 });

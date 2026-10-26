@@ -7,7 +7,6 @@ import { registerKnowledgeRoutes } from "@memmy/knowledge/routes";
 import type { PermissionManager } from "../../../permission/index.js";
 import type { BackendServices } from "../../../services/index.js";
 import type { CollabService } from "../../../services/collab-service.js";
-import type { CollabItemsService } from "../../../services/collab-items-service.js";
 import type { ProjectDirectoryService } from "../../../services/project-directory-service.js";
 import { registerAccountRoutes } from "./routes/account.js";
 import { registerCollabRoutes } from "./routes/collab.js";
@@ -37,8 +36,6 @@ export interface CreateLocalApiServerOptions {
   knowledge?: ManagedKnowledgeOptions;
   /** Online projects; absent in tests that do not exercise them. */
   collab?: CollabService;
-  /** Work items distilled from an online project's memory, shown on its board. */
-  collabItems?: CollabItemsService;
   /** The managed folder a project created by name alone runs its tasks in. */
   projectDirectory?: ProjectDirectoryService;
   permissionManager: PermissionManager;
@@ -139,7 +136,7 @@ export function createLocalApiServer(options: CreateLocalApiServerOptions): Fast
     authenticateRuntimeToken
   });
   if (options.collab) {
-    registerCollabRoutes(app, { collab: options.collab, items: options.collabItems, authenticateRuntimeToken });
+    registerCollabRoutes(app, { collab: options.collab, authenticateRuntimeToken });
   }
   // 项目指令与托管目录都是项目自己的接口，任一需要时都注册：指令不依赖托管目录。
   if (options.projectDirectory || options.services.projectInstructions) {

@@ -99,35 +99,6 @@ const ProjectTaskSchema = z.object({
 });
 const ProjectTasksResponseSchema = z.object({ tasks: z.array(ProjectTaskSchema) });
 const OkResponseSchema = z.object({ ok: z.literal(true) });
-const ItemSchema = z.object({
-  id: z.string(),
-  name: z.string(),
-  summary: z.string(),
-  /** The last 演变轨迹 entry. */
-  latest: z.string(),
-  /** Whether MemOS has the latest Markdown in effect: 处理中, 已生效, 失败. */
-  status: z.enum(["PROCESSING", "AVAILABLE", "FAILED"]),
-  statusMessage: z.string().nullable(),
-  /** The version a save builds on. */
-  version: z.number(),
-  markdown: z.string(),
-  sources: z.array(z.string()),
-  createdAt: z.string(),
-  updatedAt: z.string(),
-  updatedBy: z.object({ name: z.string(), kind: z.enum(["organize", "edit"]) }).nullable()
-});
-const ItemsResponseSchema = z.object({
-  items: z.array(ItemSchema),
-  organizedAt: z.string().nullable(),
-  role: z.string(),
-  canEdit: z.boolean(),
-  canOrganize: z.boolean(),
-  pendingSessions: z.number(),
-  /** Why this device's last pass failed; null when it did not. */
-  lastError: z.string().nullable()
-});
-const ItemResponseSchema = z.object({ item: ItemSchema });
-const SaveItemResponseSchema = z.object({ item: ItemSchema, changed: z.boolean() });
 const RoleSchema = z.enum(["owner", "admin", "member"]);
 const JoinModeSchema = z.enum(["direct", "approval"]);
 const MemberSchema = z.object({
@@ -187,9 +158,6 @@ export interface CollabSessionPage {
 export type CollabSyncProgress = z.infer<typeof SyncProgressSchema>;
 /** A Memmy session of this project's local folder, and whether the project includes it. */
 export type CollabProjectTask = z.infer<typeof ProjectTaskSchema>;
-/** A work item: one Markdown file in the project's knowledge base, indexed by the cloud. */
-export type CollabItem = z.infer<typeof ItemSchema>;
-export type CollabItemsView = z.infer<typeof ItemsResponseSchema>;
 export type CollabRole = z.infer<typeof RoleSchema>;
 export type CollabJoinMode = z.infer<typeof JoinModeSchema>;
 export type CollabMember = z.infer<typeof MemberSchema>;
@@ -248,12 +216,6 @@ export interface CollabClient {
    * task sync to one project, so opening a board never waits for the others.
    */
   syncSessions(options?: { tasksOnly?: boolean; projectId?: string }): Promise<CollabSyncResult>;
-  /** The project's work items, most recently updated first. */
-  listItems(projectId: string): Promise<CollabItemsView>;
-  /** One item with its current Markdown, to edit it. */
-  readItem(projectId: string, itemId: string): Promise<CollabItem>;
-  /** Saves a hand edit on top of `baseVersion`; a newer version in between fails with code "conflict". */
-  saveItem(projectId: string, itemId: string, input: { markdown: string; baseVersion: number }): Promise<{ item: CollabItem; changed: boolean }>;
   /** Who is in the project; owners and admins also get the join mode's pending requests. */
   listMembers(projectId: string): Promise<CollabMembers>;
   /** The person's own invite link to the project. */
@@ -448,33 +410,6 @@ export function createHttpCollabClient(config: RuntimeConfig): CollabClient {
         path: `/api/collab/projects/${encodeURIComponent(projectId)}/sessions/${encodeURIComponent(sessionId)}`,
         schema: OkResponseSchema,
         init: { method: "DELETE" }
-      });
-    },
-
-    async listItems(projectId) {
-      return requestJson({
-        config,
-        path: `/api/collab/projects/${encodeURIComponent(projectId)}/items`,
-        schema: ItemsResponseSchema
-      });
-    },
-
-    async readItem(projectId, itemId) {
-      const data = await requestJson({
-        config,
-        path: `/api/collab/projects/${encodeURIComponent(projectId)}/items/${encodeURIComponent(itemId)}`,
-        schema: ItemResponseSchema
-      });
-      return data.item;
-    },
-
-    async saveItem(projectId, itemId, input) {
-      return requestJson({
-        config,
-        path: `/api/collab/projects/${encodeURIComponent(projectId)}/items/${encodeURIComponent(itemId)}`,
-        schema: SaveItemResponseSchema,
-        body: input,
-        init: { method: "PUT" }
       });
     },
 

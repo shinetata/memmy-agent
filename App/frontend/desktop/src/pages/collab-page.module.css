@@ -82,36 +82,6 @@
   white-space: nowrap;
 }
 
-.tabs {
-  display: flex;
-  gap: 26px;
-  margin-top: 22px;
-  border-bottom: 1px solid var(--collab-line);
-}
-
-.tab {
-  padding: 10px 0;
-  margin-bottom: -1px;
-  border: 0;
-  border-bottom: 2px solid transparent;
-  background: transparent;
-  color: var(--collab-ter);
-  font: inherit;
-  font-size: 14.5px;
-  font-weight: 700;
-  cursor: pointer;
-}
-
-.tab:hover {
-  color: var(--collab-ink-2);
-}
-
-.tabOn,
-.tabOn:hover {
-  color: var(--collab-ink);
-  border-bottom-color: var(--collab-ink);
-}
-
 .toolbar {
   display: flex;
   align-items: center;
@@ -967,125 +937,6 @@
   pointer-events: none;
 }
 
-/* 事项：每个事项是项目知识库里的一个 Markdown 文件；所有者和管理员可编辑，其他成员只读 */
-.itemsStatus {
-  color: var(--collab-ter);
-  font-size: 12.5px;
-}
-
-.itemBlock + .itemBlock {
-  border-top: 1px solid var(--collab-line-soft);
-}
-
-.itemRow {
-  width: 100%;
-  border: 0;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  text-align: left;
-}
-
-.itemRow > svg {
-  flex: none;
-  color: var(--collab-ter);
-}
-
-.itemLatest {
-  min-width: 0;
-  overflow: hidden;
-  color: var(--collab-accent-deep);
-  font-size: 12.5px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.itemStatus {
-  flex: none;
-  padding: 1px 8px;
-  border-radius: 999px;
-  font-size: 12px;
-  font-weight: 600;
-  white-space: nowrap;
-}
-
-.itemStatusProcessing {
-  background: color-mix(in srgb, #4b9fd0 14%, transparent);
-  color: #2f78a6;
-}
-
-.itemStatusAvailable {
-  background: color-mix(in srgb, #3f9c8a 14%, transparent);
-  color: #2c7a6a;
-}
-
-.itemStatusFailed {
-  background: color-mix(in srgb, #d9822b 14%, transparent);
-  color: #9a5a17;
-}
-
-.itemDetail {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  padding: 2px 20px 18px 51px;
-  color: var(--collab-ink-2);
-  font-size: 13px;
-  line-height: 1.65;
-}
-
-.itemFooter {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.itemMeta {
-  margin: 0;
-  color: var(--collab-ter);
-  font-size: 12px;
-}
-
-.itemTextarea {
-  box-sizing: border-box;
-  width: 100%;
-  min-height: 320px;
-  padding: 12px 14px;
-  border: 1px solid var(--collab-line);
-  border-radius: 10px;
-  background: var(--color-background-paper, #fff);
-  color: var(--collab-ink);
-  font: 13px/1.6 ui-monospace, "SF Mono", Menlo, monospace;
-  resize: vertical;
-}
-
-.itemTextarea:focus {
-  border-color: var(--collab-accent-deep);
-  outline: none;
-}
-
-.itemConflict {
-  margin: 0 0 6px;
-}
-
-.itemDraft {
-  max-height: 220px;
-  margin: 6px 0 0;
-  overflow: auto;
-  font: 12px/1.55 ui-monospace, "SF Mono", Menlo, monospace;
-  white-space: pre-wrap;
-}
-
-.itemsError {
-  margin: 10px 0 0;
-  padding: 8px 12px;
-  border-radius: 10px;
-  background: color-mix(in srgb, #d9822b 10%, transparent);
-  color: #9a5a17;
-  font-size: 12.5px;
-  line-height: 1.5;
-}
-
 /* 项目看板：未共享时的本机会话，与配置弹窗 */
 .localIcon {
   display: grid;
@@ -1293,26 +1144,6 @@
   color: var(--collab-ter);
   font-size: 13px;
   line-height: 1.7;
-}
-
-/* 事项页：说清楚怎么开启协作，但不放按钮，入口统一在项目配置里 */
-.localNotice {
-  margin: 24px 0;
-  color: var(--collab-ter);
-  font-size: 13px;
-  line-height: 1.75;
-}
-
-.localNotice b {
-  display: block;
-  margin-bottom: 6px;
-  color: var(--collab-ink-2);
-  font-size: 14px;
-  font-weight: 800;
-}
-
-.localNotice p {
-  margin: 0;
 }
 
 /* 选择要同步的会话：项目自己的 Memmy 会话，可单选可全选 */

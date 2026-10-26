@@ -1,14 +1,12 @@
 /** Online project routes: projects, associated sessions, and references from other agents. */
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
-import type { CollabItemsService } from "../../../../services/collab-items-service.js";
 import { MAX_PROJECT_INSTRUCTIONS_CHARS } from "@memmy/local-api-contracts";
 import { sinceWindowMs, type CollabService } from "../../../../services/collab-service.js";
 import { withErrorEnvelope } from "../../../../services/error-envelope.js";
 
 export interface RegisterCollabRoutesOptions {
   collab: CollabService;
-  items?: CollabItemsService;
   authenticateRuntimeToken: (request: FastifyRequest, reply: FastifyReply) => Promise<unknown>;
 }
 
@@ -73,7 +71,6 @@ const ReadViewSchema = z.object({
   all: z.boolean().optional()
 }).strict().refine((view) => Object.keys(view).length <= 1, "只能指定一种读取范围");
 const ReadSchema = z.object({ reference: z.string().trim().min(1).max(2_000), view: ReadViewSchema.optional() }).strict();
-const ItemIdSchema = z.string().regex(/^[A-Za-z0-9_-]{1,64}$/u, "事项 ID 无效");
 const RenameProjectSchema = z.object({
   name: z.string().trim().min(1, "请填写项目名称").max(20, "项目名称不超过 20 个字")
 }).strict();
@@ -87,10 +84,6 @@ const InstructionsSchema = z.object({
 const ProjectTasksSchema = z.object({
   /** Conversation ids of the project's Memmy sessions that members may read. */
   included: z.array(ConversationIdSchema).max(500)
-}).strict();
-const SaveItemSchema = z.object({
-  markdown: z.string().trim().min(1, "事项内容不能为空").max(30_000, "事项内容过长"),
-  baseVersion: z.number().int().min(0)
 }).strict();
 /** Cloud account IDs are numeric. */
 const UserIdSchema = z.string().regex(/^[0-9]{1,18}$/u, "成员 ID 无效");
@@ -273,22 +266,4 @@ export function registerCollabRoutes(app: FastifyInstance, options: RegisterColl
     const input = ReadSchema.parse(request.body ?? {});
     return reply.send(await options.collab.readSession(input.reference, input.view));
   }));
-
-  const items = options.items;
-  if (items) {
-    app.get<{ Params: { projectId: string } }>("/api/collab/projects/:projectId/items", guard, withErrorEnvelope(async (request, reply) =>
-      reply.send(await items.listItems(ProjectIdSchema.parse((request.params as { projectId: string }).projectId)))));
-
-    // Editing opens the item's current Markdown and the version it is saved on top of.
-    app.get<{ Params: { projectId: string; itemId: string } }>("/api/collab/projects/:projectId/items/:itemId", guard, withErrorEnvelope(async (request, reply) => {
-      const params = request.params as { projectId: string; itemId: string };
-      return reply.send(await items.readItem(ProjectIdSchema.parse(params.projectId), ItemIdSchema.parse(params.itemId)));
-    }));
-
-    app.put<{ Params: { projectId: string; itemId: string } }>("/api/collab/projects/:projectId/items/:itemId", guard, withErrorEnvelope(async (request, reply) => {
-      const params = request.params as { projectId: string; itemId: string };
-      const input = SaveItemSchema.parse(request.body ?? {});
-      return reply.send(await items.saveItem(ProjectIdSchema.parse(params.projectId), ItemIdSchema.parse(params.itemId), input));
-    }));
-  }
 }
