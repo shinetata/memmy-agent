@@ -5,6 +5,7 @@ import { useOptionalApiClients } from "../app/providers.js";
 import { Button } from "../components/button.js";
 import { Modal } from "../components/modal.js";
 import { useTranslation } from "../i18n/use-translation.js";
+import { isComposingKeyboardEvent } from "../utils/keyboard.js";
 import { memberColor } from "./collab-member-color.js";
 import styles from "./collab-page.module.css";
 
@@ -208,7 +209,9 @@ export function JoinProjectModal(props: {
               placeholder={t("collab.join.pastePlaceholder")}
               onChange={(event) => setReference(event.target.value)}
               onKeyDown={(event) => {
-                if (event.key === "Enter") void readInvite();
+                // 回车确认输入法候选词时不要当成“读邀请”；粘贴链接本身不经过输入法。
+                if (event.key !== "Enter" || isComposingKeyboardEvent(event)) return;
+                void readInvite();
               }}
             />
           </label>

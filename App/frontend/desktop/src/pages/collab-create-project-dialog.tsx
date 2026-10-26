@@ -7,6 +7,7 @@ import { useOptionalApiClients } from "../app/providers.js";
 import { Button } from "../components/button.js";
 import { Modal } from "../components/modal.js";
 import { useTranslation } from "../i18n/use-translation.js";
+import { isComposingKeyboardEvent } from "../utils/keyboard.js";
 import styles from "./collab-page.module.css";
 
 const MAX_PROJECT_NAME_CHARS = 20;
@@ -185,7 +186,9 @@ export function CreateProjectModal(props: {
               placeholder={t("collab.create.namePlaceholder")}
               onChange={(event) => setName(event.target.value)}
               onKeyDown={(event) => {
-                if (event.key === "Enter") void submit();
+                // 中文等输入法用回车确认候选词（组词上屏），那不是提交意图：否则半成品拼音会被当成项目名。
+                if (event.key !== "Enter" || isComposingKeyboardEvent(event)) return;
+                void submit();
               }}
             />
           </div>

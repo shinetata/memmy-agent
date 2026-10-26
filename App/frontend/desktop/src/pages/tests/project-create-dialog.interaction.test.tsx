@@ -138,6 +138,32 @@ describe("new project dialog", () => {
     expect(getCollabProjectsSnapshot().taskPickerFor).toBeNull();
   });
 
+  /** Enter on the name field; `composing` is what a Chinese IME reports while a candidate is being chosen. */
+  async function pressEnter(input: HTMLInputElement, composing: boolean) {
+    await act(async () => {
+      input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, isComposing: composing }));
+    });
+    await flush();
+  }
+
+  it("ignores the Enter that confirms an IME candidate, so a half-typed pinyin never becomes the name", async () => {
+    // 中文输入法打字时，回车上屏候选词，不是提交：这时候不能建项目。
+    await act(async () => type(nameInput(), "wo'shi"));
+    await pressEnter(nameInput(), true);
+
+    expect(mocks.mutateProject).not.toHaveBeenCalled();
+    expect(mocks.createProject).not.toHaveBeenCalled();
+    expect(onCreated).not.toHaveBeenCalled();
+  });
+
+  it("still creates the project on a plain Enter", async () => {
+    await act(async () => type(nameInput(), "demo"));
+    await pressEnter(nameInput(), false);
+
+    expect(mocks.mutateProject).toHaveBeenCalledWith(expect.objectContaining({ kind: "create" }));
+    expect(onCreated).toHaveBeenCalledWith("local-1");
+  });
+
   it("creates the cloud record once sharing is ticked", async () => {
     await act(async () => type(nameInput(), "demo"));
     await act(async () => {
