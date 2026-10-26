@@ -135,7 +135,9 @@ describe("claude code skill target", () => {
       allow: ["Bash(npm test:*)", "Bash(memmy-session read:*)", "Bash(memmy-session search:*)", "Read(~/.memmy/projects/**)"],
       deny: ["Bash(rm:*)"]
     });
-    expect(readFileSync(join(rootDirectory, "skills", "memmy-session", "SKILL.md"), "utf8")).toContain("name: memmy-session");
+    const sessionSkillFile = readFileSync(join(rootDirectory, "skills", "memmy-session", "SKILL.md"), "utf8");
+    expect(sessionSkillFile).toContain("name: memmy-session");
+    expect(sessionSkillFile).not.toContain("outside the sandbox");
 
     await target.uninstallPlugin?.("claude_code");
 

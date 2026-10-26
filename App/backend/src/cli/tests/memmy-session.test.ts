@@ -112,4 +112,15 @@ describe("memmy-session", () => {
     expect(await run([], { runtimeConfigPath })).toMatch(/^Usage:/u);
     await expect(run(["list"], { runtimeConfigPath })).rejects.toThrow(/未知命令：list/u);
   });
+
+  it("tells a sandboxed agent to rerun outside the sandbox, and only a refused connection to open Memmy", async () => {
+    const failing = (code: string) => (async () => {
+      throw new TypeError("fetch failed", { cause: Object.assign(new Error(`connect ${code} 127.0.0.1:62315`), { code }) });
+    }) as typeof fetch;
+    const runtimeConfigPath = runtimeFile({ baseUrl: "http://127.0.0.1:62315", localToken: "t" });
+
+    await expect(run(["search", "连接器"], { fetch: failing("EPERM"), runtimeConfigPath })).rejects.toThrow(/沙箱外权限重新运行/u);
+    await expect(run(["search", "连接器"], { fetch: failing("ECONNREFUSED"), runtimeConfigPath }))
+      .rejects.toThrow("无法连接 Memmy，请打开 Memmy 后重试。");
+  });
 });

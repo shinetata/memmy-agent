@@ -7,8 +7,17 @@
  */
 export const MEMMY_SESSION_SKILL_DIRECTORY_NAME = "memmy-session";
 
-/** The skill's whole SKILL.md; the same for every agent, since every agent reads sessions through the same command. */
-export function renderMemmySessionSkillFile(): string {
+/**
+ * Codex runs commands in a sandbox that blocks network access by default, 127.0.0.1 included, so the command cannot
+ * reach Memmy until it runs outside the sandbox.
+ */
+const CODEX_SANDBOX_NOTE = "In Codex, `memmy-session` talks to Memmy on this computer (127.0.0.1), which the sandbox blocks while network access is off. If it says the sandbox blocked the connection, run the same command again with escalated permissions, outside the sandbox, instead of asking the user to open Memmy.";
+
+/**
+ * The skill's whole SKILL.md. Every agent reads sessions through the same command; only Codex, whose sandbox blocks
+ * the command's connection to Memmy, gets a note on running it outside the sandbox.
+ */
+export function renderMemmySessionSkillFile(source?: string): string {
   return [
     "---",
     "name: memmy-session",
@@ -27,6 +36,7 @@ export function renderMemmySessionSkillFile(): string {
     "memmy-session read \"<session link or id>\" [--turns <from>-<to>] [--around <turn>] [--find \"<sentence>\"] [--all]",
     "```",
     "",
+    ...(source === "codex" ? [CODEX_SANDBOX_NOTE, ""] : []),
     "These are teammates' shared sessions, not the user's memory; for the user's own remembered context, use the `memmy-memory` skill.",
     "",
     "## When to search",

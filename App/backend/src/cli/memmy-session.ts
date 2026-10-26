@@ -14,6 +14,9 @@ import { pathToFileURL } from "node:url";
 const RUNTIME_TOKEN_HEADER = "x-memmy-local-token";
 const REQUEST_TIMEOUT_MS = 90_000;
 const DESKTOP_NOT_RUNNING = "无法连接 Memmy，请打开 Memmy 后重试。";
+// The agent's sandbox refused the connection before it reached Memmy, so opening Memmy would not help; running the
+// command outside the sandbox does.
+const SANDBOX_BLOCKED = "当前环境不允许连接本机的 Memmy，通常是 Agent 的沙箱（sandbox）关闭了网络访问，Memmy 本身可能正常运行。请用沙箱外权限重新运行这条命令，不需要重新打开 Memmy。";
 const NO_MATCH = "没有匹配的会话。可以换更短的关键词，或去掉 --member、--since 后重试；会话也可能还没有共享到项目。";
 const USAGE = [
   "Usage:",
@@ -160,8 +163,8 @@ async function localApi(
       },
       body: body === undefined ? undefined : JSON.stringify(body)
     });
-  } catch {
-    throw new Error(DESKTOP_NOT_RUNNING);
+  } catch (error) {
+    throw new Error(connectFailureMessage(error));
   }
   const payload = await response.json().catch(() => ({})) as Record<string, unknown>;
   if (!response.ok) {
@@ -169,6 +172,20 @@ async function localApi(
     throw new Error(text(error.message) || `Memmy request failed (${response.status})`);
   }
   return payload;
+}
+
+/**
+ * Why the local API could not be reached. `fetch` rejects with a TypeError whose `cause` is the socket error:
+ * `ECONNREFUSED` when nothing listens on the port (Memmy quit and left runtime.json behind), `EPERM` when a sandbox
+ * such as Codex's denies the connection before it is made.
+ */
+function connectFailureMessage(error: unknown): string {
+  const cause = isRecord(error) && isRecord(error.cause) ? error.cause : {};
+  if (cause.code === "EPERM" || cause.code === "EACCES") {
+    // The raw socket error lets an agent such as Codex recognise the sandbox denial on its own.
+    return `${SANDBOX_BLOCKED}\n原始错误：${text(cause.message)}`;
+  }
+  return DESKTOP_NOT_RUNNING;
 }
 
 function defaultRuntimeConfigPath(): string {

@@ -149,7 +149,7 @@ export function createSkillDistributionService(
         ? renderMemmyPluginSkillManifest(sourceId)
         : renderMemmyDefaultSkillManifest(sourceId);
       const memoryCurrent = await isMemmySkillDirectoryCurrent(root, manifest);
-      if (memoryCurrent && await isMemmySessionSkillDirectoryCurrent(root)) return false;
+      if (memoryCurrent && await isMemmySessionSkillDirectoryCurrent(root, sourceId)) return false;
 
       if (!memoryCurrent) {
         if (kind === "plugin") await target.installPlugin!(sourceId);
@@ -157,7 +157,7 @@ export function createSkillDistributionService(
         else await replaceMemmySkillDirectory(root, manifest);
       }
       // The session skill is installed with the memory skill; an agent connected before it existed gets it here.
-      if (!(await isMemmySessionSkillDirectoryCurrent(root))) await replaceMemmySessionSkillDirectory(root);
+      if (!(await isMemmySessionSkillDirectoryCurrent(root, sourceId))) await replaceMemmySessionSkillDirectory(root, sourceId);
       return true;
     }
   };

@@ -35,6 +35,9 @@ describe("codex skill target", () => {
     expect(resumeSkillFile).toContain("name: memmy-resume");
     expect(resumeSkillFile).toContain("disable-model-invocation: true");
     expect(resumeSkillFile).toContain("--source codex");
+    // Codex's sandbox blocks the command's connection to Memmy, so its session skill says how to run it outside.
+    const sessionSkillFile = readFileSync(join(rootDirectory, "skills", "memmy-session", "SKILL.md"), "utf8");
+    expect(sessionSkillFile).toContain("with escalated permissions, outside the sandbox");
     await expect(target.isInstalled("codex")).resolves.toBe(true);
   });
 

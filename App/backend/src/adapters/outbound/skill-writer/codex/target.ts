@@ -69,7 +69,7 @@ export function createCodexSkillTarget(deps: CreateCodexSkillTargetDeps = {}): S
       const existing = removeLegacyMarkerBlock(await readTextFile(filePath));
       await writeFileAtomically(filePath, upsertMarkerBlock(existing, renderMemmySkillBootstrapManifest(manifest)));
       await replaceMemmySkillDirectory(root, manifest);
-      await replaceMemmySessionSkillDirectory(root);
+      await replaceMemmySessionSkillDirectory(root, CODEX_TARGET_ID);
       await replaceMemmyResumeSkillDirectory(root, CODEX_TARGET_ID);
     },
 
@@ -141,7 +141,7 @@ export function createCodexSkillTarget(deps: CreateCodexSkillTargetDeps = {}): S
         upsertMarkerBlock(await readTextFile(filePath), renderMemmySkillBootstrapManifest(manifest))
       );
       await replaceMemmySkillDirectory(root, manifest);
-      await replaceMemmySessionSkillDirectory(root);
+      await replaceMemmySessionSkillDirectory(root, CODEX_TARGET_ID);
       await replaceMemmyResumeSkillDirectory(root, CODEX_TARGET_ID);
       await trustHooks({
         codexHomeDirectory: root,
