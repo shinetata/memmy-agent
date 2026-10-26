@@ -153,6 +153,7 @@ describe("join project dialog", () => {
   let root: Root;
   const collab = { previewInvite: vi.fn(), joinProject: vi.fn() };
   const onJoined = vi.fn();
+  const onApplied = vi.fn();
   const onClose = vi.fn();
   const invite = {
     code: "AbCdEfGhIjKlMnOpQrStUv",
@@ -173,7 +174,7 @@ describe("join project dialog", () => {
     await act(async () => {
       root.render(
         <I18nProvider language="zh-CN">
-          <JoinProjectModal open collab={collab as never} onClose={onClose} onJoined={onJoined} />
+          <JoinProjectModal open collab={collab as never} onClose={onClose} onJoined={onJoined} onApplied={onApplied} />
         </I18nProvider>
       );
     });
@@ -207,6 +208,7 @@ describe("join project dialog", () => {
     expect(collab.joinProject).toHaveBeenCalledWith(expect.stringContaining(invite.code), undefined);
     expect(onClose).toHaveBeenCalled();
     expect(onJoined).not.toHaveBeenCalled();
+    expect(onApplied).toHaveBeenCalledWith({ projectId: "cloud-1", projectName: "Memmy 开发" });
     expect(hasText("已提交申请，审核通过后加入项目")).toBe(true);
   });
 

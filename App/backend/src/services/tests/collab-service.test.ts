@@ -460,6 +460,27 @@ describe("collab service", () => {
     expect((await svc.listProjects()).projects[0]).toMatchObject({ id: "p-9", localProjectId: "local-9" });
   });
 
+  it("passes pending applications through, and leaves them out when the cloud does not know them", async () => {
+    const { fetcher } = fakeFetch({
+      "GET /api/collab/projects": () => ({
+        code: 0,
+        data: {
+          projects: [],
+          applications: [{ projectId: "p-9", projectName: "Memmy 开发", createdAt: "2026-10-26T12:00:00.000Z" }]
+        }
+      })
+    });
+    const listed = await service(fetcher).listProjects();
+    expect(listed.applications).toEqual([
+      { projectId: "p-9", projectName: "Memmy 开发", createdAt: "2026-10-26T12:00:00.000Z" }
+    ]);
+
+    const { fetcher: older } = fakeFetch({
+      "GET /api/collab/projects": () => ({ code: 0, data: { projects: [] } })
+    });
+    expect(await service(older).listProjects()).toEqual({ projects: [] });
+  });
+
   it("uploads the bound project's own Memmy tasks, which need no session link", async () => {
     const root = mkdtempSync(join(tmpdir(), "memmy-collab-home-"));
     roots.push(root);

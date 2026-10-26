@@ -1307,6 +1307,20 @@ describe("AppFrame", () => {
       truncated: false
     });
   });
+
+  it("rereads projects while a join request is pending, and stops when none remain", () => {
+    const source = readFileSync(resolve(__dirname, "..", "app-frame.tsx"), "utf8");
+    const poll = source.slice(
+      source.indexOf("pendingApplicationCount"),
+      source.indexOf("A rename by the owner")
+    );
+
+    expect(poll).toContain("if (!collabClient || !state.account.userId || pendingApplicationCount === 0) return;");
+    expect(poll).toContain("document.visibilityState === \"hidden\"");
+    expect(poll).toContain("void loadCollabProjects(collabClient)");
+    expect(poll).toContain("COLLAB_FOCUS_REFRESH_MS");
+    expect(poll).toContain("window.clearInterval(timer)");
+  });
 });
 
 /** Handles sidebar labels. */

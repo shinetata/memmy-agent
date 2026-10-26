@@ -19,6 +19,8 @@ export function CollabJoinProjectDialog(props: {
   onClose: () => void;
   /** The person is in the project; the caller makes its local project and opens the board. */
   onJoined: (project: CollabProject) => void;
+  /** 申请已提交。调用方把它放进侧边栏，显示项目名称和「申请中」。 */
+  onApplied?: (application: { projectId: string; projectName: string }) => void;
   /** Switches the same dialog to creating a project; both entries live in one place now. */
   onCreateProject?: () => void;
 }) {
@@ -38,6 +40,7 @@ export function JoinProjectModal(props: {
   collab: CollabClient;
   onClose: () => void;
   onJoined: (project: CollabProject) => void;
+  onApplied?: (application: { projectId: string; projectName: string }) => void;
   onCreateProject?: () => void;
 }) {
   const { t } = useTranslation();
@@ -93,6 +96,7 @@ export function JoinProjectModal(props: {
     try {
       const result = await props.collab.joinProject(reference.trim(), directory ?? undefined);
       if (result.status === "pending") {
+        props.onApplied?.({ projectId: result.projectId, projectName: preview.projectName });
         props.onClose();
         showToast(t("collab.join.applied"));
         return;

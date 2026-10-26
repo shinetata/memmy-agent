@@ -60,7 +60,16 @@ const LinksSchema = z.object({
   sessions: z.array(z.object({ sourceId: z.string(), conversationId: z.string() }))
 });
 
-const ProjectsResponseSchema = z.object({ projects: z.array(ProjectSchema) });
+const ApplicationSchema = z.object({
+  projectId: z.string(),
+  projectName: z.string(),
+  createdAt: z.string().nullable().optional()
+});
+const ProjectsResponseSchema = z.object({
+  projects: z.array(ProjectSchema),
+  /** 旧后端没有待审核列表时省略；空数组表示当前没有申请。 */
+  applications: z.array(ApplicationSchema).optional()
+});
 const CreateProjectResponseSchema = z.object({ project: ProjectSchema, localDirectory: z.string().optional() });
 const ProjectSessionsResponseSchema = z.object({
   project: ProjectSchema,
@@ -145,6 +154,11 @@ const JoinResultSchema = z.object({
 });
 
 export type CollabProject = z.infer<typeof ProjectSchema>;
+/** 已提交、还在等审核的加入申请。还不是本机项目，侧边栏只展示名称和状态。 */
+export interface CollabApplication {
+  projectId: string;
+  projectName: string;
+}
 export type CollabProjectSession = z.infer<typeof ProjectSessionSchema>;
 export type LocalAgentSession = z.infer<typeof LocalAgentSessionSchema>;
 export type LocalSessionGroup = z.infer<typeof LocalSessionGroupSchema>;
@@ -170,7 +184,7 @@ export type CollabInvitePreview = z.infer<typeof InvitePreviewSchema>;
 export type CollabJoinResult = z.infer<typeof JoinResultSchema>;
 
 export interface CollabClient {
-  listProjects(): Promise<CollabProject[]>;
+  listProjects(): Promise<{ projects: CollabProject[]; applications?: CollabApplication[] }>;
   /** Creates the cloud project and returns the directory its tasks run in, absent on a backend without it. */
   createProject(name: string, directory?: string): Promise<{ project: CollabProject; localDirectory?: string }>;
   /** Records which local Memmy project runs this online project's tasks. */
@@ -239,7 +253,12 @@ export interface CollabClient {
 export function createHttpCollabClient(config: RuntimeConfig): CollabClient {
   return {
     async listProjects() {
-      return (await requestJson({ config, path: "/api/collab/projects", schema: ProjectsResponseSchema })).projects;
+      const result = await requestJson({ config, path: "/api/collab/projects", schema: ProjectsResponseSchema });
+      if (!result.applications) return { projects: result.projects };
+      return {
+        projects: result.projects,
+        applications: result.applications.map((item) => ({ projectId: item.projectId, projectName: item.projectName }))
+      };
     },
 
     async createProject(name, directory) {

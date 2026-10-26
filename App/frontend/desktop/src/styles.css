@@ -11688,6 +11688,35 @@ body.memmy-platform-windows :is(
   --sidebar-row-bg: color-mix(in srgb, var(--color-action-sky) 16%, var(--color-sidebar-bg));
 }
 
+/* 待审核的加入申请：能看见项目名和状态，但不能当成本机项目去打开。 */
+.app-frame-project-row--pending {
+  cursor: default;
+}
+
+.app-frame-project-row__mark {
+  display: flex;
+  flex: none;
+  align-items: center;
+  padding: var(--sidebar-rail-pad-y) 0 var(--sidebar-rail-pad-y) var(--sidebar-rail-pad-x);
+  color: color-mix(in srgb, var(--color-text-ink) 55%, transparent);
+}
+
+.app-frame-project-row__main--static {
+  cursor: default;
+}
+
+.app-frame-project-pending {
+  flex: none;
+  margin-right: var(--sidebar-rail-pad-x);
+  padding: 0 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--color-action-sky) 16%, transparent);
+  color: color-mix(in srgb, var(--color-action-sky) 72%, var(--color-text-ink));
+  font-size: 11px;
+  line-height: 18px;
+  font-weight: 600;
+}
+
 /* The icon is its own hit area: it expands the project's sessions, the rest of the row opens the board. */
 .app-frame-project-row__toggle {
   display: flex;

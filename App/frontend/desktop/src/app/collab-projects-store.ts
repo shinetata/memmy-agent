@@ -3,11 +3,13 @@
  * names the project's shared record. The sidebar lists local projects and the board reads the same store, so one
  * store keeps a single open project — named by the local project id — and a single fetch of the cloud list.
  */
-import type { CollabClient, CollabProject } from "../api/collab-client.js";
+import type { CollabApplication, CollabClient, CollabProject } from "../api/collab-client.js";
 
 export interface CollabProjectsSnapshot {
   /** Null until the first load finishes, so the sidebar can tell "none" from "not loaded yet". */
   projects: CollabProject[] | null;
+  /** 已提交、尚未通过的加入申请。云端没返回这个字段时保持上次的值。 */
+  applications: CollabApplication[];
   /** The local project whose board is open; the cloud project, if any, is derived from it. */
   selectedId: string | null;
   loading: boolean;
@@ -27,6 +29,7 @@ export interface CollabProjectsSnapshot {
 
 let snapshot: CollabProjectsSnapshot = {
   projects: null,
+  applications: [],
   selectedId: null,
   loading: false,
   error: null,
@@ -73,9 +76,13 @@ export async function loadCollabProjects(client: CollabClient): Promise<void> {
   const run = (async () => {
     update({ loading: true, error: null });
     try {
-      const projects = await client.listProjects();
+      const listed = normalizeProjectList(await client.listProjects());
       // The open project is local, so a reload must not move the board: only a vanished project clears it.
-      update({ projects, loading: false, error: null });
+      // 云端没带申请列表时保留本机刚记下的申请；已经是成员的项目不再显示「申请中」。
+      const joined = new Set(listed.projects.map((project) => project.id));
+      const applications = (listed.applications ?? snapshot.applications)
+        .filter((application) => !joined.has(application.projectId));
+      update({ projects: listed.projects, applications, loading: false, error: null });
     } catch (cause) {
       // 云端不可用时保留已有列表：项目就在本机，云端只决定能不能看共享内容。
       update({ loading: false, error: messageOf(cause) });
@@ -103,6 +110,12 @@ export function dismissCollabNotice(): void {
 export function selectCollabProject(localProjectId: string | null): void {
   if (snapshot.selectedId === localProjectId) return;
   update({ selectedId: localProjectId });
+}
+
+/** 申请刚提交时先记到侧边栏，随后的列表刷新会用云端结果替换。 */
+export function addPendingApplication(application: CollabApplication): void {
+  const rest = snapshot.applications.filter((current) => current.projectId !== application.projectId);
+  update({ applications: [application, ...rest] });
 }
 
 /** After sharing a project: its cloud record leads the list. Opening the board is the caller's decision. */
@@ -160,6 +173,7 @@ export function resetCollabProjectsStore(): void {
   inFlight = null;
   snapshot = {
     projects: null,
+    applications: [],
     selectedId: null,
     loading: false,
     error: null,
@@ -168,6 +182,17 @@ export function resetCollabProjectsStore(): void {
     notice: null
   };
   listeners.clear();
+}
+
+/**
+ * 测试里有的客户端仍直接返回项目数组。正式客户端返回 `{ projects, applications? }`，
+ * `applications` 缺省表示云端还没有这份列表。
+ */
+function normalizeProjectList(
+  listed: { projects: CollabProject[]; applications?: CollabApplication[] } | CollabProject[]
+): { projects: CollabProject[]; applications?: CollabApplication[] } {
+  if (Array.isArray(listed)) return { projects: listed };
+  return listed;
 }
 
 function messageOf(cause: unknown): string {

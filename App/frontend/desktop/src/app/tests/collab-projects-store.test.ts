@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import type { CollabClient, CollabProject } from "../../api/collab-client.js";
 import {
   addCollabProject,
+  addPendingApplication,
   consumeCreateProjectRequest,
   consumeTaskPickerRequest,
   getCollabProjectsSnapshot,
@@ -20,9 +21,14 @@ function project(id: string, name = id, localProjectId: string | null = null): C
   return { id, name, role: "owner", memberCount: 1, sessionCount: 0, createdAt: null, localProjectId };
 }
 
-function clientWith(list: () => Promise<CollabProject[]>): CollabClient {
+function clientWith(
+  list: () => Promise<CollabProject[]>,
+  applications?: { projectId: string; projectName: string }[]
+): CollabClient {
   return {
-    listProjects: list,
+    listProjects: async () => (
+      applications === undefined ? { projects: await list() } : { projects: await list(), applications }
+    ),
     createProject: async (name) => ({ project: project("new", name) }),
     listSessions: async () => ({ project: project("x"), sessions: [], total: 0 }),
     listLocalSessions: async () => ({ sessions: [], refreshing: false }),
@@ -66,12 +72,13 @@ describe("collab projects store", () => {
     expect(getCollabProjectsSnapshot().selectedId).toBe("local-a");
   });
 
-  it("keeps an empty list and the reason when loading fails", async () => {
+  it("keeps the unloaded list and the reason when the first load fails", async () => {
     await loadCollabProjects(clientWith(async () => {
       throw new Error("请先登录 Memmy 后使用项目");
     }));
 
-    expect(getCollabProjectsSnapshot().projects).toEqual([]);
+    // 第一次还没读到云端时是 null，好让侧边栏区分「没加载」和「确实没有项目」。
+    expect(getCollabProjectsSnapshot().projects).toBeNull();
     expect(getCollabProjectsSnapshot().error).toContain("请先登录");
     expect(getCollabProjectsSnapshot().selectedId).toBeNull();
   });
@@ -107,6 +114,21 @@ describe("collab projects store", () => {
 
     consumeCreateProjectRequest();
     expect(getCollabProjectsSnapshot().createPending).toBe(false);
+  });
+
+  it("keeps a just-submitted application until the cloud lists it, then replaces the list", async () => {
+    addPendingApplication({ projectId: "cloud-1", projectName: "Memmy 开发" });
+    expect(getCollabProjectsSnapshot().applications).toEqual([{ projectId: "cloud-1", projectName: "Memmy 开发" }]);
+
+    await loadCollabProjects(clientWith(async () => []));
+    expect(getCollabProjectsSnapshot().applications).toEqual([{ projectId: "cloud-1", projectName: "Memmy 开发" }]);
+
+    await loadCollabProjects(clientWith(async () => [project("cloud-1", "Memmy 开发")]));
+    expect(getCollabProjectsSnapshot().applications).toEqual([]);
+
+    addPendingApplication({ projectId: "cloud-1", projectName: "Memmy 开发" });
+    await loadCollabProjects(clientWith(async () => [], []));
+    expect(getCollabProjectsSnapshot().applications).toEqual([]);
   });
 
   it("asks the board for the session picker once, then clears it", () => {

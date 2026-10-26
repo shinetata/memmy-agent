@@ -23,6 +23,7 @@ import { createHttpCollabClient } from "../api/collab-client.js";
 import { openAgentTaskInChat } from "../app/open-agent-task.js";
 import {
   addCollabProject,
+  addPendingApplication,
   consumeCreateProjectRequest,
   getCollabProjectsSnapshot,
   loadCollabProjects,
@@ -267,7 +268,7 @@ const SIDEBAR_PROFILE_NAME_MAX_VISUAL_WIDTH = 10;
 const MAX_PROJECT_NAME_CHARS = 20;
 const SIDEBAR_PROFILE_META_MAX_VISUAL_WIDTH = 12;
 const ACCOUNT_DISPLAY_ELLIPSIS = "…";
-/** Coming back to the window rereads online projects at most this often, so an approved request shows up. */
+/** How often an open window rereads online projects: on focus, and while a join request is still pending. */
 const COLLAB_FOCUS_REFRESH_MS = 30_000;
 const standaloneRenderTaskStateCoordinator: AgentTaskStateCoordinator = {
   refreshTaskState: () => undefined,
@@ -368,7 +369,7 @@ export function AppFrame(props: AppFrameProps) {
     })();
   }, [collabClient, collabSnapshot.projects, taskStateCoordinator]);
 
-  // A request approved while Memmy is open shows up the next time the person comes back to the window.
+  // Coming back to the window picks up an approval that happened while Memmy was in the background.
   const collabRefreshedAt = useRef(0);
   useEffect(() => {
     if (!collabClient || !state.account.userId) return;
@@ -381,6 +382,18 @@ export function AppFrame(props: AppFrameProps) {
     window.addEventListener("focus", refresh);
     return () => window.removeEventListener("focus", refresh);
   }, [collabClient, state.account.userId]);
+
+  // While a join request is still pending, reread the same list so approval shows up without leaving the window.
+  // The timer stops once the list is empty, so a person with no request pays nothing.
+  const pendingApplicationCount = collabSnapshot.applications.length;
+  useEffect(() => {
+    if (!collabClient || !state.account.userId || pendingApplicationCount === 0) return;
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "hidden") return;
+      void loadCollabProjects(collabClient);
+    }, COLLAB_FOCUS_REFRESH_MS);
+    return () => window.clearInterval(timer);
+  }, [collabClient, pendingApplicationCount, state.account.userId]);
 
   /**
    * A rename by the owner changes what every member reads. Their local project keeps the name on their own
@@ -1484,6 +1497,7 @@ export function AppFrame(props: AppFrameProps) {
               groupKey="projects"
               collapsedGroups={state.agent.sidebarState.collapsed_groups}
               projects={visibleProjectTree.projects}
+              applications={collabSnapshot.applications}
               openBoardProjectId={boardProjectId}
               onOpenProjectBoard={openProjectBoard}
               renamingProjectId={renamingProjectId}
@@ -1901,6 +1915,10 @@ export function AppFrame(props: AppFrameProps) {
           setCreateProjectOpen(true);
         }}
         onClose={() => setJoinProjectOpen(false)}
+        onApplied={(application) => {
+          addPendingApplication(application);
+          if (collabClient) void loadCollabProjects(collabClient);
+        }}
         onJoined={(project) => {
           if (project.localProjectId) {
             // Already a member with a project on this computer: just open it.
@@ -2252,6 +2270,8 @@ function ProjectTreeSection(props: {
   groupKey: string;
   collapsedGroups: Record<string, boolean>;
   projects: ProjectSidebarNode[];
+  /** 已提交、还在等审核的加入申请。只有项目分组展示。 */
+  applications?: Array<{ projectId: string; projectName: string }>;
   /** The project whose board is open, so its row is highlighted. */
   openBoardProjectId?: string | null;
   /** The project being renamed in place, with its draft and the three handlers the row needs. */
@@ -2360,6 +2380,9 @@ function ProjectTreeSection(props: {
         <div className="app-frame-collapsible__inner">
           <div className="app-frame-task-section-body">
             {props.tasks.map((task) => renderTask(task))}
+            {(props.applications ?? []).map((application) => (
+              <PendingApplicationRow key={application.projectId} name={application.projectName} />
+            ))}
             {props.projects.map((node) => {
               const projectKey = `project:${node.project.id}`;
               const projectCollapsed = Boolean(props.collapsedGroups[projectKey]);
@@ -2426,7 +2449,7 @@ function ProjectTreeSection(props: {
                 </div>
               );
             })}
-            {!props.tasks.length && !props.projects.length && props.emptyText ? (
+            {!props.tasks.length && !props.projects.length && !(props.applications?.length) && props.emptyText ? (
               <div className="app-frame-task-empty">{props.emptyText}</div>
             ) : null}
           </div>
@@ -2537,6 +2560,22 @@ function SidebarInlineRenameInput(props: {
         props.onCommit();
       }}
     />
+  );
+}
+
+/** 还没加入的项目：只显示名称和「申请中」，不能展开任务，也不能打开看板。 */
+function PendingApplicationRow(props: { name: string }) {
+  const { t } = useTranslation();
+  return (
+    <div className="app-frame-project-row app-frame-project-row--pending" title={t("collab.application.pendingHint")}>
+      <span className="app-frame-project-row__mark" aria-hidden="true">
+        <Folder size={16} />
+      </span>
+      <span className="app-frame-project-row__main app-frame-project-row__main--static">
+        <SidebarMarqueeText text={props.name} className="app-frame-project-title" />
+        <span className="app-frame-project-pending">{t("collab.application.pending")}</span>
+      </span>
+    </div>
   );
 }
 

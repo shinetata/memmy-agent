@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronRight, Cloud, Folder, Layers, Link2, ListChecks, MessageSquarePlus, MoreHorizontal, PanelRight, PanelRightClose, Pencil, Quote, Search, Settings, Trash2, UserPlus, Users, X } from "lucide-react";
+import { ChevronDown, ChevronRight, Cloud, Folder, Layers, Link2, ListChecks, MessageSquarePlus, MoreHorizontal, PanelRight, PanelRightClose, Pencil, Quote, RefreshCw, Search, Settings, Trash2, UserPlus, Users, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import {
@@ -64,6 +64,8 @@ const BOARD_NOTICE_MS = 6_000;
 
 /** How often the board refreshes while an association uploads. */
 const PROGRESS_POLL_MS = 1_200;
+/** 看板开着时的刷新间隔：别的成员关联了会话，不用改筛选也能看到。 */
+const BOARD_POLL_MS = 5_000;
 const MAX_PROJECT_NAME_CHARS = 20;
 const MAX_LOCAL_SESSIONS = 500;
 /**
@@ -230,6 +232,7 @@ export function CollabPage() {
   const [progress, setProgress] = useState<CollabSyncProgress | null>(null);
   /** Bumped when an association is queued, so polling starts without waiting for a filter or page change. */
   const [pollKey, setPollKey] = useState(0);
+  const [refreshing, setRefreshing] = useState(false);
   /** Projects whose tasks were already uploaded for this opening, so filters do not re-upload them. */
   const syncedProjectRef = useRef<Set<string>>(new Set());
   const [toast, setToast] = useState<string | null>(null);
@@ -397,11 +400,26 @@ export function CollabPage() {
     }
   }, [collab, member, pageIndex, query]);
 
-  // While an association uploads in the background, poll its progress and the list so rows arrive one by one.
+  const refreshBoard = useCallback(async () => {
+    if (!sharedId || refreshing) return;
+    setRefreshing(true);
+    try {
+      await refreshSessions(sharedId);
+    } finally {
+      setRefreshing(false);
+    }
+  }, [refreshSessions, refreshing, sharedId]);
+
+  // While the board is open, keep the list current. An upload polls quickly; otherwise a slower pass picks up
+  // a session another member associated, without waiting for a filter or page change.
   useEffect(() => {
     if (!collab || !sharedId) return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
+
+    const schedule = (running: boolean) => {
+      timer = setTimeout(() => void tick(), running ? PROGRESS_POLL_MS : BOARD_POLL_MS);
+    };
 
     const tick = async () => {
       const [next, listing] = await Promise.all([
@@ -414,17 +432,19 @@ export function CollabPage() {
         replaceCollabProject(listing.project);
       }
       setProgress(next);
-      if (next?.running) timer = setTimeout(() => void tick(), PROGRESS_POLL_MS);
+      schedule(Boolean(next?.running));
     };
 
-    // Opening the board also joins an upload that started before it (or before a reload).
+    // Opening the board joins an upload that started earlier, and keeps refreshing after it stops.
     void collab.getSyncProgress(sharedId)
       .then((current) => {
         if (cancelled) return;
         setProgress(current);
-        if (current.running) timer = setTimeout(() => void tick(), PROGRESS_POLL_MS);
+        schedule(current.running);
       })
-      .catch(() => undefined);
+      .catch(() => {
+        if (!cancelled) schedule(false);
+      });
 
     return () => {
       cancelled = true;
@@ -651,6 +671,17 @@ export function CollabPage() {
                         ) : null}
                       </label>
                       <span className={styles.grow} />
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        aria-label={t("collab.sessions.refresh")}
+                        title={t("collab.sessions.refresh")}
+                        disabled={refreshing}
+                        onClick={() => void refreshBoard()}
+                      >
+                        <RefreshCw size={14} aria-hidden="true" />
+                        {t("collab.sessions.refresh")}
+                      </Button>
                       {selecting ? (
                         <>
                           <span className={styles.selectCount}>

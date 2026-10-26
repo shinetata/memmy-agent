@@ -351,8 +351,15 @@ export interface SessionView {
   all?: boolean;
 }
 
+/** 当前用户已提交、还在等审核的加入申请。还不是成员，侧边栏单独显示。 */
+export interface CollabApplication {
+  projectId: string;
+  projectName: string;
+  createdAt: string | null;
+}
+
 export interface CollabService {
-  listProjects(): Promise<{ projects: CollabProject[] }>;
+  listProjects(): Promise<{ projects: CollabProject[]; applications?: CollabApplication[] }>;
   /**
    * Creates the cloud project and prepares the directory its tasks run in: the person's chosen folder, or a
    * managed folder when none was chosen, so a task always has a working directory.
@@ -1066,7 +1073,9 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
         await mirrorInstructions(project.id, project.instructions, stored.workingDirectory);
         return { ...project, localProjectId: stored.localProjectId };
       }));
-      return { projects: bound };
+      // 旧云端没有这份列表时不填字段，桌面端就保留本机刚记下的申请，避免一次刷新把「申请中」冲掉。
+      if (!Array.isArray(data.applications)) return { projects: bound };
+      return { projects: bound, applications: list(data.applications).map(toApplication) };
     },
 
     async createProject(name, directory) {
@@ -1831,6 +1840,15 @@ async function prepareWorkingDirectory(
     ? directory.trim()
     : await uniqueProjectDirectory(root, name, projectId);
   return ensureDirectory(target);
+}
+
+function toApplication(raw: unknown): CollabApplication {
+  const application = record(raw);
+  return {
+    projectId: text(application.projectId),
+    projectName: text(application.projectName),
+    createdAt: nullableText(application.createdAt)
+  };
 }
 
 function toProject(raw: unknown): CollabProject {
