@@ -31,6 +31,8 @@ const ProjectSessionSchema = z.object({
   source: z.string(),
   turnCount: z.number(),
   lastActiveAt: z.string().nullable(),
+  /** 单会话超出容量上限时只保留最近轮次，只有详情接口带这个标记。 */
+  trimmed: z.boolean().nullish().transform((value) => value ?? false),
   link: z.string(),
   shareText: z.string()
 });
@@ -198,7 +200,7 @@ export interface CollabClient {
    */
   listCandidateSessions(input: { projectId: string; query?: string; limit?: number }): Promise<CollabProjectSession[]>;
   /** Downloads one session and returns the text a message carries so an agent reads it. */
-  readReference(reference: string): Promise<{ session: CollabProjectSession; path: string; text: string }>;
+  readReference(reference: string): Promise<{ session: CollabProjectSession; text: string }>;
   /** Answers from the last scan at once; `refreshing` means asking again with `fresh` returns a newer list. */
   listLocalSessions(input: { query?: string; sourceIds?: string[]; limit?: number; fresh?: boolean }): Promise<{ sessions: LocalAgentSession[]; refreshing: boolean }>;
   getLinks(projectId: string): Promise<CollabLinks>;
@@ -330,7 +332,7 @@ export function createHttpCollabClient(config: RuntimeConfig): CollabClient {
       return requestJson({
         config,
         path: "/api/collab/sessions/read",
-        schema: z.object({ session: ProjectSessionSchema, path: z.string(), text: z.string() }),
+        schema: z.object({ session: ProjectSessionSchema, text: z.string() }),
         body: { reference }
       });
     },

@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronRight, Cloud, Folder, Layers, Link2, MessageSquarePlus, MoreHorizontal, PanelRight, PanelRightClose, Pencil, Quote, Search, Settings, Trash2, UserPlus, Users, X } from "lucide-react";
+import { ChevronDown, ChevronRight, Cloud, Folder, Layers, Link2, ListChecks, MessageSquarePlus, MoreHorizontal, PanelRight, PanelRightClose, Pencil, Quote, Search, Settings, Trash2, UserPlus, Users, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import {
@@ -47,6 +47,7 @@ import { ConfirmDialog } from "../components/confirm-dialog.js";
 import { Modal } from "../components/modal.js";
 import type { MessageKey } from "../i18n/messages.js";
 import { useTranslation } from "../i18n/use-translation.js";
+import { isComposingKeyboardEvent } from "../utils/keyboard.js";
 import { agentSourceDisplayName, agentSourceLogoUrl } from "./agent-source-logos.js";
 import { AppFrame } from "./app-frame.js";
 import { memberColor } from "./collab-member-color.js";
@@ -65,6 +66,11 @@ const BOARD_NOTICE_MS = 6_000;
 const PROGRESS_POLL_MS = 1_200;
 const MAX_PROJECT_NAME_CHARS = 20;
 const MAX_LOCAL_SESSIONS = 500;
+/**
+ * 云端每名成员在每个项目内保留的会话数（`CollabLimits.MAX_SESSIONS_PER_MEMBER`），
+ * 新建的 Memmy 会话与关联的 Agent 会话共用。超出后按最近交互自动替换。
+ */
+const SESSIONS_PER_MEMBER_LIMIT = 20;
 const EMPTY_LINKS: CollabLinks = { groups: [], sessions: [] };
 /** 还没有设定指令时的空值，看板与弹窗共用。 */
 const EMPTY_PROJECT_INSTRUCTIONS: ProjectInstructions = {
@@ -214,6 +220,11 @@ export function CollabPage() {
   /** 「邀请」in the header and「项目成员」in the sidebar menu open the same dialog. */
   const [membersOpen, setMembersOpen] = useState(false);
   const [deleting, setDeleting] = useState<CollabProjectSession | null>(null);
+  /** 多选删除：进入选择模式后勾选本人的会话，一次移除。 */
+  const [selecting, setSelecting] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [confirmBulkDelete, setConfirmBulkDelete] = useState(false);
+  const [bulkDeleting, setBulkDeleting] = useState(false);
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   /** Upload progress of a queued association; the list grows while it runs. */
   const [progress, setProgress] = useState<CollabSyncProgress | null>(null);
@@ -488,6 +499,49 @@ export function CollabPage() {
     }
   }
 
+  /** 选择模式只在本人会话上生效：他人的会话只能看，删除也由云端限定为本人。 */
+  function toggleSelected(sessionId: string) {
+    setSelected((current) => {
+      const next = new Set(current);
+      if (next.has(sessionId)) next.delete(sessionId);
+      else next.add(sessionId);
+      return next;
+    });
+  }
+
+  function selectAllMine() {
+    const mine = (page?.sessions ?? []).filter((session) => session.mine).map((session) => session.id);
+    setSelected((current) => (current.size === mine.length ? new Set() : new Set(mine)));
+  }
+
+  async function deleteSelected() {
+    if (!collab || !sharedId || !selected.size) return;
+    const ids = [...selected];
+    setConfirmBulkDelete(false);
+    setBulkDeleting(true);
+    let failed = 0;
+    for (const id of ids) {
+      try {
+        await collab.removeSession(sharedId, id);
+      } catch {
+        failed += 1;
+      }
+    }
+    setBulkDeleting(false);
+    setSelected(new Set());
+    setSelecting(false);
+    const deleted = ids.length - failed;
+    showToast(failed
+      ? t("collab.sessions.bulkDeletePartial", { deleted: String(deleted), failed: String(failed) })
+      : t("collab.sessions.bulkDeleted", { count: String(deleted) }));
+    await refreshSessions(sharedId);
+  }
+
+  useEffect(() => {
+    // 换页、换筛选或进入/退出选择模式后，旧的勾选不再有效。
+    setSelected(new Set());
+  }, [pageIndex, member, query, selecting]);
+
   const memberOptions: { value: MemberFilter; label: string }[] = [
     { value: "all", label: t("collab.filter.all") },
     { value: "me", label: t("collab.filter.you") },
@@ -587,7 +641,8 @@ export function CollabPage() {
                             if (!next.trim()) setQuery("");
                           }}
                           onKeyDown={(event) => {
-                            if (event.key === "Enter") setQuery(searchDraft.trim());
+                            // 回车确认输入法候选词时不要发起搜索，否则搜的是半成品拼音。
+                            if (event.key === "Enter" && !isComposingKeyboardEvent(event)) setQuery(searchDraft.trim());
                             if (event.key === "Escape") {
                               setSearchDraft("");
                               setQuery("");
@@ -601,28 +656,66 @@ export function CollabPage() {
                         ) : null}
                       </label>
                       <span className={styles.grow} />
-                      <Button size="sm" onClick={() => setPickOpen(true)}>
-                        <Link2 size={14} aria-hidden="true" />
-                        {t("collab.associate")}
-                      </Button>
+                      {selecting ? (
+                        <>
+                          <span className={styles.selectCount}>
+                            {t("collab.sessions.selectedCount", { count: String(selected.size) })}
+                          </span>
+                          <Button size="sm" variant="ghost" onClick={selectAllMine}>
+                            {t("collab.sessions.selectAll")}
+                          </Button>
+                          <Button size="sm" variant="ghost" disabled={bulkDeleting} onClick={() => setSelecting(false)}>
+                            {t("collab.cancel")}
+                          </Button>
+                          {/* 破坏性操作保留警示色，但用文字按钮，不在工具条里压一块红底 */}
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className={styles.dangerGhost}
+                            disabled={!selected.size || bulkDeleting}
+                            onClick={() => setConfirmBulkDelete(true)}
+                          >
+                            <Trash2 size={14} aria-hidden="true" />
+                            {bulkDeleting ? t("collab.sessions.deleting") : t("collab.session.delete")}
+                          </Button>
+                        </>
+                      ) : (
+                        <>
+                          {/* 多选只对本人会话生效：没有本人的会话时不显示入口 */}
+                          {(sessions ?? []).some((session) => session.mine) ? (
+                            <Button size="sm" variant="ghost" onClick={() => setSelecting(true)}>
+                              <ListChecks size={14} aria-hidden="true" />
+                              {t("collab.sessions.select")}
+                            </Button>
+                          ) : null}
+                          <Button size="sm" onClick={() => setPickOpen(true)}>
+                            <Link2 size={14} aria-hidden="true" />
+                            {t("collab.associate")}
+                          </Button>
+                        </>
+                      )}
                     </div>
 
-                    {progress?.running ? (
-                      <div className={styles.syncStrip} role="status" aria-live="polite">
-                        <span className={styles.syncText}>
-                          {t("collab.sync.progress", {
-                            completed: String(progress.completed),
-                            total: String(progress.total)
-                          })}
-                        </span>
-                        <span className={styles.syncBar} aria-hidden="true">
-                          <span
-                            className={styles.syncBarFill}
-                            style={{ width: `${progress.total ? Math.round((progress.completed / progress.total) * 100) : 0}%` }}
-                          />
-                        </span>
-                      </div>
-                    ) : null}
+                    {progress?.running ? (() => {
+                      // 云端每人每项目只留最近 20 个，进度也按这个额度显示，不报会超出上限的条数。
+                      const cappedTotal = Math.min(progress.total, SESSIONS_PER_MEMBER_LIMIT);
+                      const cappedDone = Math.min(progress.completed, cappedTotal);
+                      // 超出额度的那几条还在上传：进度已满，用缓慢呼吸说明后台仍在处理。
+                      const pending = progress.total > cappedTotal && progress.completed >= cappedTotal;
+                      return (
+                        <div className={styles.syncStrip} role="status" aria-live="polite">
+                          <span className={styles.syncText}>
+                            {t("collab.sync.progress", { completed: String(cappedDone), total: String(cappedTotal) })}
+                          </span>
+                          <span className={styles.syncBar} aria-hidden="true">
+                            <span
+                              className={`${styles.syncBarFill} ${pending ? styles.syncBarFillPending : ""}`}
+                              style={{ width: `${cappedTotal ? Math.round((cappedDone / cappedTotal) * 100) : 0}%` }}
+                            />
+                          </span>
+                        </div>
+                      );
+                    })() : null}
                     {sessions === null ? (
                       <p className={styles.loading}>{t("collab.loading")}</p>
                     ) : sessions.length === 0 && filtering ? (
@@ -669,9 +762,26 @@ export function CollabPage() {
                           return (
                             <li
                               key={session.id}
-                              className={`${styles.row} ${styles.rowOpenable} ${menuOpen ? styles.rowMenuOpen : ""}`}
-                              onClick={() => void openSession(session)}
+                              className={`${styles.row} ${selecting ? "" : styles.rowOpenable} ${menuOpen ? styles.rowMenuOpen : ""} ${selected.has(session.id) ? styles.rowSelected : ""}`}
+                              onClick={() => {
+                                if (!selecting) {
+                                  void openSession(session);
+                                  return;
+                                }
+                                // 选择模式下点击整行就是勾选；他人的会话不可选。
+                                if (session.mine) toggleSelected(session.id);
+                              }}
                             >
+                              {selecting && session.mine ? (
+                                <input
+                                  type="checkbox"
+                                  className={styles.rowCheck}
+                                  checked={selected.has(session.id)}
+                                  aria-label={session.title}
+                                  onClick={(event) => event.stopPropagation()}
+                                  onChange={() => toggleSelected(session.id)}
+                                />
+                              ) : null}
                               <span
                                 className={styles.avatar}
                                 style={{ background: memberColor(session.memberName || (session.mine ? t("collab.session.you") : "")) }}
@@ -686,6 +796,7 @@ export function CollabPage() {
                               <span className={styles.meta}>
                                 {[name, formatSessionTime(session.lastActiveAt)].filter(Boolean).join(" · ")}
                               </span>
+                              {selecting ? null : (
                               <button
                                 type="button"
                                 className={styles.moreButton}
@@ -699,6 +810,7 @@ export function CollabPage() {
                               >
                                 <MoreHorizontal size={15} aria-hidden="true" />
                               </button>
+                              )}
                               {menuOpen ? (
                                 <>
                                   {/*
@@ -862,7 +974,10 @@ export function CollabPage() {
             if (result.started) {
               setProgress({ running: true, total: result.started, completed: 0, failed: 0 });
               setPollKey((key) => key + 1);
-              showToast(t("collab.pick.queued", { count: String(result.started) }));
+              // 超出云端额度时不报真实条数：最终只会保留最近的 20 个，报数量会让人以为都留下了。
+              showToast(result.started > SESSIONS_PER_MEMBER_LIMIT
+                ? t("collab.pick.queuedCapped", { limit: String(SESSIONS_PER_MEMBER_LIMIT) })
+                : t("collab.pick.queued", { count: String(result.started) }));
             } else {
               showToast(t("collab.pick.done"));
             }
@@ -875,6 +990,17 @@ export function CollabPage() {
         loading={readingId !== null}
         onClose={() => setReading(null)}
         onCopy={(session) => void copyLink(session)}
+      />
+      <ConfirmDialog
+        open={confirmBulkDelete}
+        title={t("collab.sessions.bulkDeleteTitle")}
+        message={t("collab.sessions.bulkDeleteMessage", { count: String(selected.size) })}
+        cancelLabel={t("collab.cancel")}
+        confirmLabel={t("collab.session.delete")}
+        confirmVariant="danger"
+        icon={null}
+        onCancel={() => setConfirmBulkDelete(false)}
+        onConfirm={() => void deleteSelected()}
       />
       <ConfirmDialog
         open={deleting !== null}
@@ -1534,6 +1660,9 @@ function SessionReaderModal(props: {
     >
       {data ? (
         <div className={styles.readerBody}>
+          {data.session.trimmed ? (
+            <p className={styles.readerTrimmed}>{t("collab.reader.trimmed")}</p>
+          ) : null}
           {data.turns.length === 0 ? (
             <p className={styles.loading}>{t("collab.reader.empty")}</p>
           ) : data.turns.map((turn, index) => (
@@ -1633,6 +1762,11 @@ function AssociateSessionsModal(props: {
   const kind = activeAgent ? groupingKind(activeAgent.sourceId) : "directory";
   const view = activeAgent ? groupAgentSessions(sessions ?? [], activeAgent.sourceId, query) : { groups: [], ungrouped: [] };
   const changed = JSON.stringify(links) !== JSON.stringify(saved);
+  /** 当前勾选会关联的会话数，用于在提交前提示云端只保留最近 20 个。 */
+  const selectedCount = useMemo(
+    () => (sessions ?? []).filter((session) => isSessionChecked(links, session)).length,
+    [sessions, links]
+  );
 
   function toggleExpanded(groupId: string) {
     setExpanded((current) => {
@@ -1680,7 +1814,11 @@ function AssociateSessionsModal(props: {
       backdropClassName={styles.backdrop}
       footer={(
         <>
-          {error ? <span className={styles.error} role="alert">{error}</span> : <span />}
+          {error ? <span className={styles.error} role="alert">{error}</span> : selectedCount > SESSIONS_PER_MEMBER_LIMIT ? (
+            <span className={styles.pickLimit} role="status">
+              {t("collab.pick.limitHint", { limit: String(SESSIONS_PER_MEMBER_LIMIT) })}
+            </span>
+          ) : <span />}
           <span className={styles.footerButtons}>
             <Button variant="ghost" disabled={busy} onClick={props.onClose}>{t("collab.cancel")}</Button>
             <Button variant="primary" disabled={!changed || busy} onClick={() => void confirm()}>

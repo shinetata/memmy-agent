@@ -1827,7 +1827,7 @@ export function AppFrame(props: AppFrameProps) {
           name: collabSnapshot.projects?.find((project) => project.id === deleteOnlineProjectId)?.name ?? ""
         })}
         cancelLabel={t("common.cancel")}
-        confirmLabel={t("appFrame.project.stopSharing")}
+        confirmLabel={deletingOnlineProject ? t("appFrame.project.stopping") : t("appFrame.project.stopSharing")}
         confirmVariant="danger"
         // The cloud deletes in one request; disabling keeps a second click from queueing another.
         confirmDisabled={deletingOnlineProject}

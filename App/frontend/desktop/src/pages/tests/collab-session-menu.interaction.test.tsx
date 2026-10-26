@@ -169,6 +169,41 @@ describe("collab session row menu", () => {
     expect(mocks.readSessionDetail).toHaveBeenCalledWith(session.id);
   });
 
+  it("deletes the selected sessions in one batch", async () => {
+    mocks.removeSession.mockResolvedValue({ ok: true });
+    const buttonByText = (text: string): HTMLElement | undefined =>
+      Array.from(document.querySelectorAll<HTMLElement>("button")).find((entry) => entry.textContent?.trim() === text);
+
+    await act(async () => buttonByText("多选")!.click());
+    await flush();
+    await act(async () => buttonByText("全选本页")!.click());
+    await flush();
+    expect(document.body.textContent).toContain("已选 1 个");
+
+    await act(async () => buttonByText("删除")!.click());
+    await flush();
+    // 确认框里只有「删除」这一个同名按钮，另一个带「选中」二字。
+    const confirm = Array.from(document.querySelectorAll<HTMLElement>(".modal button"))
+      .find((entry) => entry.textContent?.trim() === "删除");
+    await act(async () => confirm!.click());
+    await flush();
+
+    expect(mocks.removeSession).toHaveBeenCalledWith("p-1", "s-1");
+    expect(document.body.textContent).toContain("已删除 1 个会话");
+  });
+
+  it("tells the reader when only the recent turns are kept", async () => {
+    mocks.readSessionDetail.mockResolvedValue({ session: { ...session, trimmed: true }, turns: [] });
+    const title = Array.from(row().querySelectorAll<HTMLElement>("span"))
+      .find((entry) => entry.textContent?.trim() === session.title);
+
+    await act(async () => title!.click());
+    await flush();
+
+    // 单会话超出容量上限时，云端只保留近期轮次，阅读弹窗要说清楚。
+    expect(document.body.textContent).toContain("该会话仅保留近期记录");
+  });
+
   it("closes the menu without opening the reader when the backdrop is clicked", async () => {
     await openMenu();
     const backdrop = row().querySelector<HTMLElement>('button[aria-label="取消"]');

@@ -129,6 +129,16 @@
   transition: width 320ms ease;
 }
 
+/* 超出额度后的真实上传未结束：进度已到满格，用缓慢呼吸表示仍在处理 */
+.syncBarFillPending {
+  animation: collabSyncPulse 1.6s ease-in-out infinite;
+}
+
+@keyframes collabSyncPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+
 /* 会话行出现时的淡入，让后台同步来的会话自然进入列表 */
 @keyframes collabRowIn {
   from {
@@ -170,6 +180,36 @@
 
 .row:last-child {
   border-radius: 0 0 13px 13px;
+}
+
+/* 多选：行内勾选框与选中态 */
+.rowCheck {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  accent-color: var(--collab-accent-deep);
+  cursor: pointer;
+}
+
+.rowSelected {
+  background: var(--collab-active);
+}
+
+/* 多选里的删除：保留警示色，用文字按钮，避免整块红底压住工具条 */
+.dangerGhost {
+  color: var(--color-status-error, #c4413b);
+}
+
+.dangerGhost:hover:not(:disabled) {
+  color: var(--color-status-error, #c4413b);
+  background: color-mix(in srgb, var(--color-status-error) 10%, transparent);
+}
+
+/* 选择模式下的已选条数，跟右侧按钮对齐 */
+.selectCount {
+  color: var(--collab-muted);
+  font-size: 12.5px;
+  white-space: nowrap;
 }
 
 .row:only-child {
@@ -484,6 +524,18 @@
   padding-right: 4px;
 }
 
+/* 单会话超出容量上限时的提示：与轮次内容区分，但不抢注意力 */
+.readerTrimmed {
+  margin: 0 0 12px;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, #d6dfdc 70%, transparent);
+  border-radius: 8px;
+  background: #f7f9f8;
+  color: #5f716c;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .readerMeta {
   display: inline-flex;
   align-items: center;
@@ -683,6 +735,13 @@
   margin: 8px 0 0;
   color: var(--color-status-error, #c4413b);
   font-size: 12.5px;
+}
+
+/* 选中的会话超过云端额度时的提示：用次级文字色，不当成警告刷屏 */
+.pickLimit {
+  color: var(--collab-ter, #8a9a96);
+  font-size: 12.5px;
+  line-height: 1.5;
 }
 
 /* 云端不可用的提示：项目在本机，不影响本地看板的使用 */
