@@ -85,8 +85,11 @@ const ProjectTasksSchema = z.object({
   /** Conversation ids of the project's Memmy sessions that members may read. */
   included: z.array(ConversationIdSchema).max(500)
 }).strict();
-/** Cloud account IDs are numeric. */
-const UserIdSchema = z.string().regex(/^[0-9]{1,18}$/u, "成员 ID 无效");
+/**
+ * Cloud account IDs are numeric snowflake ids, 19 digits for accounts created by the assignment strategy (`agent_user.id`).
+ * The upper bound matches a signed 64-bit column, so real accounts are never rejected by this local check.
+ */
+const UserIdSchema = z.string().regex(/^[0-9]{1,19}$/u, "成员 ID 无效");
 const UpdateProjectSchema = z.object({ joinMode: z.enum(["direct", "approval"]) }).strict();
 /** No one is made owner here: there is no ownership transfer. */
 const MemberRoleSchema = z.object({ role: z.enum(["admin", "member"]) }).strict();
