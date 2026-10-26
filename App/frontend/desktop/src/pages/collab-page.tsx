@@ -1104,7 +1104,7 @@ function ProjectTaskPickerDialog(props: {
 const MAX_INSTRUCTION_CHARS = 10_000;
 
 /**
- * 看板右侧的项目配置。项目里的配置项放在这里查看：先有指令，知识库、技能与外部资料随后加入；
+ * 看板右侧的项目配置。项目里的配置项放在这里查看：先有指令，知识库与技能随后加入；
  * 所有者与管理员可以直接编辑，成员只读。
  */
 function ProjectConfigPanel(props: {
