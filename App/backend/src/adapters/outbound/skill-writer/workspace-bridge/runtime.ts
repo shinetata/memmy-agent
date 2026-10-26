@@ -359,6 +359,7 @@ export async function readCursorHookSourceTurn(input: {
   }
   try {
     const diskValue = db.prepare("SELECT value FROM cursorDiskKV WHERE key = ?");
+    const diskChunks = db.prepare("SELECT value FROM cursorDiskKV WHERE key >= ? AND key < ? ORDER BY key");
     const parse = (key: string): unknown => {
       const row = diskValue.get(key) as { value?: unknown } | undefined;
       if (typeof row?.value !== "string") return undefined;
@@ -368,9 +369,26 @@ export async function readCursorHookSourceTurn(input: {
         return undefined;
       }
     };
+    /** Chunked rows of one key prefix, in order: Cursor 3.x splits a chat's header list this way. */
+    const parseChunks = (prefix: string): readonly unknown[] | undefined => {
+      const chunks = diskChunks.all(prefix, `${prefix.slice(0, -1)};`) as Array<{ value?: unknown }>;
+      const values: unknown[] = [];
+      for (const chunk of chunks) {
+        if (typeof chunk.value !== "string") continue;
+        try {
+          const parsed: unknown = JSON.parse(chunk.value);
+          if (Array.isArray(parsed)) values.push(...parsed);
+        } catch {
+          // A chunk this version cannot read is skipped; the rest still order the chat.
+        }
+      }
+      return values.length > 0 ? values : undefined;
+    };
     const source: CursorVscdbSource = {
       mainComposerIds: () => [input.conversationId],
       composerData: (composerId) => parse(`composerData:${composerId}`),
+      // Newer Cursor versions keep the header list in its own rows and leave `composerData` empty.
+      conversationHeaders: (composerId) => parseChunks(`composerConvHeaders:${composerId}:`),
       bubble: (composerId, bubbleId) => parse(`bubbleId:${composerId}:${bubbleId}`)
     };
     return await readCursorSourceTurn(source, input);
