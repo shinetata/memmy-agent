@@ -170,8 +170,15 @@ describe("collab members", () => {
 
     expect(await svc.syncLinkedSessions()).toEqual({ uploaded: 0, removed: 0, failed: 0 });
     expect(calls.filter((call) => call.method === "PUT")).toEqual([]);
+    // Removed from the project: this computer forgets the association, so nothing is uploaded from it again.
+    const cleared = JSON.parse(readFileSync(join(projectsDir, "p-1", "links.json"), "utf8")) as { sessions: unknown[] };
+    expect(cleared.sessions).toEqual([]);
 
-    // A listing that fails says nothing about membership.
+    // A listing that fails says nothing about membership: an association saved meanwhile still syncs.
+    writeFileSync(join(projectsDir, "p-1", "links.json"), JSON.stringify({
+      projectId: "p-1", accountId: "u-b", localProjectId: null, removedSessions: [], workingDirectory: null,
+      groups: [], sessions: [{ sourceId: "codex", conversationId: "c1" }], synced: {}
+    }));
     listed = null;
     expect(await svc.syncLinkedSessions()).toEqual({ uploaded: 1, removed: 0, failed: 0 });
   });

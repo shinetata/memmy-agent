@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /**
  * `memmy-session`: lets an agent find and read the sessions of the person's shared Memmy projects. The desktop app
- * holds the account and the project cache, so every command goes through its local API, found via
- * ~/.memmy/runtime.json. Nothing here touches memory.
+ * holds the account and reads the sessions from the cloud, so every command goes through its local API, found via
+ * ~/.memmy/runtime.json. Nothing is cached on this computer and nothing here touches memory.
  *
  * Only Node built-ins are imported: the desktop build copies this one file next to its launcher.
  */

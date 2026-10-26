@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -119,28 +119,46 @@ describe("collab service", () => {
     });
   });
 
-  it("downloads a referenced session into the project cache and returns the text for the agent", async () => {
+  it("clears the session files an older version cached on this computer", async () => {
+    const { fetcher } = fakeFetch({});
+    const root = mkdtempSync(join(tmpdir(), "memmy-collab-"));
+    roots.push(root);
+    const legacy = join(root, "p-1", "sessions");
+    mkdirSync(legacy, { recursive: true });
+    writeFileSync(join(legacy, "s-1.md"), "# 旧版本的缓存\n", "utf8");
+
+    service(fetcher, { projectsDir: root });
+
+    // 清理在后台进行，与启动同时；等它完成后再断言。
+    for (let attempt = 0; attempt < 50 && existsSync(legacy); attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    expect(existsSync(legacy)).toBe(false);
+  });
+
+  it("reads a referenced session from the cloud and leaves no copy on this computer", async () => {
     const { fetcher } = fakeFetch({
       [`GET /api/collab/sessions/${cloudSession.id}`]: () => ({
         code: 0,
-        data: { session: { ...cloudSession, turns: [{ question: "重复分享时接口返回 500，怎么处理？", reply: "改为返回 HTTP 409。", steps: ["Edit", "Bash", "Bash"], startedAt: "" }] } }
+        data: { session: { ...cloudSession, trimmed: true, turns: [{ question: "重复分享时接口返回 500，怎么处理？", reply: "改为返回 HTTP 409。", steps: ["Edit", "Bash", "Bash"], startedAt: "" }] } }
       })
     });
-    const svc = service(fetcher);
+    const root = mkdtempSync(join(tmpdir(), "memmy-collab-"));
+    roots.push(root);
+    const svc = service(fetcher, { projectsDir: root });
     const reference = await svc.readSession(`【Memmy】重复分享返回 409 https://memmy.example/s/${cloudSession.id}`);
 
-    expect(reference.path.endsWith(join("p-1", "sessions", `${cloudSession.id}.md`))).toBe(true);
-    const markdown = readFileSync(reference.path, "utf8");
-    expect(markdown).toContain("# 重复分享返回 409");
-    expect(markdown).toContain("- 成员：用户C");
-    expect(markdown).toContain("## 会话记录（共 18 轮，保留最近 1 轮）");
-    expect(markdown).toContain("### 第 18 轮\n用户C：重复分享时接口返回 500，怎么处理？\n回复：改为返回 HTTP 409。\n执行步骤：Edit、Bash ×2");
-    expect(reference.text).toContain("已引用用户C的会话「重复分享返回 409」（Memmy 开发，");
-    expect(reference.text).toContain(`完整记录：${reference.path}`);
-    expect(reference.text).toContain("回答与该会话相关的问题前，先读取此文件。");
+    // 协作会话只在云端保存：读取不建目录、不写文件。
+    expect(existsSync(join(root, "p-1"))).toBe(false);
+    expect(reference.session.id).toBe(cloudSession.id);
+    expect(reference.text).toContain("已读取用户C的会话「重复分享返回 409」（Memmy 开发，");
+    expect(reference.text).toContain("共 18 轮，云端保留最近 1 轮。");
+    // The cloud says it dropped earlier turns to fit the session cap, so the reader says what it is showing.
+    expect(reference.text).toContain("该会话仅保留近期记录");
+    expect(reference.text).toContain("### 第 18 轮\n用户C：重复分享时接口返回 500，怎么处理？\n回复：改为返回 HTTP 409。\n执行步骤：Edit、Bash ×2");
   });
 
-  it("prints the turns a read view asks for and keeps the whole record in the file", async () => {
+  it("prints the turns a read view asks for without saving the whole record", async () => {
     // The cloud keeps the latest 12 of 18 turns, so the first one it returns is turn 7.
     const turns = Array.from({ length: 12 }, (_, index) => ({
       question: `第 ${index + 7} 个问题`,
@@ -177,8 +195,8 @@ describe("collab service", () => {
     expect(await read({ turns: { from: 1, to: 8 } })).toMatch(/以下为第 7–8 轮。\n\n### 第 7 轮[\s\S]*### 第 8 轮[^#]*$/u);
     expect(await read({ around: 3 })).toContain("第 3 轮不在记录中，记录中为第 7–18 轮。");
     expect((await read({ all: true })).match(/### 第/gu)).toHaveLength(12);
-    // The @ menu sends no view and still gets the pointer to the file.
-    expect((await svc.readSession(cloudSession.id)).text).toContain("回答与该会话相关的问题前，先读取此文件。");
+    // No view is the overview, which is what the @ menu sends.
+    expect((await svc.readSession(cloudSession.id)).text).toContain("以下为最近 5 轮全文");
   });
 
   it("lists a session shared to several projects once, keeps sinceMs, and trims to the limit", async () => {
@@ -341,6 +359,27 @@ describe("collab service", () => {
     expect(await svc.syncLinkedSessions()).toEqual({ uploaded: 0, removed: 0, failed: 0 });
     expect(uploadedIds(calls)).toEqual([]);
     expect(await svc.getLinks("p-1")).toEqual({ groups: [], sessions: [] });
+  });
+
+  it("uploads only the most recent 20 sessions of what the person associated", async () => {
+    // 云端每人每项目只保留 20 个：更早的会话不上传，省掉传完再被删的往返。
+    const start = Date.UTC(2026, 9, 22, 10, 0, 0);
+    const local = Array.from({ length: 25 }, (_, index) => localSession(
+      "codex", `c-${String(index).padStart(2, "0")}`, null, new Date(start - index * 60_000).toISOString()));
+    const { fetcher, calls } = linkFetch(local);
+    const svc = service(fetcher);
+
+    const saved = await svc.saveLinks("p-1", {
+      groups: [],
+      sessions: local.map((session) => ({ sourceId: session.sourceId, conversationId: session.conversationId }))
+    });
+    expect(saved.started).toBe(20);
+    await waitForUploads(svc, "p-1");
+
+    const uploaded = uploadedIds(calls);
+    expect(uploaded).toHaveLength(20);
+    expect(uploaded).toContain("c-00");
+    expect(uploaded).not.toContain("c-24");
   });
 
   it("pages a project's sessions ten at a time, counting every match", async () => {
@@ -825,6 +864,25 @@ describe("collab service", () => {
       if (!links.groups.length && !links.sessions.length) break;
       await new Promise((resolve) => setTimeout(resolve, 20));
     }
+    expect(await svc.getLinks("p-1")).toEqual({ groups: [], sessions: [] });
+  });
+
+  it("clears this computer's links when the person is no longer in the project", async () => {
+    const local = [localSession("claude_code", "a1", "/repo", "2026-10-22T01:00:00.000Z")];
+    const { fetcher, calls } = fakeFetch({
+      "POST /api/v1/agent-sessions/available": () => ({ sessions: local, refreshing: false }),
+      "POST /api/v1/agent-sessions/read": () => ({ session: { title: "会话", updatedAt: "2026-10-22T01:00:00.000Z", turns: [] } }),
+      "PUT /api/collab/projects/p-1/sessions": () => ({ code: 0, data: { sessions: [{ id: "id-a1" }] } }),
+      // 被移出后云端不再列出该项目：本机随之解除关联，不再上传。
+      "GET /api/collab/projects": () => ({ code: 0, data: { projects: [] } })
+    });
+    const svc = service(fetcher);
+    await svc.saveLinks("p-1", { groups: [{ sourceId: "claude_code", groupId: "/repo", excluded: [] }], sessions: [] });
+    await waitForUploads(svc, "p-1");
+    calls.length = 0;
+
+    expect(await svc.syncLinkedSessions()).toEqual({ uploaded: 0, removed: 0, failed: 0 });
+    expect(uploadedIds(calls)).toEqual([]);
     expect(await svc.getLinks("p-1")).toEqual({ groups: [], sessions: [] });
   });
 

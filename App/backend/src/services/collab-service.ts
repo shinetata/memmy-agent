@@ -1,7 +1,9 @@
 /**
  * Online projects. Projects, members and associated sessions live in the Memmy cloud; this service signs those
  * requests with the person's account, reads local agent sessions through the Memory service when they associate
- * one, and saves a session a person references as a Markdown file an agent can read.
+ * one, and reads a referenced session online for an agent.
+ *
+ * 协作会话只在云端保存，本机不保留正文副本：读取、引用、检索都现查云端，离线时不可用。
  */
 import { mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -33,6 +35,11 @@ const UPLOAD_CONCURRENCY = 4;
  */
 const READ_MANY_CHUNK = 20;
 const LINKS_FILE = "links.json";
+/**
+ * 每名成员在一个项目内最多保留的会话数（云端 `CollabLimits.MAX_SESSIONS_PER_MEMBER`），
+ * 新建的 Memmy 任务与关联的 Agent 会话共用。超出这个数量的会话不上传：云端本来就会按最近交互挤掉。
+ */
+const SESSIONS_PER_MEMBER = 20;
 /** Matches the cloud limits so an upload is never rejected for size. */
 const MAX_UPLOAD_TURNS = 300;
 const MAX_QUESTION_CHARS = 4_000;
@@ -86,7 +93,7 @@ export interface CollabServiceOptions {
   localSessions: LocalSessionReader | null;
   /** Origin of session links; the cloud origin when absent. */
   linkBaseUrl?: string;
-  /** Where referenced sessions are saved; ~/.memmy/projects by default. */
+  /** Where this computer keeps each project's links file; ~/.memmy/projects by default. */
   projectsDir?: string;
   /** Memmy's own task sessions; ~/.memmy/workspace/sessions by default. */
   agentSessionsDir?: string;
@@ -126,6 +133,10 @@ export interface CollabProjectSession {
   source: string;
   turnCount: number;
   lastActiveAt: string | null;
+  /**
+   * 单会话超出云端容量上限时只保留最近轮次，详情里带这个标记；列表不带，按 false 处理。
+   */
+  trimmed: boolean;
   /** The link a member pastes into another agent. */
   link: string;
   /** What「复制链接」puts on the clipboard. */
@@ -320,10 +331,9 @@ type PreloadedSession = Record<string, unknown> | "missing" | null;
 
 export interface CollabSessionReference {
   session: CollabProjectSession;
-  path: string;
   /**
-   * Handed to the agent. Without a view: source and file path, the same text the Memmy reference uses. With one:
-   * source, file path and the turns the view asks for.
+   * Handed to the agent: source and the turns the view asks for. It is read online and never written to this
+   * computer, so an agent that needs more asks again with another view.
    */
   text: string;
 }
@@ -360,7 +370,7 @@ export interface CollabService {
    * question or member name matches any keyword, which is what the board's search box and the @ menu use.
    */
   listSessions(projectId: string, options?: SessionListOptions): Promise<CollabSessionPage>;
-  /** A session with its turns, for reading it in the app without downloading a file. */
+  /** A session with its turns, read from the cloud; nothing is written to this computer. */
   readSessionDetail(sessionId: string): Promise<{ session: CollabProjectSession; turns: CollabSessionTurn[] }>;
   /**
    * Sessions the person can reference from a message, limited to one online project: a reference stays inside the
@@ -406,7 +416,7 @@ export interface CollabService {
    * projects is listed once with all their names; `sinceMs` keeps the ones active within that window.
    */
   searchSessions(input: SessionSearchInput): Promise<{ sessions: SessionSearchHit[] }>;
-  /** Downloads the session into the project cache; a `view` also prints the turns it asks for. */
+  /** Reads a referenced session from the cloud; a `view` picks the turns to print. Nothing is saved locally. */
   readSession(reference: string, view?: SessionView): Promise<CollabSessionReference>;
   /** Who is in the project and how people join it; owners and admins also get the requests waiting for them. */
   listMembers(projectId: string): Promise<CollabMembers>;
@@ -426,8 +436,8 @@ export interface CollabService {
   setMemberRole(projectId: string, userId: string, role: Exclude<CollabRole, "owner">): Promise<{ member: CollabMember }>;
   removeMember(projectId: string, userId: string): Promise<{ ok: true }>;
   /**
-   * Leaves the project. Like a deleted project, the local project stays with this person's tasks; the binding and the
-   * sessions downloaded from it go.
+   * Leaves the project. Like a deleted project, the local project stays with this person's tasks; the binding and
+   * any session copy an older version left on this computer go.
    */
   leaveProject(projectId: string): Promise<{ ok: true }>;
   /** Reads a pasted invite link (or its copied text) for the join dialog. */
@@ -559,7 +569,7 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
   const now = options.now ?? (() => new Date());
   const memmyHome = process.env.MEMMY_HOME?.trim() || join(homedir(), ".memmy");
   const projectsDir = options.projectsDir ?? join(memmyHome, "projects");
-  /** Working directories for online projects that did not choose a folder, next to the project cache. */
+  /** Working directories for online projects that did not choose a folder, next to the project links. */
   const onlineWorkdirRoot = join(dirname(projectsDir), "online-projects");
   const agentSessionsDir = options.agentSessionsDir ?? join(memmyHome, "workspace", "sessions");
   const linkBase = (options.linkBaseUrl?.trim() || safeOrigin(options.cloudBaseUrl)).replace(/\/+$/u, "");
@@ -649,18 +659,23 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
 
   /** Uploads covered sessions that were never uploaded or changed since; a failure is retried by the next sync. */
   /** The sessions this project still has to upload: in its scope, not deleted, and changed since the last upload. */
+  /**
+   * 要上传的会话：在本项目范围内、且首次上传或内容变了的那几条。只取最近交互的前 20 条，
+   * 更早的传上去也会被云端清理掉。
+   */
   function sessionsToUpload(stored: StoredLinks, local: readonly LocalAgentSession[]): LocalAgentSession[] {
     const covered = linkedSessionKeys(stored, linkCandidates(stored, local));
-    return local.filter((session) => {
-      const key = sessionKey(session);
-      const synced = stored.synced[key];
-      // A Memmy task belongs to the project through its binding, so it needs no session link.
-      const inProject = session.sourceId === MEMMY_SOURCE_ID
-        ? !stored.removedSessions.includes(session.conversationId)
-        : covered.has(key);
-      // A retitled session needs a new upload even when its turns did not change: the board shows the title.
-      return inProject && (!synced || isNewer(session.updatedAt, synced.updatedAt) || session.title !== synced.title);
-    });
+    const inScope = local.filter((session) => session.sourceId === MEMMY_SOURCE_ID
+      ? !stored.removedSessions.includes(session.conversationId)
+      : covered.has(sessionKey(session)));
+    return inScope
+      .sort((left, right) => (Date.parse(right.updatedAt) || 0) - (Date.parse(left.updatedAt) || 0))
+      .slice(0, SESSIONS_PER_MEMBER)
+      .filter((session) => {
+        const synced = stored.synced[sessionKey(session)];
+        // A retitled session needs a new upload even when its turns did not change: the board shows the title.
+        return !synced || isNewer(session.updatedAt, synced.updatedAt) || session.title !== synced.title;
+      });
   }
 
   /**
@@ -917,9 +932,8 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
   /**
    * Forgets this computer's binding to a project the person is no longer in, after it was deleted or they left.
    * Only the binding goes: the local project and its sessions remain usable as a plain local project, and the
-   * folder is remembered so rejoining runs there again. The cloud has already let the project go, so the person
-   * should not wait for a local rewrite that can sit behind a long upload; queue order keeps it ahead of any later
-   * sync, which is all it has to guarantee.
+   * folder is remembered so rejoining runs there again. The write is queued behind any upload already running, so
+   * a later read of the links never sees the old binding again.
    */
   async function releaseBinding(projectId: string, accountId: string, reason: "delete" | "leave"): Promise<void> {
     const stored = await readLinks(projectId, accountId);
@@ -928,7 +942,7 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
     stored.sessions = [];
     stored.synced = {};
     stored.removedSessions = [];
-    void exclusive(() => writeLinks(stored)).catch((error: unknown) => {
+    await exclusive(() => writeLinks(stored)).catch((error: unknown) => {
       console.warn(`Project links not cleared after ${reason}: ${error instanceof Error ? error.message : String(error)}`);
     });
   }
@@ -970,13 +984,30 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
   /**
    * Projects the person is still in, so a sync stops sending sessions to one they were removed from. When the
    * cloud cannot answer, every project is kept: a failed listing must not look like being removed everywhere.
+   *
+   * 被移出或退出后，云端已删除本人在这两个项目里的会话：本机随之解除关联、停止同步，并清掉旧版本留下的
+   * 会话缓存；本机项目、任务与文件保留。重新加入后，已删除的会话不会自动恢复。
    */
   async function stillJoined(projects: StoredLinks[]): Promise<StoredLinks[]> {
     if (!projects.length) return projects;
     const data = await cloud("/projects").catch(() => null);
     if (!data) return projects;
     const joined = new Set(list(data.projects).map((project) => text(record(project).id)));
-    return projects.filter((stored) => joined.has(stored.projectId));
+    const kept: StoredLinks[] = [];
+    for (const stored of projects) {
+      if (joined.has(stored.projectId)) {
+        kept.push(stored);
+        continue;
+      }
+      try {
+        await releaseBinding(stored.projectId, stored.accountId, "leave");
+        await forgetInstructions(stored.workingDirectory);
+        await rm(join(projectsDir, safeSegment(stored.projectId), "sessions"), { recursive: true, force: true });
+      } catch (error) {
+        console.warn(`Project links not cleared after leaving ${stored.projectId}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    return kept;
   }
 
   function requireInviteCode(reference: string): string {
@@ -1005,10 +1036,23 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
       source: text(session.source),
       turnCount: number(session.turnCount),
       lastActiveAt: nullableText(session.lastActiveAt),
+      trimmed: session.trimmed === true,
       link,
       shareText: `【Memmy】${title} ${link}`
     };
   }
+
+  /**
+   * 协作会话只在云端保存。旧版本把引用的会话写到每个项目的 sessions 目录，这里在启动时清掉这些遗留文件，
+   * 之后读取不再生成新的副本。清理失败不影响后续使用。
+   */
+  async function removeLegacySessionCaches(): Promise<void> {
+    const entries = await readdir(projectsDir, { withFileTypes: true }).catch(() => []);
+    await Promise.all(entries.filter((entry) => entry.isDirectory()).map((entry) =>
+      rm(join(projectsDir, entry.name, "sessions"), { recursive: true, force: true }).catch(() => undefined)
+    ));
+  }
+  void removeLegacySessionCaches();
 
   return {
     async listProjects() {
@@ -1071,7 +1115,7 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
     },
 
     async readSessionDetail(sessionId) {
-      // Same payload the reference downloads, minus writing a file: the reader stays a viewer.
+      // Same payload the reference reads, and the reader stays a viewer.
       const data = record((await cloud(`/sessions/${encodeURIComponent(sessionId)}`)).session);
       return { session: withLink(data), turns: list(data.turns).map(toTurn) };
     },
@@ -1207,7 +1251,7 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
       syncProgress.delete(projectId);
       await releaseBinding(projectId, account.accountId, "leave");
       await forgetInstructions(before.workingDirectory);
-      // Sessions downloaded for references were readable only as a member.
+      // 协作会话不在本机缓存正文，读取只现查云端；旧版本留下的缓存目录在这里一并清掉。
       await rm(join(projectsDir, safeSegment(projectId), "sessions"), { recursive: true, force: true });
       return { ok: true };
     },
@@ -1407,16 +1451,8 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
       const data = record((await cloud(`/sessions/${encodeURIComponent(id)}`)).session);
       const session = withLink(data);
       const turns = list(data.turns).map(toTurn);
-      const downloadedAt = now();
-      const directory = join(projectsDir, safeSegment(session.projectId), "sessions");
-      const path = join(directory, `${safeSegment(session.id)}.md`);
-      await mkdir(directory, { recursive: true });
-      // The file always holds the whole record, so a view never needs a second download to expand.
-      await writeFile(path, renderSessionMarkdown(session, turns, downloadedAt), "utf8");
-      const text = view
-        ? renderSessionView(session, turns, path, downloadedAt, view)
-        : referenceText(session, path, downloadedAt);
-      return { session, path, text };
+      // 协作会话只在云端保留，读取结果直接交给调用方，不在本机写文件。
+      return { session, text: renderSessionView(session, turns, now(), view ?? {}) };
     }
   };
 }
@@ -1442,18 +1478,6 @@ export function pageOf(
   const offset = Math.max(0, options.offset ?? 0);
   const limit = options.limit === undefined ? matched.length : Math.max(0, options.limit);
   return { sessions: matched.slice(offset, offset + limit), total: matched.length };
-}
-
-/** The lines handed to an agent after a reference; it reads the file before answering. */
-export function referenceText(session: CollabProjectSession, path: string, downloadedAt: Date): string {
-  // The member is named, not "you": this text travels in messages and files others may read.
-  const owner = session.memberName || (session.mine ? "你" : "");
-  const activity = session.lastActiveAt ? `最近交互 ${formatTime(new Date(session.lastActiveAt))}，` : "";
-  return [
-    `已引用${owner}的会话「${session.title}」（${session.projectName}，${activity}下载于 ${formatTime(downloadedAt)}）。`,
-    `完整记录：${path}`,
-    "回答与该会话相关的问题前，先读取此文件。"
-  ].join("\n");
 }
 
 /**
@@ -1508,32 +1532,15 @@ function mergeShared(sessions: readonly CollabProjectSession[]): SessionSearchHi
   return [...merged.values()];
 }
 
-/** Renders a downloaded project session as the file an agent reads. */
-export function renderSessionMarkdown(session: CollabProjectSession, turns: CollabSessionTurn[], downloadedAt: Date): string {
-  const speaker = sessionSpeaker(session);
-  const lines = [
-    `# ${session.title}`,
-    "",
-    `- 成员：${speaker}`,
-    `- 项目：${session.projectName}`,
-    ...(session.lastActiveAt ? [`- 最近交互：${formatTime(new Date(session.lastActiveAt))}`] : []),
-    `- 下载时间：${formatTime(downloadedAt)}`,
-    "",
-    `## 会话记录（共 ${session.turnCount || turns.length} 轮${turns.length < session.turnCount ? `，保留最近 ${turns.length} 轮` : ""}）`
-  ];
-  for (const entry of numberTurns(session, turns)) lines.push("", ...turnLines(entry, speaker));
-  return `${lines.join("\n")}\n`;
-}
-
 /**
  * What `sessions read` prints: where the session comes from, then the turns the view asks for in full. The
- * overview lists earlier turns one line each, so an agent expands only the part it needs.
+ * overview lists earlier turns one line each, so an agent expands only the part it needs. Nothing is written to
+ * this computer, so a reader asks again with another view instead of opening a file.
  */
 export function renderSessionView(
   session: CollabProjectSession,
   turns: readonly CollabSessionTurn[],
-  path: string,
-  downloadedAt: Date,
+  readAt: Date,
   view: SessionView
 ): string {
   const speaker = sessionSpeaker(session);
@@ -1541,10 +1548,13 @@ export function renderSessionView(
   const total = session.turnCount || turns.length;
   const activity = session.lastActiveAt ? `最近交互 ${formatTime(new Date(session.lastActiveAt))}，` : "";
   const lines = [
-    `已读取${speaker}的会话「${session.title}」（${session.projectName}，${activity}下载于 ${formatTime(downloadedAt)}）。`,
-    `完整记录：${path}`,
+    `已读取${speaker}的会话「${session.title}」（${session.projectName}，${activity}读取于 ${formatTime(readAt)}）。`,
     `共 ${total} 轮${turns.length < total ? `，云端保留最近 ${turns.length} 轮` : ""}。`
   ];
+  if (session.trimmed) {
+    // 单会话超过容量或轮次上限时，云端只保留近期记录；来源 Agent 的原始会话不受影响。
+    lines.push("该会话仅保留近期记录；更早的轮次已按单会话上限清理，来源 Agent 的原始记录不受影响。");
+  }
   if (!numbered.length) {
     lines.push("这个会话还没有可显示的轮次。");
     return lines.join("\n");

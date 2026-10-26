@@ -60,7 +60,7 @@ export function renderMemmySessionSkillFile(source?: string): string {
     "## How to read",
     "",
     "- `memmy-session read` prints an overview: where the session comes from, its latest turns in full, and one line per earlier turn. Latest progress is usually in it.",
-    "- Expand with `--turns 3-8`, or `--around 12` for one turn and its neighbours. Do not open the cached file it names; use `--all` only when you need everything.",
+    "- Expand with `--turns 3-8`, or `--around 12` for one turn and its neighbours. Each read fetches the session again, since nothing is stored on this computer; use `--all` only when you need everything.",
     "- Read at most two sessions per turn unless the user asks for more.",
     "",
     "## Where to stop",

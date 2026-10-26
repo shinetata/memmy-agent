@@ -25,6 +25,27 @@ describe("local session reader", () => {
     }]);
   });
 
+  it("fills the list with the number of sessions asked for, skipping files that hold no question", async () => {
+    const messages: ConversationMessage[] = [];
+    const start = Date.UTC(2026, 9, 21, 12, 0, 0);
+    for (let index = 0; index < 40; index += 1) {
+      const id = `c-${String(index).padStart(2, "0")}`;
+      const at = new Date(start - index * 60_000).toISOString();
+      // 最前面 6 个是空会话，和真实目录里没有人工提问的会话一样，占窗口但不进列表。
+      messages.push(index < 6
+        ? message("codex", id, "system", "boot", at, "/repo")
+        : message("codex", id, "user", `第 ${index} 个问题`, at, "/repo"));
+    }
+    const reader = readerWith([windowedAdapter("codex", "Codex", messages)]);
+
+    const { sessions } = await reader.available({ limit: 30 });
+
+    expect(sessions).toHaveLength(30);
+    // 补上的是更早的会话，空会话不会出现在列表里。
+    expect(sessions.map((session) => session.conversationId))
+      .toEqual(Array.from({ length: 30 }, (_, index) => `c-${String(index + 6).padStart(2, "0")}`));
+  });
+
   it("ranks keyword hits, then the given directory, then the most recent, and filters by agent", async () => {
     const reader = readerWith([
       fakeAdapter("codex", "Codex", [
@@ -173,6 +194,25 @@ function fakeAdapter(sourceId: string, displayName: string, messages: Conversati
     detect: async () => true,
     scan: async function* () {
       yield* messages;
+    }
+  };
+}
+
+/** Stops after `maxScanTargets` conversations, the way the file-based adapters do. */
+function windowedAdapter(sourceId: string, displayName: string, messages: ConversationMessage[]): SourceAdapter {
+  return {
+    descriptor: { sourceId, displayName, builtin: true, dataPath: `/fake/${sourceId}` },
+    detect: async () => true,
+    scan: async function* (options) {
+      const window = options.maxScanTargets ?? Number.MAX_SAFE_INTEGER;
+      const seen = new Set<string>();
+      for (const entry of messages) {
+        if (!seen.has(entry.conversationId)) {
+          if (seen.size >= window) return;
+          seen.add(entry.conversationId);
+        }
+        yield entry;
+      }
     }
   };
 }

@@ -11,7 +11,12 @@ import { createSessionGrouper, type LocalSessionGroup, type SessionGrouper } fro
 export type { LocalSessionGroup } from "./session-group.js";
 
 const DEFAULT_SESSIONS_PER_SOURCE = 30;
-/** A wider window used only when a requested session is older than the recent list. */
+/**
+ * 列表要的是会话数，而窗口按文件算：空会话、后台派生会话不出现在列表里。凑不满时按倍数向前扩大窗口，
+ * 直到拿到要求数量的会话或到达这个上限。
+ */
+const RECENT_SCAN_FACTORS = [1, 2, 4] as const;
+/** A wider window used only when the recent list comes up short. */
 const WIDE_SESSIONS_PER_SOURCE = 200;
 const DEFAULT_SNAPSHOT_TTL_MS = 15_000;
 const DEFAULT_AVAILABLE_LIMIT = 50;
@@ -188,18 +193,28 @@ export async function readRecentSessions(adapter: SourceAdapter, limit: number):
       return [];
     }
     const grouper = createSessionGrouper(adapter);
-    const builders = new Map<string, SessionBuilder>();
-    for await (const message of adapter.scan({ order: "recent_first", maxScanTargets: limit, maxConversations: limit, fullHistory: true })) {
-      let builder = builders.get(message.conversationId);
-      if (!builder) {
-        builder = { workspacePath: null, updatedAt: "", turns: [], nativeTitle: "" };
-        builders.set(message.conversationId, builder);
+    let sessions: LocalSession[] = [];
+    // 窗口里的空会话、后台派生会话不计入列表，所以不能把窗口大小当成条数：凑不满就向前补。
+    for (const factor of RECENT_SCAN_FACTORS) {
+      const window = Math.min(WIDE_SESSIONS_PER_SOURCE, limit * factor);
+      const builders = new Map<string, SessionBuilder>();
+      for await (const message of adapter.scan({ order: "recent_first", maxScanTargets: window, maxConversations: window, fullHistory: true })) {
+        let builder = builders.get(message.conversationId);
+        if (!builder) {
+          builder = { workspacePath: null, updatedAt: "", turns: [], nativeTitle: "" };
+          builders.set(message.conversationId, builder);
+        }
+        appendMessage(builder, message);
       }
-      appendMessage(builder, message);
+      sessions = [...builders.entries()]
+        .map(([conversationId, builder]) => finishSession(adapter, grouper, conversationId, builder))
+        .filter((session): session is LocalSession => session !== null);
+      if (sessions.length >= limit || window >= WIDE_SESSIONS_PER_SOURCE) {
+        break;
+      }
     }
-    return [...builders.entries()]
-      .map(([conversationId, builder]) => finishSession(adapter, grouper, conversationId, builder))
-      .filter((session): session is LocalSession => session !== null);
+    // 扫描按最近优先返回，多出来的都是更早的会话。
+    return sessions.slice(0, limit);
   } catch {
     return [];
   }
