@@ -1,3 +1,4 @@
+import { bundledCliInstallDecision, SYSTEM_CLI_BIN_DIRECTORY, USER_CLI_SHELL_PROFILES } from './cli-auto-install.js';
 import { createMacDmgUpdateInstallScript, createMacDmgUpdateStageScript, type MacUpdateValidationOptions } from './mac-update-scripts.js';
 import { createDesktopScreenCapture } from './desktop-screen-capture.js';
 import { compareVersionSegments, parseUpdatePackageVersion } from './version-compare.js';
@@ -1050,25 +1051,44 @@ function readCurrentDesktopEditionManifest(): string | null {
  * @returns Resolves once installation completes.
  */
 async function installBundledCliIfNeeded(): Promise<void> {
-  if (!app.isPackaged || localTestProfile || !isInstalledApplicationsApp()) {
+  if (!app.isPackaged || localTestProfile) {
     return;
   }
 
-  try {
-    const cliDirectory = join(process.resourcesPath, "cli");
-    const memoryCli = join(cliDirectory, "memmy-memory");
-    const memmyCli = join(cliDirectory, "memmy");
-    const sessionCli = join(cliDirectory, "memmy-session");
-    await Promise.all([access(memoryCli), access(memmyCli), access(sessionCli)]);
+  const bundlePath = resolveCurrentAppBundlePath();
+  const decision = bundledCliInstallDecision(bundlePath);
+  if (decision !== "install") {
+    await writePackagedStartupLog(`boot:cli-skipped:${decision}:${bundlePath}`);
+    return;
+  }
 
+  const cliDirectory = join(process.resourcesPath, "cli");
+  const commands = [
+    ["memmy-memory", join(cliDirectory, "memmy-memory")],
+    ["memmy", join(cliDirectory, "memmy")],
+    ["memmy-session", join(cliDirectory, "memmy-session")]
+  ] as const;
+  const installed: string[] = [];
+  const skipped: string[] = [];
+
+  try {
     const binDirectory = await resolveCliInstallDirectory();
     await mkdir(binDirectory, { recursive: true });
-    await installSymlink(memoryCli, join(binDirectory, "memmy-memory"));
-    await installSymlink(memmyCli, join(binDirectory, "memmy"));
-    await installSymlink(sessionCli, join(binDirectory, "memmy-session"));
+    for (const [name, source] of commands) {
+      try {
+        await access(source);
+        const userLink = await installSymlink(source, join(binDirectory, name));
+        const systemLink = await installSystemBinSymlink(source, name);
+        installed.push(`${name}:${userLink}${systemLink === "skipped" ? "" : `+${systemLink}`}`);
+      } catch (error) {
+        skipped.push(`${name}:${formatStartupError(error)}`);
+      }
+    }
     await ensureUserPathIncludes(binDirectory);
+    await writePackagedStartupLog(`boot:cli-installed:${installed.join(",") || "none"};skipped:${skipped.join("|") || "none"}`);
   } catch (error) {
     console.warn("Memmy CLI auto-install skipped:", error);
+    await writePackagedStartupLog(`boot:cli-failed\n${formatStartupError(error)}`);
   }
 }
 
@@ -1194,11 +1214,11 @@ async function resolveCliInstallDirectory(): Promise<string> {
  * @param target The command path under the user's PATH.
  * @returns Resolves once done.
  */
-async function installSymlink(source: string, target: string): Promise<void> {
+async function installSymlink(source: string, target: string): Promise<"installed" | "kept-file"> {
   try {
     const stat = await lstat(target);
     if (!stat.isSymbolicLink()) {
-      return;
+      return "kept-file";
     }
     await unlink(target);
   } catch (error) {
@@ -1208,6 +1228,7 @@ async function installSymlink(source: string, target: string): Promise<void> {
   }
 
   await symlink(source, target);
+  return "installed";
 }
 
 async function ensureUserPathIncludes(binDirectory: string): Promise<void> {
@@ -1217,10 +1238,22 @@ async function ensureUserPathIncludes(binDirectory: string): Promise<void> {
 
   const marker = "# Memmy CLI PATH";
   const line = 'export PATH="$HOME/.local/bin:$PATH"';
-  await Promise.all([
-    ensureShellProfileIncludesPath(join(homedir(), ".zshrc"), marker, line),
-    ensureShellProfileIncludesPath(join(homedir(), ".bash_profile"), marker, line)
-  ]);
+  await Promise.all(USER_CLI_SHELL_PROFILES.map((name) => (
+    ensureShellProfileIncludesPath(join(homedir(), name), marker, line)
+  )));
+}
+
+/**
+ * Links one command into /usr/local/bin when that directory is writable. It is already on the
+ * PATH of a Dock-launched app, which never reads ~/.zshrc.
+ */
+async function installSystemBinSymlink(source: string, name: string): Promise<"installed" | "kept-file" | "skipped"> {
+  try {
+    await access(SYSTEM_CLI_BIN_DIRECTORY, fsConstants.W_OK);
+  } catch {
+    return "skipped";
+  }
+  return installSymlink(source, join(SYSTEM_CLI_BIN_DIRECTORY, name));
 }
 
 async function ensureDirectoryOnUserPath(binDirectory: string, marker: string, line: string): Promise<string[]> {
@@ -1228,10 +1261,7 @@ async function ensureDirectoryOnUserPath(binDirectory: string, marker: string, l
     return [];
   }
 
-  const profilePaths = [
-    join(homedir(), ".zshrc"),
-    join(homedir(), ".bash_profile")
-  ];
+  const profilePaths = USER_CLI_SHELL_PROFILES.map((name) => join(homedir(), name));
   const results = await Promise.all(profilePaths.map(async (profilePath) => ({
     profilePath,
     changed: await ensureShellProfileIncludesPath(profilePath, marker, line)

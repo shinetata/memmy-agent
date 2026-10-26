@@ -1140,12 +1140,14 @@ describe("desktop packaged runtime boundaries", () => {
 
     expect(agentPackage.bin).toEqual({ memmy: "./dist/main.js" });
     expect(agentPackageLock.packages?.[""]?.bin).toEqual({ memmy: "dist/main.js" });
-    expect(mainSource).toContain('const memmyCli = join(cliDirectory, "memmy")');
-    expect(mainSource).toContain('await Promise.all([access(memoryCli), access(memmyCli), access(sessionCli)])');
-    expect(mainSource).toContain('installSymlink(sessionCli, join(binDirectory, "memmy-session"))');
+    expect(mainSource).toContain('["memmy", join(cliDirectory, "memmy")]');
+    expect(mainSource).toContain('["memmy-session", join(cliDirectory, "memmy-session")]');
+    expect(mainSource).toContain("bundledCliInstallDecision");
+    expect(mainSource).not.toContain("await Promise.all([access(memoryCli), access(memmyCli), access(sessionCli)])");
     expect(packageSource).toContain('create_cli_launcher "$CLI_BIN_DIR/memmy-session" "dist/cli/memmy-session.js"');
     expect(windowsPackageSource).toContain('require_packaged_runtime_file "$DESKTOP_DIR/release/win-unpacked/resources/cli/memmy-session.cmd"');
-    expect(mainSource).toContain('installSymlink(memmyCli, join(binDirectory, "memmy"))');
+    expect(mainSource).toContain("installSymlink(source, join(binDirectory, name))");
+    expect(mainSource).toContain("installSystemBinSymlink(source, name)");
     expect(mainSource).not.toContain(['join(cliDirectory, "', 'memmy-agent', '")'].join(""));
     expect(mainSource).not.toContain(['join(binDirectory, "', 'memmy-agent', '")'].join(""));
     expect(packageSource).toContain('create_cli_launcher "$CLI_BIN_DIR/memmy"');

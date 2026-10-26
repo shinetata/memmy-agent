@@ -36,6 +36,8 @@ export function renderMemmySessionSkillFile(source?: string): string {
     "memmy-session read \"<session link or id>\" [--turns <from>-<to>] [--around <turn>] [--find \"<sentence>\"] [--all]",
     "```",
     "",
+    "If `memmy-session` is not on PATH, run `~/.local/bin/memmy-session` with the same arguments. Memmy creates that command when the installed app starts.",
+    "",
     ...(source === "codex" ? [CODEX_SANDBOX_NOTE, ""] : []),
     "These are teammates' shared sessions, not the user's memory; for the user's own remembered context, use the `memmy-memory` skill.",
     "",

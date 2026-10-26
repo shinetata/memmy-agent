@@ -520,6 +520,14 @@ export function createAgentSourceService(options: CreateAgentSourceServiceOption
           // A stale skill must not block start-up; the next explicit install writes it.
         }
       }
+      try {
+        const sessionSkills = await options.skillDistributionService.ensureSessionSkills?.() ?? [];
+        for (const sourceId of sessionSkills) {
+          if (!refreshed.includes(sourceId)) refreshed.push(sourceId);
+        }
+      } catch {
+        // The session skill is retried on the next launch.
+      }
       return refreshed;
     }
   };

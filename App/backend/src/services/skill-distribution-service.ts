@@ -41,6 +41,12 @@ export interface SkillDistributionService {
    * Returns whether anything was written.
    */
   refreshInstalledSkill(sourceId: string, mode?: "skill" | "plugin"): Promise<boolean>;
+  /**
+   * Writes the `memmy-session` skill into every agent home that already exists. A new install has no
+   * memory skill yet, and auto-inject is off unless the person turns it on, so this is what puts the
+   * session skill on disk after the app is installed.
+   */
+  ensureSessionSkills(): Promise<string[]>;
 }
 
 /** Contract for create skill distribution service options. */
@@ -159,6 +165,18 @@ export function createSkillDistributionService(
       // The session skill is installed with the memory skill; an agent connected before it existed gets it here.
       if (!(await isMemmySessionSkillDirectoryCurrent(root, sourceId))) await replaceMemmySessionSkillDirectory(root, sourceId);
       return true;
+    },
+
+    async ensureSessionSkills() {
+      const written: string[] = [];
+      for (const target of options.targetRegistry.list()) {
+        const root = await target.resolveRootDirectory();
+        if (!root || !(await directoryExists(root))) continue;
+        if (await isMemmySessionSkillDirectoryCurrent(root, target.targetId)) continue;
+        await replaceMemmySessionSkillDirectory(root, target.targetId);
+        written.push(target.targetId);
+      }
+      return written;
     }
   };
 }
@@ -202,6 +220,15 @@ function frontmatterValue(content: string, key: string): string | undefined {
   if (end < 0) return undefined;
   const match = content.slice(3, end).match(new RegExp(`^${key}:\\s*["']?([^\\n"']+)["']?\\s*$`, "im"));
   return match?.[1]?.trim();
+}
+
+async function directoryExists(path: string): Promise<boolean> {
+  try {
+    return (await stat(path)).isDirectory();
+  } catch (error) {
+    if (isNodeError(error) && error.code === "ENOENT") return false;
+    throw error;
+  }
 }
 
 function isNodeError(error: unknown): error is NodeJS.ErrnoException {

@@ -264,6 +264,27 @@ describe("skill distribution service", () => {
     }
   });
 
+  it("installs the session skill into an existing agent home that never had Memmy", async () => {
+    const rootDirectory = mkdtempSync(join(tmpdir(), "memmy-agent-session-only-"));
+    const missing = join(rootDirectory, "missing-agent");
+    try {
+      const present = join(rootDirectory, "cursor-home");
+      mkdirSync(present);
+      const service = createSkillDistributionService({
+        targetRegistry: createSkillTargetRegistry([
+          createFakeTarget({ resolveRootDirectory: () => present }),
+          { ...createFakeTarget({ resolveRootDirectory: () => missing }), targetId: "codex", displayName: "Codex" }
+        ])
+      });
+
+      await expect(service.ensureSessionSkills()).resolves.toEqual(["cursor"]);
+      expect(readFileSync(join(present, "skills", "memmy-session", "SKILL.md"), "utf8")).toContain("name: memmy-session");
+      await expect(service.ensureSessionSkills()).resolves.toEqual([]);
+    } finally {
+      rmSync(rootDirectory, { recursive: true, force: true });
+    }
+  });
+
   it("leaves an agent with no Memmy skill alone", async () => {
     const rootDirectory = mkdtempSync(join(tmpdir(), "memmy-agent-no-skill-"));
     try {
