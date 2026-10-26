@@ -206,7 +206,7 @@ describe("project board", () => {
     expect(document.body.textContent).toContain("仅本机");
     expect(document.body.textContent).toContain(TASK.title);
     // Nothing is shared yet, so there is nothing to associate with the cloud.
-    expect(Array.from(document.querySelectorAll("button")).some((element) => element.textContent?.trim() === "关联会话")).toBe(false);
+    expect(Array.from(document.querySelectorAll("button")).some((element) => element.textContent?.trim() === "关联任务")).toBe(false);
     expect(mocks.listSessions).not.toHaveBeenCalled();
   });
 
@@ -222,7 +222,7 @@ describe("project board", () => {
     expect(mocks.createProject).toHaveBeenCalledWith(PROJECT.name, PROJECT.rootPath);
     expect(mocks.bindLocalProject).toHaveBeenCalledWith(CLOUD_PROJECT.id, PROJECT.id);
     // The project already has sessions, so the person picks which of them members may read.
-    expect(document.body.textContent).toContain("选择要同步的会话");
+    expect(document.body.textContent).toContain("选择要同步的任务");
     expect(mocks.listProjectTasks).toHaveBeenCalledWith(CLOUD_PROJECT.id);
     // The request is one-shot: the board consumed it when it opened the picker.
     expect(getCollabProjectsSnapshot().taskPickerFor).toBeNull();

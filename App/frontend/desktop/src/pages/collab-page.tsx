@@ -67,8 +67,8 @@ const PROGRESS_POLL_MS = 1_200;
 const MAX_PROJECT_NAME_CHARS = 20;
 const MAX_LOCAL_SESSIONS = 500;
 /**
- * 云端每名成员在每个项目内保留的会话数（`CollabLimits.MAX_SESSIONS_PER_MEMBER`），
- * 新建的 Memmy 会话与关联的 Agent 会话共用。超出后按最近交互自动替换。
+ * 云端每名成员在每个项目内保留的任务数（`CollabLimits.MAX_SESSIONS_PER_MEMBER`），
+ * 新建的 Memmy 任务与关联的 Agent 任务共用。超出后按最近交互自动替换。
  */
 const SESSIONS_PER_MEMBER_LIMIT = 20;
 const EMPTY_LINKS: CollabLinks = { groups: [], sessions: [] };
@@ -220,7 +220,7 @@ export function CollabPage() {
   /** 「邀请」in the header and「项目成员」in the sidebar menu open the same dialog. */
   const [membersOpen, setMembersOpen] = useState(false);
   const [deleting, setDeleting] = useState<CollabProjectSession | null>(null);
-  /** 多选删除：进入选择模式后勾选本人的会话，一次移除。 */
+  /** 多选删除：进入选择模式后勾选本人的任务，一次移除。 */
   const [selecting, setSelecting] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [confirmBulkDelete, setConfirmBulkDelete] = useState(false);
@@ -308,7 +308,7 @@ export function CollabPage() {
 
   /**
    * 保存指令：协作项目写云端（权限也在云端判定），再由后端同步回本机；仅在本机的项目直接写本机。
-   * 保存后对此后开始的会话生效。
+   * 保存后对此后开始的任务生效。
    */
   async function saveInstructions(text: string): Promise<void> {
     if (!instructionsDirectory) return;
@@ -439,11 +439,6 @@ export function CollabPage() {
   const sessions = page?.sessions ?? null;
   const filtering = Boolean(query) || member !== "all";
 
-  function clearFilters() {
-    setSearchDraft("");
-    setQuery("");
-    setMember("all");
-  }
   const total = page?.total ?? 0;
   const pageCount = Math.max(1, Math.ceil(total / SESSION_PAGE_SIZE));
 
@@ -499,7 +494,7 @@ export function CollabPage() {
     }
   }
 
-  /** 选择模式只在本人会话上生效：他人的会话只能看，删除也由云端限定为本人。 */
+  /** 选择模式只在本人任务上生效：他人的任务只能看，删除也由云端限定为本人。 */
   function toggleSelected(sessionId: string) {
     setSelected((current) => {
       const next = new Set(current);
@@ -563,7 +558,7 @@ export function CollabPage() {
           )
         ) : (
           <>
-            {/* 看板与右侧的项目配置并排：配置属于项目，不随会话列表滚动。 */}
+            {/* 看板与右侧的项目配置并排：配置属于项目，不随任务列表滚动。 */}
             <div className={styles.scroller}>
               <div className={styles.wrap}>
                 {notice !== null ? (
@@ -681,7 +676,7 @@ export function CollabPage() {
                         </>
                       ) : (
                         <>
-                          {/* 多选只对本人会话生效：没有本人的会话时不显示入口 */}
+                          {/* 多选只对本人任务生效：没有本人的任务时不显示入口 */}
                           {(sessions ?? []).some((session) => session.mine) ? (
                             <Button size="sm" variant="ghost" onClick={() => setSelecting(true)}>
                               <ListChecks size={14} aria-hidden="true" />
@@ -719,15 +714,16 @@ export function CollabPage() {
                     {sessions === null ? (
                       <p className={styles.loading}>{t("collab.loading")}</p>
                     ) : sessions.length === 0 && filtering ? (
-                      // A filter with no hits is not an empty project: say what was searched and offer a way back.
+                      // 筛选没结果时只说明当前筛选下没有任务：清除入口在筛选控件本身，不必再给一个按钮。
                       <div className={styles.empty}>
-                        <b>{t("collab.sessions.noMatch.title")}</b>
-                        <p>
-                          {query
-                            ? t("collab.sessions.noMatch.body", { query })
-                            : t("collab.sessions.noMatch.bodyMember")}
-                        </p>
-                        <Button size="sm" onClick={clearFilters}>{t("collab.sessions.noMatch.clear")}</Button>
+                        {query ? (
+                          <>
+                            <b>{t("collab.sessions.noMatch.title")}</b>
+                            <p>{t("collab.sessions.noMatch.body", { query })}</p>
+                          </>
+                        ) : (
+                          <p>{t(member === "me" ? "collab.sessions.noMatch.bodyMe" : "collab.sessions.noMatch.bodyOthers")}</p>
+                        )}
                       </div>
                     ) : sessions.length === 0 ? (
                       // An empty project is the one place to explain the board: what it collects and what a
@@ -768,7 +764,7 @@ export function CollabPage() {
                                   void openSession(session);
                                   return;
                                 }
-                                // 选择模式下点击整行就是勾选；他人的会话不可选。
+                                // 选择模式下点击整行就是勾选；他人的任务不可选。
                                 if (session.mine) toggleSelected(session.id);
                               }}
                             >
@@ -1247,7 +1243,7 @@ function ProjectConfigPanel(props: {
 }
 
 /**
- * 项目指令的编辑与查看。所有者与管理员保存后对此后开始的会话生效；成员打开时只读。
+ * 项目指令的编辑与查看。所有者与管理员保存后对此后开始的任务生效；成员打开时只读。
  */
 function ProjectInstructionsDialog(props: {
   open: boolean;
@@ -1566,7 +1562,7 @@ function ProjectBoardSettingsDialog(props: {
   );
 }
 
-/** 「全部成员 / 你 / 其他成员」, matching the prototype's compact picker. */
+/** 「全部任务 / 个人任务 / 成员任务」, matching the prototype's compact picker. */
 function MemberFilterPicker(props: {
   value: MemberFilter;
   options: { value: MemberFilter; label: string }[];
@@ -1762,7 +1758,7 @@ function AssociateSessionsModal(props: {
   const kind = activeAgent ? groupingKind(activeAgent.sourceId) : "directory";
   const view = activeAgent ? groupAgentSessions(sessions ?? [], activeAgent.sourceId, query) : { groups: [], ungrouped: [] };
   const changed = JSON.stringify(links) !== JSON.stringify(saved);
-  /** 当前勾选会关联的会话数，用于在提交前提示云端只保留最近 20 个。 */
+  /** 当前勾选会关联的任务数，用于在提交前提示云端只保留最近 20 个。 */
   const selectedCount = useMemo(
     () => (sessions ?? []).filter((session) => isSessionChecked(links, session)).length,
     [sessions, links]

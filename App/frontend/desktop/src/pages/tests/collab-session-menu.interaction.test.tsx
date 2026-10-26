@@ -189,7 +189,7 @@ describe("collab session row menu", () => {
     await flush();
 
     expect(mocks.removeSession).toHaveBeenCalledWith("p-1", "s-1");
-    expect(document.body.textContent).toContain("已删除 1 个会话");
+    expect(document.body.textContent).toContain("已删除 1 个任务");
   });
 
   it("tells the reader when only the recent turns are kept", async () => {
@@ -201,7 +201,7 @@ describe("collab session row menu", () => {
     await flush();
 
     // 单会话超出容量上限时，云端只保留近期轮次，阅读弹窗要说清楚。
-    expect(document.body.textContent).toContain("该会话仅保留近期记录");
+    expect(document.body.textContent).toContain("该任务仅保留近期记录");
   });
 
   it("closes the menu without opening the reader when the backdrop is clicked", async () => {

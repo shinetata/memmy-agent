@@ -31,7 +31,7 @@ const ProjectSessionSchema = z.object({
   source: z.string(),
   turnCount: z.number(),
   lastActiveAt: z.string().nullable(),
-  /** 单会话超出容量上限时只保留最近轮次，只有详情接口带这个标记。 */
+  /** 单任务超出容量上限时只保留最近轮次，只有详情接口带这个标记。 */
   trimmed: z.boolean().nullish().transform((value) => value ?? false),
   link: z.string(),
   shareText: z.string()
