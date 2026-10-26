@@ -9,7 +9,9 @@ import {
   isSessionChecked,
   localSessionKey,
   toggleGroupLink,
-  toggleSessionLink
+  toggleSessionLink,
+  visibleQuestion,
+  visibleReply
 } from "../collab-page.js";
 
 function session(sourceId: string, conversationId: string, title: string, groupId: string | null, updatedAt = "2026-10-21T13:30:00.000Z"): LocalAgentSession {
@@ -80,5 +82,33 @@ describe("collab page helpers", () => {
     expect(formatSessionTime(null)).toBe("");
     expect(formatSessionTime("not a date")).toBe("");
     expect(formatSessionTime("2026-10-21T13:30:00.000Z")).toMatch(/^10\/2[12] \d{2}:30$/u);
+  });
+
+  it("shows the typed Cursor question and hides a notification-only bubble", () => {
+    const envelope = [
+      "<timestamp>Monday, Oct 26, 2026, 7:17 PM (UTC+8)</timestamp>",
+      "<system_notification>",
+      "The following task has finished.",
+      "<task>",
+      "kind: shell",
+      "</task>",
+      "</system_notification>",
+      "<user_query>",
+      "重新打包签名",
+      "</user_query>"
+    ].join("\n");
+
+    expect(visibleQuestion(envelope)).toBe("重新打包签名");
+    expect(visibleQuestion("<timestamp>now</timestamp>\n<system_notification>\nkind: shell\n</system_notification>")).toBe("");
+    expect(visibleReply("可以发布。\n\n<system_notification>done</system_notification>")).toBe("可以发布。");
+    expect(visibleQuestion("帮我看下部署")).toBe("帮我看下部署");
+    expect(visibleQuestion([
+      "<system_notification>",
+      "The following task has finished.",
+      "</system_notification>",
+      "<user_query>",
+      "Briefly inform the user about the task result and perform any follow-up actions (if needed). If there's no follow-ups needed, don't explicitly say that.",
+      "</user_query>"
+    ].join("\n"))).toBe("");
   });
 });

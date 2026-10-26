@@ -192,6 +192,60 @@ describe("collab session row menu", () => {
     expect(document.body.textContent).toContain("已删除 1 个任务");
   });
 
+  it("renders a session as a question and a markdown answer, without tool steps", async () => {
+    mocks.readSessionDetail.mockResolvedValue({
+      session,
+      turns: [
+        {
+          question: "帮我看下部署 *原样*",
+          reply: "可以部署。\n\n- 已带上 `memmy-session`\n- 见 [部署说明](/tmp/deploy.md)",
+          steps: ["Bash", "Edit"],
+          startedAt: "2026-10-26T15:11:00.000Z"
+        },
+        {
+          question: "",
+          reply: "",
+          steps: ["ReadFile"],
+          startedAt: "2026-10-26T15:12:00.000Z"
+        },
+        {
+          question: "再确认一下",
+          reply: "已经改完。",
+          steps: [],
+          startedAt: "2026-10-26T15:20:00.000Z"
+        }
+      ]
+    });
+    const title = Array.from(row().querySelectorAll<HTMLElement>("span"))
+      .find((entry) => entry.textContent?.trim() === session.title);
+
+    await act(async () => title!.click());
+    await flush();
+
+    const users = document.querySelectorAll<HTMLElement>('[data-collab-role="user"]');
+    const agents = document.querySelectorAll<HTMLElement>('[data-collab-role="agent"]');
+    expect(users).toHaveLength(2);
+    expect(agents).toHaveLength(2);
+    expect(users[0]?.textContent).toContain("帮我看下部署 *原样*");
+    expect(users[0]?.querySelector("em")).toBeNull();
+    expect(agents[0]?.textContent).toContain("Claude Code");
+    expect(agents[0]?.querySelector("code")?.textContent).toBe("memmy-session");
+    expect([...agents[0]!.querySelectorAll("li")].map((item) => item.textContent)).toEqual([
+      "已带上 memmy-session",
+      "见 部署说明"
+    ]);
+    expect(agents[0]?.querySelector("a")).toBeNull();
+    expect(agents[0]?.querySelector("button")).toBeNull();
+    expect(agents[1]?.textContent).toContain("已经改完。");
+    expect(document.body.textContent).toContain("第 1 轮");
+    expect(document.body.textContent).toContain("第 2 轮");
+    expect(document.body.textContent).not.toContain("第 3 轮");
+    expect(document.body.textContent).not.toContain("执行步骤");
+    expect(document.body.textContent).not.toContain("Bash");
+    expect(document.body.textContent).not.toContain("ReadFile");
+    expect(document.body.textContent).not.toContain("回复");
+  });
+
   it("tells the reader when only the recent turns are kept", async () => {
     mocks.readSessionDetail.mockResolvedValue({ session: { ...session, trimmed: true }, turns: [] });
     const title = Array.from(row().querySelectorAll<HTMLElement>("span"))

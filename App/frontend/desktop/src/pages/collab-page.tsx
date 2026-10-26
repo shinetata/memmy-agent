@@ -48,6 +48,7 @@ import { Modal } from "../components/modal.js";
 import type { MessageKey } from "../i18n/messages.js";
 import { useTranslation } from "../i18n/use-translation.js";
 import { isComposingKeyboardEvent } from "../utils/keyboard.js";
+import { AgentMessageContent } from "./agent-message-content.js";
 import { agentSourceDisplayName, agentSourceLogoUrl } from "./agent-source-logos.js";
 import { AppFrame } from "./app-frame.js";
 import { memberColor } from "./collab-member-color.js";
@@ -1641,8 +1642,9 @@ function MemberFilterPicker(props: {
 }
 
 /**
- * A session's questions, replies and execution steps, read-only. Members can read each other's sessions but only
- * the person who shared one can delete it, which the board's row menu already enforces.
+ * A session read as a conversation: the person's question, then the Agent's answer.
+ * Tool steps stay in the stored transcript and are not drawn here. Members can read each other's
+ * sessions, but only the person who shared one can delete it, which the board's row menu already enforces.
  */
 function SessionReaderModal(props: {
   session: { session: CollabProjectSession; turns: CollabSessionTurn[] } | null;
@@ -1653,6 +1655,13 @@ function SessionReaderModal(props: {
   const { t } = useTranslation();
   const data = props.session;
   const name = data ? data.session.memberName || (data.session.mine ? t("collab.session.you") : "") : "";
+  const agentName = data ? agentSourceDisplayName(data.session.source) || "Agent" : "";
+  const agentLogo = data ? agentSourceLogoUrl(data.session.source) : undefined;
+  const spoken = (data?.turns.flatMap((turn) => {
+    const question = visibleQuestion(turn.question);
+    const reply = visibleReply(turn.reply);
+    return question || reply ? [{ question, reply, startedAt: turn.startedAt }] : [];
+  }) ?? []).map((turn, index) => ({ ...turn, number: index + 1 }));
   return (
     <Modal
       open={data !== null}
@@ -1690,25 +1699,33 @@ function SessionReaderModal(props: {
           {data.session.trimmed ? (
             <p className={styles.readerTrimmed}>{t("collab.reader.trimmed")}</p>
           ) : null}
-          {data.turns.length === 0 ? (
+          {spoken.length === 0 ? (
             <p className={styles.loading}>{t("collab.reader.empty")}</p>
-          ) : data.turns.map((turn, index) => (
-            <article key={`${turn.startedAt}-${index}`} className={styles.readerTurn}>
-              <b className={styles.readerTurnIndex}>{t("collab.reader.turn", { index: String(index + 1) })}</b>
+          ) : spoken.map((turn) => (
+            <article key={`${turn.startedAt}-${turn.number}`} className={styles.readerTurn}>
+              {spoken.length > 1 ? (
+                <span className={styles.readerTurnIndex}>{t("collab.reader.turn", { index: String(turn.number) })}</span>
+              ) : null}
               {turn.question ? (
-                <div className={styles.readerQuestion}>
-                  <span className={styles.readerSpeaker}>{name}</span>
-                  <p>{turn.question}</p>
+                <div className={styles.readerUser} data-collab-role="user">
+                  <div className={styles.readerUserStack}>
+                    {name ? <span className={styles.readerUserName}>{name}</span> : null}
+                    <p className={styles.readerUserBubble}>{turn.question}</p>
+                  </div>
                 </div>
               ) : null}
               {turn.reply ? (
-                <div className={styles.readerReply}>
-                  <span className={styles.readerSpeaker}>{t("collab.reader.reply")}</span>
-                  <p>{turn.reply}</p>
+                <div className={styles.readerAgent} data-collab-role="agent">
+                  <div className={styles.readerAgentHead}>
+                    {agentLogo ? (
+                      <img className={styles.readerAgentLogo} src={agentLogo} alt="" />
+                    ) : (
+                      <span className={styles.readerAgentMark} aria-hidden="true">{Array.from(agentName)[0] ?? "A"}</span>
+                    )}
+                    <span>{agentName}</span>
+                  </div>
+                  <AgentMessageContent content={turn.reply} readOnlyFileReferences />
                 </div>
-              ) : null}
-              {turn.steps.length ? (
-                <p className={styles.readerSteps}>{t("collab.reader.steps")}: {summarizeSteps(turn.steps)}</p>
               ) : null}
             </article>
           ))}
@@ -1721,12 +1738,32 @@ function SessionReaderModal(props: {
 }
 
 /**
- * The same「Bash ×3、Edit」summary the reference file uses, so the app and the file read alike.
+ * Cursor stores the host envelope in the user bubble. The person typed the `<user_query>` body;
+ * a bubble that is only a system notification has nothing to show.
  */
-export function summarizeSteps(steps: readonly string[]): string {
-  const counts = new Map<string, number>();
-  for (const step of steps) counts.set(step, (counts.get(step) ?? 0) + 1);
-  return [...counts.entries()].map(([step, count]) => (count > 1 ? `${step} ×${count}` : step)).join("、");
+export function visibleQuestion(text: string): string {
+  const queries = [...text.matchAll(/<user_query>\s*([\s\S]*?)\s*<\/user_query>/giu)]
+    .map((match) => match[1]?.trim() ?? "")
+    .filter((query) => query.length > 0);
+  return withoutCursorTaskFollowup(stripHostEnvelope(queries.length > 0 ? queries.join("\n\n") : text));
+}
+
+/** Drops a host envelope that leaked into an answer. The answer itself stays. */
+export function visibleReply(text: string): string {
+  return stripHostEnvelope(text);
+}
+
+function stripHostEnvelope(text: string): string {
+  return text
+    .replace(/<(timestamp|system_notification|system[_-]reminder|image_files|open_and_recently_viewed_files)\b[^>]*>[\s\S]*?<\/\1>/giu, "")
+    .trim();
+}
+
+/** Cursor writes this into `<user_query>` when a background task ends. It is not something the person typed. */
+function withoutCursorTaskFollowup(text: string): string {
+  return text
+    .replace(/briefly inform the user about the task result and perform any follow-up actions \(if needed\)\.\s*if there['’]s no follow-ups needed, don['’]t explicitly say that\.?/giu, "")
+    .trim();
 }
 
 /** 新建项目: an online project (default) or a local one, per the prototype. */

@@ -516,17 +516,31 @@
  */
 :global(.modal).readerModal {
   width: min(760px, calc(100vw - 32px));
+  --collab-ink: var(--color-text-ink, #111d1c);
+  --collab-ink-2: #2a3a37;
+  --collab-muted: #5f716c;
+  --collab-ter: #8a9a96;
+  --collab-line: color-mix(in srgb, var(--color-border-stone, #d6dfdc) 80%, transparent);
+  --collab-line-soft: color-mix(in srgb, var(--color-border-stone, #d6dfdc) 45%, transparent);
+  --collab-surface: color-mix(in srgb, var(--color-canvas-oat, #f4f7f6) 60%, transparent);
+  --collab-active: var(--color-nav-active-bg, #e3f4f1);
+  --collab-accent: var(--color-accent-mint, #5cbfae);
+  --collab-accent-deep: var(--color-accent-deep, #2f8f7f);
 }
 
 .readerBody {
-  max-height: min(56vh, 560px);
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+  max-height: min(64vh, 640px);
   overflow-y: auto;
-  padding-right: 4px;
+  padding: 2px 4px 8px 0;
+  font-family: var(--font-chat, var(--font-sans));
 }
 
 /* 单会话超出容量上限时的提示：与轮次内容区分，但不抢注意力 */
 .readerTrimmed {
-  margin: 0 0 12px;
+  margin: 0;
   padding: 8px 10px;
   border: 1px solid color-mix(in srgb, #d6dfdc 70%, transparent);
   border-radius: 8px;
@@ -554,54 +568,89 @@
 }
 
 .readerTurn {
-  padding: 14px 0;
-  border-bottom: 1px solid var(--collab-line-soft);
-}
-
-.readerTurn:last-child {
-  border-bottom: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
 }
 
 .readerTurnIndex {
-  display: block;
-  margin-bottom: 8px;
+  align-self: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--collab-surface);
   color: var(--collab-ter);
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 700;
 }
 
-.readerQuestion,
-.readerReply {
+.readerUser {
+  display: flex;
+  justify-content: flex-end;
+  min-width: 0;
+}
+
+.readerUserStack {
   display: flex;
   flex-direction: column;
+  align-items: flex-end;
   gap: 4px;
-  margin-bottom: 10px;
+  max-width: min(82%, 560px);
+  min-width: 0;
 }
 
-.readerReply {
-  margin-bottom: 0;
-}
-
-.readerSpeaker {
+.readerUserName {
   color: var(--collab-ter);
   font-size: 12px;
   font-weight: 700;
 }
 
-.readerQuestion p,
-.readerReply p {
+.readerUserBubble {
   margin: 0;
-  color: var(--collab-ink-2);
-  font-size: 13.5px;
-  line-height: 1.75;
+  padding: 8px 14px;
+  border-radius: 16px 16px 4px 16px;
+  background: var(--collab-active);
+  color: var(--collab-ink);
+  font-size: 15px;
+  line-height: 1.7;
   white-space: pre-wrap;
   word-break: break-word;
 }
 
-.readerSteps {
-  margin: 10px 0 0;
-  color: var(--collab-ter);
-  font-size: 12.5px;
+.readerAgent {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.readerAgentHead {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--collab-muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.readerAgentLogo {
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  object-fit: contain;
+}
+
+.readerAgentMark {
+  display: inline-grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  background: #e7f3f0;
+  color: var(--collab-accent-deep);
+  font-size: 10px;
+  font-weight: 800;
 }
 
 .readerFoot {
