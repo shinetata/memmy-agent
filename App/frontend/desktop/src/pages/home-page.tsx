@@ -1,6 +1,6 @@
 /** Home page module. */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ChangeEvent, type ClipboardEvent, type CSSProperties, type DragEvent, type KeyboardEvent, type PointerEvent as ReactPointerEvent, type SetStateAction, type UIEvent } from "react";
-import type { AgentGatewayStartupIssue } from "@memmy/local-api-contracts";
+import { resolveThinkingEnabled, resolveThinkingLevel, type AgentGatewayStartupIssue } from "@memmy/local-api-contracts";
 import { getRuntimeConfig } from "../api/runtime-config.js";
 import { createHttpCollabClient, type CollabProjectSession } from "../api/collab-client.js";
 import { ComposerInlineEditor, caretAtTextStart } from "./composer-inline-editor.js";
@@ -45,7 +45,7 @@ import { ImChannelTitleIcon, imChannelTitleDisplay } from "../integrations/integ
 import { useTaskBus, type TaskBusAgentMessage } from "../lib/task-bus.js";
 import type { AppAction } from "../state/app-actions.js";
 import { agentActions, appActions, createAgentOperationError } from "../state/app-actions.js";
-import { type AgentChatMessage, type AgentState, type ComposerMention } from "../state/agent-chat-slice.js";
+import { NEW_TASK_MODEL_SCOPE_KEY, type AgentChatMessage, type AgentState, type AgentThinkingState, type ComposerMention } from "../state/agent-chat-slice.js";
 import { useAppState } from "../state/app-state.js";
 import { isComposingKeyboardEvent } from "../utils/keyboard.js";
 import {
@@ -56,7 +56,7 @@ import {
   type PendingFileAttachment,
   type PendingImage
 } from "../state/agent-composer-state.js";
-import { createModelWorkspace, defaultModelSelectionInput, resolveModelSelection } from "../state/model-workspace.js";
+import { createModelWorkspace, defaultModelSelectionInput, resolveModelSelection, resolveThinkingConfigForModel, type ModelCandidate, type ModelWorkspace } from "../state/model-workspace.js";
 import {
   CollabSessionMentionMenu,
   applyMention,
@@ -66,6 +66,7 @@ import {
 import {
   AgentCommandPalette,
   buildVisibleSlashCommands,
+  defaultSlashCommandIndex,
   filterSlashCommands,
   localizeSlashCommands,
   readRecentSlashCommands,
@@ -113,8 +114,6 @@ export { agentChatScopeKey, updateComposerDraftForScope };
 export { hydrateAgentThreadInBackground };
 export { isComposingKeyboardEvent } from "../utils/keyboard.js";
 export type { PendingAttachment, PendingAttachmentBase, PendingFileAttachment, PendingImage };
-
-const NEW_TASK_MODEL_SCOPE_KEY = "draft-new-task";
 
 const AGENT_WS_SAFE_FRAME_BYTES = 1024 * 1024;
 const COMPOSER_HEIGHT_EPSILON = 2;
@@ -202,6 +201,7 @@ const TRANSLATABLE_AGENT_ERROR_KEYS = new Set<MessageKey>([
   "home.media.error.sendReadFailed",
   "home.media.error.sendFailed",
   "home.media.error.messageTooBig",
+  "home.asrNotConfigured",
   "home.agent.messageNotRecorded",
   "home.agent.executionInterrupted",
   "home.agent.recoveryTimeout",
@@ -328,6 +328,8 @@ export interface SubmitAgentComposerMessageInput {
   getChatSelectionEpoch?: () => number;
   scopeKey?: string;
   modelPreset?: string | null;
+  thinkingEnabled?: boolean;
+  thinkingLevel?: string | null;
 }
 
 export interface RequestAgentStopInput {
@@ -669,6 +671,20 @@ export function requestNewSessionReset(input: RequestNewSessionResetInput): bool
   return true;
 }
 
+export function thinkingPayloadForSend(
+  workspace: ModelWorkspace,
+  candidate: ModelCandidate | null | undefined,
+  sessionThinking: AgentThinkingState | undefined
+): { thinkingEnabled?: boolean; thinkingLevel?: string | null } {
+  const config = resolveThinkingConfigForModel(workspace, candidate);
+  if (!config) return {};
+  const thinkingEnabled = resolveThinkingEnabled(config, sessionThinking?.enabled);
+  const thinkingLevel = thinkingEnabled
+    ? resolveThinkingLevel(config, sessionThinking?.level)
+    : null;
+  return { thinkingEnabled, thinkingLevel };
+}
+
 export async function submitAgentComposerMessage(input: SubmitAgentComposerMessageInput): Promise<boolean> {
   const text = input.content.trim();
   const trimmedDisplayContent = input.displayContent?.trim();
@@ -763,6 +779,8 @@ export async function submitAgentComposerMessage(input: SubmitAgentComposerMessa
     ...(capturedTarget ? { target: capturedTarget } : {}),
     ...(input.language ? { language: input.language } : {}),
     ...(confirmedModelPreset !== undefined ? { model_preset: confirmedModelPreset } : {}),
+    ...(input.thinkingEnabled !== undefined ? { thinking_enabled: input.thinkingEnabled } : {}),
+    ...(input.thinkingLevel ? { thinking_level: input.thinkingLevel } : {}),
     ...(uploadedAttachments.length ? { media_paths: uploadedAttachments.map((item) => item.path) } : {})
   };
   if (encodedPayloadBytes(payload) > AGENT_WS_SAFE_FRAME_BYTES) {
@@ -786,6 +804,8 @@ export async function submitAgentComposerMessage(input: SubmitAgentComposerMessa
       ...(capturedTarget ? { target: capturedTarget } : {}),
       ...(input.language ? { language: input.language } : {}),
       ...(confirmedModelPreset !== undefined ? { modelPreset: confirmedModelPreset } : {}),
+      ...(input.thinkingEnabled !== undefined ? { thinkingEnabled: input.thinkingEnabled } : {}),
+      ...(input.thinkingLevel !== undefined ? { thinkingLevel: input.thinkingLevel } : {}),
       media: uploadedAttachments
     }, expectedGeneration);
   } catch (error) {
@@ -1671,11 +1691,11 @@ export function HomePage() {
     lastCompactionSlashCommand,
     ...localizedSlashCommands.filter((command) => command.command !== "/last-compaction")
   ];
-  const visibleSlashCommands = buildVisibleSlashCommands(slashCommandsWithLocal, state.agent.isSending, stopSlashCommand);
+  const visibleSlashCommands = buildVisibleSlashCommands(slashCommandsWithLocal, state.agent.isSending, stopSlashCommand, slashQuery ?? "");
   const modeVisibleSlashCommands = selectedComposerCommand
     ? filterGoalModeSlashCommands(visibleSlashCommands, Boolean(state.agent.currentChatId))
     : visibleSlashCommands;
-  const filteredSlashCommands = slashQuery == null ? [] : filterSlashCommands(modeVisibleSlashCommands, slashQuery, recentSlashCommands);
+  const filteredSlashCommands = slashQuery == null ? [] : filterSlashCommands(modeVisibleSlashCommands, slashQuery, recentSlashCommands, state.agent.modelPresets);
   const slashMenuOpen = filteredSlashCommands.length > 0;
   const displayConnectionStatus = state.agent.recoveryKind === "initial"
     ? "connecting"
@@ -1718,10 +1738,8 @@ export function HomePage() {
   const composerSubmitDisabled = composerPrimaryAction === "stop" ? composerStopDisabled : composerSendDisabled;
 
   useEffect(() => {
-    if (selectedCommandIndex >= filteredSlashCommands.length) {
-      setSelectedCommandIndex(0);
-    }
-  }, [filteredSlashCommands.length, selectedCommandIndex]);
+    setSelectedCommandIndex(defaultSlashCommandIndex(slashQuery, filteredSlashCommands.length));
+  }, [slashQuery, filteredSlashCommands.length]);
 
   useEffect(() => {
     composerDraftsRef.current = composerDrafts;
@@ -1921,6 +1939,11 @@ export function HomePage() {
         getChatSelectionEpoch: () => chatSelectionEpochRef.current,
         scopeKey: sendScopeKey,
         modelPreset: resolvedConversationModel.candidateId ?? undefined,
+        ...thinkingPayloadForSend(
+          modelWorkspace,
+          resolvedConversationModel.candidate,
+          state.agent.thinkingStateByScope[modelSelectionScopeKey]
+        ),
         onChatResolved: (chatId) => {
           threadPanel.promoteScope(sendScopeKey, chatId);
           dispatch(agentActions.modelSelectionRequestStarted(
@@ -2305,7 +2328,6 @@ export function HomePage() {
     setMentionDismissed(false);
     setMentionIndex(0);
     setSlashMenuDismissed(false);
-    setSelectedCommandIndex(0);
     if (
       slashQueryFromInput(value) != null &&
       clients?.memmyAgent &&
@@ -2413,21 +2435,6 @@ export function HomePage() {
     ) {
       dispatch(agentActions.composerScopeCleared(scopeKey));
     }
-  }
-
-  function resetComposerDraftUi(scopeKey = chatScopeKey) {
-    setSelectedComposerCommandForScope(scopeKey, null);
-    for (const item of pendingAttachmentsRef.current[scopeKey] ?? []) {
-      revokePendingAttachment(item);
-    }
-    const nextDrafts = { ...composerDraftsRef.current };
-    const nextPendingAttachments = { ...pendingAttachmentsRef.current };
-    delete nextDrafts[scopeKey];
-    delete nextPendingAttachments[scopeKey];
-    composerDraftsRef.current = nextDrafts;
-    pendingAttachmentsRef.current = nextPendingAttachments;
-    dispatch(agentActions.composerScopeCleared(scopeKey));
-    resetComposerHeight();
   }
 
   function closeLastCompactionPanel() {
@@ -2922,7 +2929,7 @@ export function HomePage() {
           }
         : item));
       return true;
-    } catch (error) {
+    } catch {
       setPendingAttachmentsForScope(scopeKey, (current) => {
         const failed = current.find((item) => item.id === id);
         if (failed) revokePendingAttachment(failed);
@@ -3834,6 +3841,9 @@ export function agentErrorText(error: string | null, t: HomeTranslate = defaultH
   if (TRANSLATABLE_AGENT_ERROR_KEYS.has(error as MessageKey)) {
     return t(error as MessageKey);
   }
+  if (isAsrModelNotConfiguredError(error)) {
+    return t("home.asrNotConfigured");
+  }
   const stableCode = error.includes(":") ? error.slice(error.lastIndexOf(":") + 1) : error;
   const mapped = AGENT_OPERATION_ERROR_MESSAGE_KEYS[stableCode];
   if (mapped) return t(mapped);
@@ -3970,13 +3980,22 @@ function browserStorage(): SlashCommandStorageLike | null {
  * @param error An unknown exception.
  * @returns Error text or a MessageKey that can be shown to the user.
  */
-function toReadableAsrError(error: unknown, t: HomeTranslate = defaultHomeTranslate): string {
+export function toReadableAsrError(error: unknown, t: HomeTranslate = defaultHomeTranslate): string {
   if (error instanceof MicrophonePermissionError) {
     return microphonePermissionDeniedMessageKey();
+  }
+  if (isAsrModelNotConfiguredError(error)) {
+    return "home.asrNotConfigured";
   }
   return error instanceof Error && error.message
     ? t("home.asrFailedWithMessage", { message: error.message })
     : t("home.asrFailed");
+}
+
+/** Detects backend ASR configuration errors that should not fall through to the generic operation error. */
+function isAsrModelNotConfiguredError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /ASR (?:model catalog|model|client) is not configured|Assigned ASR model is unavailable|ASR requires account or BYOK mode/i.test(message);
 }
 
 function readableError(error: unknown): string {
@@ -4266,10 +4285,6 @@ function formatBytes(bytes: number): string {
     return `${(bytes / 1024).toFixed(1)} KB`;
   }
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-function isMessageKey(value: string): value is MessageKey {
-  return Object.prototype.hasOwnProperty.call(zhCNMessages, value);
 }
 
 export function hasCompletedAssistantAnswer(messages: AgentChatMessage[]): boolean {

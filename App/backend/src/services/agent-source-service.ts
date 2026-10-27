@@ -100,7 +100,7 @@ export interface AgentSourceService {
   syncManaged(sourceId: string): Promise<ManagedAgentSourceImportResult>;
   updateManaged(sourceId: string, input: ManagedAgentSourceUpdateInput): Promise<AgentSourceView>;
   remove(sourceId: string): Promise<void>;
-  installSkill(sourceId: string): Promise<void>;
+  installSkill(sourceId: string, action?: Pick<AgentSourcePluginActionInput, "installType">): Promise<void>;
   uninstallSkill(sourceId: string): Promise<void>;
   installPlugin(sourceId: string, action?: AgentSourcePluginActionInput): Promise<void>;
   uninstallPlugin(sourceId: string, action?: AgentSourcePluginActionInput): Promise<void>;
@@ -355,8 +355,9 @@ export function createAgentSourceService(options: CreateAgentSourceServiceOption
       options.agentSourceRepository.removeSource(sourceId);
     },
 
-    async installSkill(sourceId) {
+    async installSkill(sourceId, action = {}) {
       const startedAt = Date.now();
+      const installType = normalizePluginInstallType(action.installType);
       const statusBefore = readSourceStatus(options, sourceId);
       const permission = await readScanPermission(options);
       const builtin = readSourceBuiltin(options, sourceId);
@@ -364,7 +365,11 @@ export function createAgentSourceService(options: CreateAgentSourceServiceOption
         await ensureSourceAvailable(options, sourceId);
         await options.skillDistributionService.install(sourceId);
         ensureSourceExists(options, sourceId);
-        options.agentSourceRepository.setStatus(sourceId, "skill_installed");
+        if (installType === "auto_inject") {
+          options.agentSourceRepository.setStatus(sourceId, "skill_installed");
+        } else {
+          options.agentSourceRepository.setConnectionState(sourceId, "skill_installed", false);
+        }
         agentSourceAnalytics.trackSkillInstalled({
           sourceId,
           builtin,
@@ -397,7 +402,7 @@ export function createAgentSourceService(options: CreateAgentSourceServiceOption
       try {
         await options.skillDistributionService.uninstall(sourceId);
         ensureSourceExists(options, sourceId);
-        options.agentSourceRepository.setStatus(sourceId, "not_connected");
+        options.agentSourceRepository.setConnectionState(sourceId, "not_connected", true);
         agentSourceAnalytics.trackSkillUninstalled({
           sourceId,
           builtin,
@@ -431,7 +436,11 @@ export function createAgentSourceService(options: CreateAgentSourceServiceOption
         await ensureSourceAvailable(options, sourceId);
         await options.skillDistributionService.installPlugin(sourceId);
         ensureSourceExists(options, sourceId);
-        options.agentSourceRepository.setStatus(sourceId, "plugin_installed");
+        if (installType === "auto_inject") {
+          options.agentSourceRepository.setStatus(sourceId, "plugin_installed");
+        } else {
+          options.agentSourceRepository.setConnectionState(sourceId, "plugin_installed", false);
+        }
         agentSourceAnalytics.trackPluginInstalled({
           sourceId,
           permission,
@@ -468,7 +477,7 @@ export function createAgentSourceService(options: CreateAgentSourceServiceOption
       try {
         await options.skillDistributionService.uninstallPlugin(sourceId);
         ensureSourceExists(options, sourceId);
-        options.agentSourceRepository.setStatus(sourceId, "not_connected");
+        options.agentSourceRepository.setConnectionState(sourceId, "not_connected", true);
         agentSourceAnalytics.trackPluginUninstalled({
           sourceId,
           permission,
