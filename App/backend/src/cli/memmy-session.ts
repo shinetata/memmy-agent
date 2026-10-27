@@ -25,7 +25,7 @@ const USAGE = [
   "Usage:",
   "  memmy-session projects",
   "  memmy-session search <keywords> [--member <name>] [--project <project name>] [--since 30d] [--limit <n>]",
-  "  memmy-session read <link|id> [--turns <from>-<to> | --around <turn> | --find \"<sentence>\" | --all]",
+  "  memmy-session read <link|id|id#turn> [--turns <from>-<to> | --around <turn> | --find \"<sentence>\" | --all]",
   "  memmy-session add [--project <project name>] [--hint \"<sentence>\"]",
   "",
   "Finds and reads sessions of your shared Memmy projects, and adds the current one to a project. Memmy must be running."
@@ -90,11 +90,20 @@ export async function runMemmySession(argv: readonly string[], deps: MemmySessio
     return formatProjects(projects);
   }
   if (action === "read") {
-    const reference = rest.join(" ").trim();
-    if (!reference) {
+    const raw = rest.join(" ").trim();
+    if (!raw) {
       throw new Error("read 需要 Memmy 任务链接或任务 ID");
     }
-    const result = await localApi(deps, "POST", "/api/collab/sessions/read", { reference, view: readView(parsed) });
+    // 搜索结果的 `任务ID#轮次` 本身就是读取范围：和 --turns 等价，不用再猜轮次从几开始。
+    const { reference, turn } = parseTurnCoordinate(raw);
+    const view = readView(parsed);
+    if (turn !== undefined && Object.keys(view).length) {
+      throw new Error("任务 ID 后面带了 #轮次，已经指明读哪一轮，不要再加 --turns、--around、--find 或 --all");
+    }
+    const result = await localApi(deps, "POST", "/api/collab/sessions/read", {
+      reference,
+      view: turn === undefined ? view : { turns: { from: turn, to: turn } }
+    });
     return typeof result.text === "string" ? result.text : "";
   }
   if (action === "add") {
@@ -220,7 +229,39 @@ function formatSearchLine(session: Record<string, unknown>): string {
   const activity = formatTime(text(session.lastActiveAt));
   const projects = Array.isArray(session.projectNames) ? session.projectNames.filter((name) => typeof name === "string") : [];
   const meta = [projects.length ? projects.join("、") : text(session.projectName), member, activity].filter(Boolean).join(" · ");
-  return `${text(session.id)}  ${text(session.title)}  ${meta}`;
+  const hits = searchHits(session);
+  const first = hits[0];
+  if (!first) {
+    return `${text(session.id)}  ${text(session.title)}  ${meta}`;
+  }
+  // 第一处命中放进标题行的坐标里，其余各占一行缩进：Agent 读到 `ID#轮次` 就能直接去读那一轮。
+  const lines = [`${text(session.id)}#${first.turnNo}  ${text(session.title)}  ${meta}`];
+  if (first.snippet) lines.push(`    ${first.snippet}`);
+  for (const hit of hits.slice(1)) {
+    lines.push(`    #${hit.turnNo}${hit.snippet ? ` ${hit.snippet}` : ""}`);
+  }
+  return lines.join("\n");
+}
+
+interface TurnHit {
+  turnNo: number;
+  snippet: string;
+}
+
+/** 云端在正文里找到的轮次与片段；旧云端没有这个字段时为空，按原来的单行输出。 */
+function searchHits(session: Record<string, unknown>): TurnHit[] {
+  if (!Array.isArray(session.hits)) return [];
+  return session.hits
+    .filter(isRecord)
+    .map((hit) => ({ turnNo: Number(hit.turnNo), snippet: text(hit.snippet) }))
+    .filter((hit) => Number.isInteger(hit.turnNo) && hit.turnNo > 0);
+}
+
+/** `任务ID#轮次` 或 `链接#轮次`：`#` 之后是从 1 开始的轮次，其余部分仍按链接或 ID 解析。 */
+export function parseTurnCoordinate(reference: string): { reference: string; turn?: number } {
+  const match = /^(.*?)#(\d+)$/u.exec(reference.trim());
+  if (!match) return { reference: reference.trim() };
+  return { reference: (match[1] ?? "").trim(), turn: Number.parseInt(match[2] ?? "", 10) };
 }
 
 async function localApi(

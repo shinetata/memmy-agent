@@ -172,8 +172,7 @@ describe("memmy-session", () => {
       .rejects.toThrow("无法连接 Memmy，请打开 Memmy 后重试。");
   });
 
-  it("sends the current directory and prints how to add the task", async () => {
-    let body: unknown;
+  it("sends the current directory and prints how to add the task", async () => {    let body: unknown;
     const fetcher = (async (_input: string | URL, init?: RequestInit) => {
       body = JSON.parse(String(init?.body));
       return new Response(JSON.stringify({ text: "已把当前任务「分享接口限流」加入协作项目「Memmy 开发」。\n只加入这一条，没有关联整个工作区。" }), { status: 200 });
@@ -197,5 +196,55 @@ describe("memmy-session", () => {
     expect(body).toEqual({ cwd: "/repo", project: "Memmy 开发", sourceId: "cursor", conversationId: "composer-current" });
     await expect(run(["add", "Memmy 开发"], { runtimeConfigPath })).rejects.toThrow(/--project/);
     expect(await run(["help"], { runtimeConfigPath })).toContain("memmy-session add");
+  });
+
+  it("puts the turn number into a found result and quotes the match under it", async () => {
+    const fetcher = (async () => new Response(JSON.stringify({
+      sessions: [{
+        id: "a1b2c3",
+        title: "重复分享返回 409",
+        projectName: "Memmy 开发",
+        memberName: "用户C",
+        mine: false,
+        lastActiveAt: null,
+        hits: [{ turnNo: 12, snippet: "…重复分享时返回 409，账号不存在返回 404…" }, { turnNo: 15, snippet: "…返回 409 时提示已分享过…" }]
+      }]
+    }), { status: 200 })) as typeof fetch;
+    const runtimeConfigPath = runtimeFile({ baseUrl: "http://127.0.0.1:62315", localToken: "t" });
+
+    expect(await run(["search", "重复分享 409"], { fetch: fetcher, runtimeConfigPath })).toBe([
+      "a1b2c3#12  重复分享返回 409  Memmy 开发 · 用户C",
+      "    …重复分享时返回 409，账号不存在返回 404…",
+      "    #15 …返回 409 时提示已分享过…"
+    ].join("\n"));
+  });
+
+  it("keeps the old one-line result when the cloud did not search the turns", async () => {
+    const fetcher = (async () => new Response(JSON.stringify({
+      sessions: [{ id: "s-409", title: "重复分享返回 409", projectName: "Memmy 开发", memberName: "用户C", mine: false, lastActiveAt: null }]
+    }), { status: 200 })) as typeof fetch;
+    const runtimeConfigPath = runtimeFile({ baseUrl: "http://127.0.0.1:62315", localToken: "t" });
+
+    expect(await run(["search", "重复分享"], { fetch: fetcher, runtimeConfigPath })).toBe("s-409  重复分享返回 409  Memmy 开发 · 用户C");
+  });
+
+  it("reads the turn named after the id without any range flag", async () => {
+    let body: Record<string, unknown> = {};
+    const fetcher = (async (_input: string | URL, init?: RequestInit) => {
+      body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      return new Response(JSON.stringify({ text: "以下为第 12 轮。" }), { status: 200 });
+    }) as typeof fetch;
+    const runtimeConfigPath = runtimeFile({ baseUrl: "http://127.0.0.1:62315", localToken: "t" });
+
+    expect(await run(["read", "a1b2c3#12"], { fetch: fetcher, runtimeConfigPath })).toBe("以下为第 12 轮。");
+    expect(body).toEqual({ reference: "a1b2c3", view: { turns: { from: 12, to: 12 } } });
+
+    // 链接也可以直接带上轮次。
+    await run(["read", "https://memmy.example/s/abc-123#7"], { fetch: fetcher, runtimeConfigPath });
+    expect(body).toEqual({ reference: "https://memmy.example/s/abc-123", view: { turns: { from: 7, to: 7 } } });
+
+    // 坐标本身就是范围，再给一个范围只会让两处说法打架。
+    await expect(run(["read", "a1b2c3#12", "--turns", "3-8"], { fetch: fetcher, runtimeConfigPath }))
+      .rejects.toThrow(/不要再加 --turns/u);
   });
 });

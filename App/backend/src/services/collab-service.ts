@@ -83,6 +83,8 @@ const OUTLINE_QUESTION_CHARS = 80;
  */
 const CLOUD_SEARCH_LIMIT = 20;
 const DEFAULT_SEARCH_RESULTS = 5;
+/** 一条任务最多列几处命中，与云端一致；再多的命中换成更具体的词比继续读更有用。 */
+const MAX_SEARCH_HITS = 3;
 /** How many local tasks `add` looks at in the working directory. The current one is among the newest. */
 const ADD_CANDIDATE_LIMIT = 50;
 /** Tasks reread to see whether a sentence from the conversation is in them. */
@@ -491,11 +493,21 @@ export interface SessionSearchInput {
   project?: string;
   limit?: number;
   sinceMs?: number;
+  /** `30d` 这样的窗口原样交给云端：窗口要在云端分页之前生效，否则正文命中一多，近期任务反而会被挤掉。 */
+  since?: string;
+}
+
+/** 关键词命中的一轮：轮次号可直接写成 `任务ID#轮次`，片段说明为什么会命中。 */
+export interface SessionTurnHit {
+  turnNo: number;
+  snippet: string;
 }
 
 /** A search result: one session, with every project it is shared to. */
 export interface SessionSearchHit extends CollabProjectSession {
   projectNames: string[];
+  /** 云端没有在正文里找过时为空，此时按旧的单行格式展示。 */
+  hits: SessionTurnHit[];
 }
 
 /** One Memmy session of a project's local folder, as the sync picker lists it. */
@@ -1079,6 +1091,18 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
   }
 
   /**
+   * What the cloud found inside the turns, as `任务ID#轮次` plus a quote. Missing in replies from a cloud that only
+   * looked at titles and questions, which the command prints as one line the way it used to.
+   */
+  function withSearchHits(session: CollabProjectSession, raw: unknown): SessionSearchHit {
+    const hits = list(record(raw).hits)
+      .map((hit) => ({ turnNo: number(record(hit).turnNo), snippet: text(record(hit).snippet) }))
+      .filter((hit) => hit.turnNo > 0)
+      .slice(0, MAX_SEARCH_HITS);
+    return { ...session, projectNames: [], hits };
+  }
+
+  /**
    * 协作任务只在云端保存。旧版本把引用的任务写到每个项目的 sessions 目录，这里在启动时清掉这些遗留文件，
    * 之后读取不再生成新的副本。清理失败不影响后续使用。
    */
@@ -1554,9 +1578,14 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
       query.set("q", searchKeywords(words.join(" ")).join(" "));
       if (member) query.set("member", member);
       if (input.project) query.set("project", input.project);
+      // 窗口随请求下发：云端在分页前过滤，正文命中一多也不会把近期任务挤掉。旧云端不认这个参数，
+      // 下面的本地过滤照旧生效，两边各自发版都能用。
+      if (input.since) query.set("since", input.since);
       query.set("limit", String(CLOUD_SEARCH_LIMIT));
       const data = await cloud(`/sessions/search?${query.toString()}`);
-      const found = list(data.sessions).map(withLink).filter((session) => !mineOnly || session.mine);
+      const found = list(data.sessions)
+        .map((raw) => withSearchHits(withLink(raw), raw))
+        .filter((session) => !mineOnly || session.mine);
       const cutoff = input.sinceMs === undefined ? null : now().getTime() - input.sinceMs;
       const recent = cutoff === null
         ? found
@@ -1684,20 +1713,33 @@ export function sinceWindowMs(value: string): number | null {
 
 /**
  * A session shared to several projects comes back once per project with a different ID; the copies have the same
- * member, title and last activity. One hit names all its projects, so copies do not crowd out other results.
+ * member, title and last activity. One hit names all its projects, so copies do not crowd out other results. The
+ * turn hits are merged the same way: a copy that matched another turn adds it instead of repeating the session.
  */
-function mergeShared(sessions: readonly CollabProjectSession[]): SessionSearchHit[] {
+function mergeShared(sessions: readonly SessionSearchHit[]): SessionSearchHit[] {
   const merged = new Map<string, SessionSearchHit>();
   for (const session of sessions) {
     const key = [session.memberName, session.mine, session.title, session.lastActiveAt ?? ""].join("\u0000");
     const existing = merged.get(key);
     if (!existing) {
-      merged.set(key, { ...session, projectNames: session.projectName ? [session.projectName] : [] });
-    } else if (session.projectName && !existing.projectNames.includes(session.projectName)) {
+      merged.set(key, { ...session, projectNames: session.projectName ? [session.projectName] : [], hits: [...session.hits] });
+      continue;
+    }
+    if (session.projectName && !existing.projectNames.includes(session.projectName)) {
       existing.projectNames.push(session.projectName);
     }
+    existing.hits = mergeTurnHits(existing.hits, session.hits);
   }
   return [...merged.values()];
+}
+
+/** The same turn can be quoted twice through two project copies; keep the first quote of each turn, in turn order. */
+function mergeTurnHits(left: readonly SessionTurnHit[], right: readonly SessionTurnHit[]): SessionTurnHit[] {
+  const byTurn = new Map<number, SessionTurnHit>();
+  for (const hit of [...left, ...right]) {
+    if (!byTurn.has(hit.turnNo)) byTurn.set(hit.turnNo, hit);
+  }
+  return [...byTurn.values()].sort((first, second) => first.turnNo - second.turnNo).slice(0, MAX_SEARCH_HITS);
 }
 
 /**

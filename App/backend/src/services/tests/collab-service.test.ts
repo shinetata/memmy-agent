@@ -199,15 +199,15 @@ describe("collab service", () => {
     expect((await svc.readSession(cloudSession.id)).text).toContain("以下为最近 5 轮全文");
   });
 
-  it("lists a session shared to several projects once, keeps sinceMs, and trims to the limit", async () => {
+  it("lists a session shared to several projects once, merging its turn hits, keeps sinceMs, and trims to the limit", async () => {
     const shared = { ...cloudSession, title: "Memmy项目协作记忆方案", lastActiveAt: "2026-10-22T03:11:17.861Z" };
     const { fetcher, calls } = fakeFetch({
       "GET /api/collab/sessions/search": () => ({
         code: 0,
         data: {
           sessions: [
-            { ...shared, id: "a", projectName: "Markdown事项验证" },
-            { ...shared, id: "b", projectName: "测试" },
+            { ...shared, id: "a", projectName: "Markdown事项验证", hits: [{ turnNo: 12, snippet: "…重复分享时返回 409…" }] },
+            { ...shared, id: "b", projectName: "测试", hits: [{ turnNo: 7, snippet: "…项目记忆的存法…" }, { turnNo: 12, snippet: "…重复版本的提示…" }] },
             { ...cloudSession, id: "c", projectName: "测试", lastActiveAt: "2026-10-21T00:00:00.000Z" },
             { ...cloudSession, id: "d", title: "九月的旧会话", lastActiveAt: "2026-09-01T00:00:00.000Z" }
           ]
@@ -216,13 +216,16 @@ describe("collab service", () => {
     });
     const svc = service(fetcher);
 
-    const { sessions } = await svc.searchSessions({ query: "项目 记忆", member: "用户C", sinceMs: 30 * 86_400_000 });
+    const { sessions } = await svc.searchSessions({ query: "项目 记忆", member: "用户C", sinceMs: 30 * 86_400_000, since: "30d" });
     expect(sessions.map((session) => [session.id, session.projectNames])).toEqual([
       ["a", ["Markdown事项验证", "测试"]],
       ["c", ["测试"]]
     ]);
-    // The cloud is asked for its full page: merging and the window are applied after it answers.
-    expect(Object.fromEntries(new URL(calls[0]!.url).searchParams)).toMatchObject({ member: "用户C", limit: "20" });
+    // 副本各自匹配了不同的轮次：合并后同一轮只出现一次，并按轮次排序。
+    expect(sessions[0]!.hits.map((hit) => hit.turnNo)).toEqual([7, 12]);
+    expect(sessions[1]!.hits).toEqual([]);
+    // The cloud is asked for its full page and the window, so paging happens after the window rather than before.
+    expect(Object.fromEntries(new URL(calls[0]!.url).searchParams)).toMatchObject({ member: "用户C", limit: "20", since: "30d" });
     expect((await svc.searchSessions({ query: "项目", limit: 1 })).sessions).toHaveLength(1);
   });
 

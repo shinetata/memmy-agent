@@ -270,7 +270,7 @@ export function registerCollabRoutes(app: FastifyInstance, options: RegisterColl
       ...(input.member === undefined ? {} : { member: input.member }),
       ...(input.project === undefined ? {} : { project: input.project }),
       ...(input.limit === undefined ? {} : { limit: input.limit }),
-      ...(input.since === undefined ? {} : { sinceMs: sinceWindowMs(input.since) ?? undefined })
+      ...(input.since === undefined ? {} : { since: input.since, sinceMs: sinceWindowMs(input.since) ?? undefined })
     }));
   }));
 
