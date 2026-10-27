@@ -930,7 +930,233 @@ describe("collab service", () => {
     await expect(service(offline).listProjects()).rejects.toMatchObject({ message: "暂时无法连接 Memmy 云端，请稍后重试。" });
     await expect(service(fetcher, { localSessions: null }).listLocalSessions({})).rejects.toMatchObject({ message: "无法读取本机任务，请重启 Memmy 后重试。" });
   });
+
+  it("adds the current task alone, and keeps tasks already linked", async () => {
+    const local = [
+      localSession("claude_code", "a1", "/repo", "2026-10-22T05:00:00.000Z"),
+      localSession("codex", "c1", "/other", "2026-10-22T04:00:00.000Z")
+    ];
+    const { fetcher, calls } = addFetch(local);
+    const svc = service(fetcher);
+    await svc.saveLinks("p-1", { groups: [], sessions: [{ sourceId: "codex", conversationId: "c1" }] });
+    await waitForUploads(svc, "p-1");
+    calls.length = 0;
+
+    const added = await svc.addCurrentSession({ project: "Memmy 开发", cwd: "/repo" });
+
+    expect(added.text).toBe([
+      "已把当前任务「会话 a1」加入协作项目「Memmy 开发」。",
+      "关联的是这一整条任务，包含目前已有的全部轮次，没有关联整个工作区。正在同步，之后的新内容也会更新。"
+    ].join("\n"));
+    await waitForUploads(svc, "p-1");
+    expect(uploadedIds(calls)).toEqual(["a1"]);
+    expect(await svc.getLinks("p-1")).toEqual({
+      groups: [],
+      sessions: [
+        { sourceId: "codex", conversationId: "c1" },
+        { sourceId: "claude_code", conversationId: "a1" }
+      ]
+    });
+
+    calls.length = 0;
+    const again = await svc.addCurrentSession({ project: "Memmy 开发", cwd: "/repo" });
+    expect(again.text).toBe("当前任务「会话 a1」已经在协作项目「Memmy 开发」中。");
+    expect(uploadedIds(calls)).toEqual([]);
+  });
+
+  it("does not add until the project name is exact", async () => {
+    const local = [localSession("claude_code", "a1", "/repo", "2026-10-22T05:00:00.000Z")];
+    const { fetcher, calls } = addFetch(local);
+    const svc = service(fetcher);
+
+    const unnamed = await svc.addCurrentSession({ cwd: "/repo" });
+    expect(unnamed.text).toBe([
+      "还没有指定协作项目，当前任务尚未加入。",
+      "",
+      "当前任务：claude_code · 「会话 a1」 · 2026-10-22",
+      "",
+      "你加入了 2 个协作项目：",
+      "Memmy 开发 · 5 位成员 · 32 个任务",
+      "设计评审 · 3 位成员 · 0 个任务",
+      "",
+      "请用户选择项目，确认后运行：",
+      "memmy-session add --project \"<完整名称>\""
+    ].join("\n"));
+
+    const partial = await svc.addCurrentSession({ project: "开发", cwd: "/repo" });
+    expect(partial.text).toBe([
+      "没有名为「开发」的协作项目。",
+      "是不是「Memmy 开发」？向用户确认后运行：",
+      "memmy-session add --project \"Memmy 开发\""
+    ].join("\n"));
+    expect(uploadedIds(calls)).toEqual([]);
+    expect(await svc.getLinks("p-1")).toEqual({ groups: [], sessions: [] });
+  });
+
+  it("uses a sentence from the task to choose among several in the same directory", async () => {
+    const local = [
+      localSession("claude_code", "a1", "/repo", "2026-10-22T05:00:00.000Z"),
+      localSession("claude_code", "a2", "/repo", "2026-10-21T05:00:00.000Z")
+    ];
+    const { fetcher, calls } = addFetch(local, { a1: "给分享接口加上限流", a2: "别的问题" });
+    const svc = service(fetcher);
+
+    const unclear = await svc.addCurrentSession({ project: "Memmy 开发", cwd: "/repo" });
+    expect(unclear.text).toContain("当前目录下有多条任务，还没有加入。");
+    expect(unclear.text).toContain("会话 a1");
+    expect(unclear.text).toContain("会话 a2");
+    expect(uploadedIds(calls)).toEqual([]);
+
+    const added = await svc.addCurrentSession({
+      project: "Memmy 开发",
+      cwd: "/repo/app",
+      hint: "给分享接口加上限流"
+    });
+    expect(added.text).toContain("已把当前任务「会话 a1」加入协作项目「Memmy 开发」。");
+    await waitForUploads(svc, "p-1");
+    expect(uploadedIds(calls)).toEqual(["a1"]);
+    expect(await svc.getLinks("p-1")).toEqual({
+      groups: [],
+      sessions: [{ sourceId: "claude_code", conversationId: "a1" }]
+    });
+  });
+
+  it("refuses the only task in the directory when the sentence is not in it", async () => {
+    const { fetcher, calls } = addFetch(
+      [localSession("claude_code", "a1", "/repo", "2026-10-22T05:00:00.000Z")],
+      { a1: "别的问题" }
+    );
+    const svc = service(fetcher);
+
+    const missed = await svc.addCurrentSession({ project: "Memmy 开发", cwd: "/repo", hint: "给分享接口加上限流" });
+
+    expect(missed.text).toBe([
+      "当前目录只有一条任务：claude_code · 「会话 a1」 · 2026-10-22",
+      "但这句原话不在其中，所以没有加入。",
+      "若用户确认就是这一条，运行：",
+      "memmy-session add --project \"Memmy 开发\""
+    ].join("\n"));
+    expect(uploadedIds(calls)).toEqual([]);
+  });
+
+  it("says the task is already in when the whole directory is linked, and adds one that was excluded", async () => {
+    const local = [localSession("claude_code", "a1", "/repo", "2026-10-22T05:00:00.000Z")];
+    const { fetcher, calls } = addFetch(local);
+    const svc = service(fetcher);
+    const group = { sourceId: "claude_code", groupId: "/repo", excluded: [] as string[] };
+    await svc.saveLinks("p-1", { groups: [group], sessions: [] });
+    await waitForUploads(svc, "p-1");
+    calls.length = 0;
+
+    const covered = await svc.addCurrentSession({ project: "Memmy 开发", cwd: "/repo" });
+    expect(covered.text).toBe([
+      "当前任务「会话 a1」已经在协作项目「Memmy 开发」中。",
+      "这个工作区已经整组关联，新的任务也会同步。这次没有再单独添加。"
+    ].join("\n"));
+    expect(await svc.getLinks("p-1")).toEqual({ groups: [group], sessions: [] });
+
+    await svc.saveLinks("p-1", { groups: [{ ...group, excluded: ["a1"] }], sessions: [] });
+    await waitForUploads(svc, "p-1");
+    calls.length = 0;
+    const restored = await svc.addCurrentSession({ project: "Memmy 开发", cwd: "/repo" });
+    expect(restored.text).toContain("已把当前任务「会话 a1」加入");
+    await waitForUploads(svc, "p-1");
+    expect(await svc.getLinks("p-1")).toEqual({
+      groups: [{ sourceId: "claude_code", groupId: "/repo", excluded: ["a1"] }],
+      sessions: [{ sourceId: "claude_code", conversationId: "a1" }]
+    });
+  });
+
+  it("stops when the person is in no project, or the directory has no task", async () => {
+    const empty = fakeFetch({
+      "GET /api/collab/projects": () => ({ code: 0, data: { projects: [] } })
+    });
+    expect((await service(empty.fetcher).addCurrentSession({ cwd: "/repo", project: "Memmy 开发" })).text)
+      .toMatch(/^你还没有加入任何 Memmy 协作项目，无法把当前任务加进去/);
+
+    const elsewhere = addFetch([localSession("claude_code", "a1", "/other", "2026-10-22T05:00:00.000Z")]);
+    expect((await service(elsewhere.fetcher).addCurrentSession({ project: "Memmy 开发", cwd: "/repo" })).text)
+      .toMatch(/^找不到当前这条任务/);
+    expect((await service(elsewhere.fetcher).addCurrentSession({ project: "Memmy 开发" })).text)
+      .toMatch(/^无法确定当前目录/);
+  });
+
+  it("adds the named current conversation, not whichever task in the directory is newest", async () => {
+    const local = [
+      localSession("cursor", "newest", "/repo", "2026-10-22T05:00:00.000Z"),
+      localSession("cursor", "current", "/repo", "2026-10-22T01:00:00.000Z")
+    ];
+    const { fetcher, calls } = addFetch(local);
+    const svc = service(fetcher);
+
+    const added = await svc.addCurrentSession({
+      project: "Memmy 开发",
+      cwd: "/repo",
+      sourceId: "cursor",
+      conversationId: "current"
+    });
+
+    expect(added.text).toContain("已把当前任务「会话 current」加入协作项目「Memmy 开发」。");
+    expect(added.text).toContain("这一整条任务，包含目前已有的全部轮次");
+    await waitForUploads(svc, "p-1");
+    expect(uploadedIds(calls)).toEqual(["current"]);
+
+    const missing = await service(addFetch(local).fetcher).addCurrentSession({
+      project: "Memmy 开发",
+      cwd: "/repo",
+      sourceId: "cursor",
+      conversationId: "not-this-chat"
+    });
+    expect(missing.text).toMatch(/还没有读到正在进行的这个对话/);
+    expect(missing.text).toContain("不要改加别的任务");
+  });
 });
+
+/** Projects the person is in, plus the local tasks `add` chooses from. */
+function addFetch(local: LocalAgentSession[], questions: Record<string, string> = {}) {
+  return fakeFetch({
+    "GET /api/collab/projects": () => ({
+      code: 0,
+      data: {
+        projects: [
+          { id: "p-1", name: "Memmy 开发", role: "owner", memberCount: 5, sessionCount: 32, createdAt: null },
+          { id: "p-2", name: "设计评审", role: "member", memberCount: 3, sessionCount: 0, createdAt: null }
+        ]
+      }
+    }),
+    "POST /api/v1/agent-sessions/available": () => ({ sessions: local, refreshing: false }),
+    "POST /api/v1/agent-sessions/read-many": (call) => {
+      const ids = (call.body as { conversationIds: string[] }).conversationIds;
+      return {
+        sessions: ids.map((id) => ({
+          conversationId: id,
+          title: `会话 ${id}`,
+          updatedAt: "2026-10-22T01:00:00.000Z",
+          turns: [{ question: questions[id] ?? "", reply: "答", steps: [], startedAt: "2026-10-22T01:00:00.000Z" }]
+        })),
+        missing: []
+      };
+    },
+    "POST /api/v1/agent-sessions/read": (call) => {
+      const id = (call.body as { conversationId: string }).conversationId;
+      if (!local.some((session) => session.conversationId === id)) {
+        return new Response(JSON.stringify({ error: { message: "not found" } }), { status: 404 });
+      }
+      return {
+        session: {
+          title: `会话 ${id}`,
+          updatedAt: "2026-10-22T01:00:00.000Z",
+          turns: [{ question: questions[id] ?? "问", reply: "答", steps: [], startedAt: "" }]
+        }
+      };
+    },
+    "PUT /api/collab/projects/p-1/sessions": (call) => {
+      const upload = (call.body as { sessions: Array<{ sourceSessionId: string }> }).sessions[0]!;
+      return { code: 0, data: { sessions: [{ id: `id-${upload.sourceSessionId}` }] } };
+    },
+    "DELETE /api/collab/projects/p-1/sessions/id-a1": () => ({ code: 0, data: null })
+  });
+}
 
 function localSession(sourceId: string, conversationId: string, groupId: string | null, updatedAt: string): LocalAgentSession {
   return {

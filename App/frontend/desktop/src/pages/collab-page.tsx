@@ -1,5 +1,5 @@
 import { ChevronDown, ChevronRight, Cloud, Folder, Layers, Link2, ListChecks, MessageSquarePlus, MoreHorizontal, PanelRight, PanelRightClose, Pencil, Quote, RefreshCw, Search, Settings, Trash2, UserPlus, Users, X } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import {
   createHttpCollabClient,
@@ -62,6 +62,11 @@ const TOAST_MS = 1_800;
 const SESSION_PAGE_SIZE = 10;
 /** 看板顶部的一次性提示停留时长。 */
 const BOARD_NOTICE_MS = 6_000;
+/**
+ * 看板窄于这个宽度时，项目配置不再占一列。
+ * 与 collab-page.module.css 里 `@container collab-board (max-width: 859px)` 一致。
+ */
+const NARROW_BOARD_PX = 860;
 
 /** How often the board refreshes while an association uploads. */
 const PROGRESS_POLL_MS = 1_200;
@@ -217,6 +222,9 @@ export function CollabPage() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   /** 看板右侧的项目配置：指令等项目的配置项在这里查看与编辑，与侧栏无关。 */
   const [configOpen, setConfigOpen] = useState(true);
+  /** 用户手动收起或展开后，不再随宽度自动开关。换项目时清掉。 */
+  const configTouchedRef = useRef(false);
+  const pageRef = useRef<HTMLDivElement>(null);
   /** 项目指令：本机项目与协作项目共用同一份，协作项目以云端为准。 */
   const [instructions, setInstructions] = useState<ProjectInstructions>(EMPTY_PROJECT_INSTRUCTIONS);
   const [instructionsOpen, setInstructionsOpen] = useState(false);
@@ -268,6 +276,30 @@ export function CollabPage() {
   const shared = sharedProjectFor(snapshot.projects, project?.id);
   const sharedId = shared?.id ?? null;
   const projectId = project?.id ?? null;
+
+  // 宽看板默认展开配置；窄到放不下时先收起。用户点过收起或展开之后，以他的选择为准。
+  useLayoutEffect(() => {
+    configTouchedRef.current = false;
+    const page = pageRef.current;
+    if (!page) return;
+    const apply = (width: number) => {
+      if (width <= 0 || configTouchedRef.current) return;
+      const open = width >= NARROW_BOARD_PX;
+      setConfigOpen((current) => (current === open ? current : open));
+    };
+    apply(page.getBoundingClientRect().width);
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver((entries) => {
+      apply(entries[0]?.contentRect.width ?? 0);
+    });
+    observer.observe(page);
+    return () => observer.disconnect();
+  }, [projectId]);
+
+  function chooseConfig(open: boolean) {
+    configTouchedRef.current = true;
+    setConfigOpen(open);
+  }
 
   // A project that just started sharing asks which of its own sessions go to the cloud.
   useEffect(() => {
@@ -566,7 +598,7 @@ export function CollabPage() {
 
   return (
     <AppFrame title={project?.name ?? t("nav.collab")}>
-      <div className={styles.page}>
+      <div className={styles.page} ref={pageRef}>
         {!project ? (
           snapshot.projects === null ? (
             <p className={styles.loading}>{t("collab.loading")}</p>
@@ -620,7 +652,7 @@ export function CollabPage() {
                       variant="ghost"
                       aria-label={t("collab.config.expand")}
                       title={t("collab.config.expand")}
-                      onClick={() => setConfigOpen(true)}
+                      onClick={() => chooseConfig(true)}
                     >
                       <PanelRight size={15} aria-hidden="true" />
                     </Button>
@@ -675,13 +707,14 @@ export function CollabPage() {
                       <Button
                         size="sm"
                         variant="ghost"
+                        className={styles.iconAction}
                         aria-label={t("collab.sessions.refresh")}
                         title={t("collab.sessions.refresh")}
                         disabled={refreshing}
                         onClick={() => void refreshBoard()}
                       >
                         <RefreshCw size={14} aria-hidden="true" />
-                        {t("collab.sessions.refresh")}
+                        <span className={styles.actionLabel}>{t("collab.sessions.refresh")}</span>
                       </Button>
                       {selecting ? (
                         <>
@@ -710,9 +743,16 @@ export function CollabPage() {
                         <>
                           {/* 多选只对本人任务生效：没有本人的任务时不显示入口 */}
                           {(sessions ?? []).some((session) => session.mine) ? (
-                            <Button size="sm" variant="ghost" onClick={() => setSelecting(true)}>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className={styles.iconAction}
+                              aria-label={t("collab.sessions.select")}
+                              title={t("collab.sessions.select")}
+                              onClick={() => setSelecting(true)}
+                            >
                               <ListChecks size={14} aria-hidden="true" />
-                              {t("collab.sessions.select")}
+                              <span className={styles.actionLabel}>{t("collab.sessions.select")}</span>
                             </Button>
                           ) : null}
                           <Button size="sm" onClick={() => setPickOpen(true)}>
@@ -913,7 +953,16 @@ export function CollabPage() {
                 instructions={instructions}
                 canEdit={canEditInstructions}
                 onEdit={() => setInstructionsOpen(true)}
-                onCollapse={() => setConfigOpen(false)}
+                onCollapse={() => chooseConfig(false)}
+              />
+            ) : null}
+            {configOpen ? (
+              <button
+                type="button"
+                className={styles.configScrim}
+                aria-label={t("collab.config.collapse")}
+                tabIndex={-1}
+                onClick={() => chooseConfig(false)}
               />
             ) : null}
           </>

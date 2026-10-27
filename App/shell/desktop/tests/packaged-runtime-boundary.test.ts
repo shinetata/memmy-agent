@@ -1106,6 +1106,7 @@ describe("desktop packaged runtime boundaries", () => {
     expect(mainSource).toContain('ipcMain.removeHandler("memmy:install-cli-tools")');
     expect(mainSource).toContain("async function installCliTools");
     expect(mainSource).toContain("installPackagedWindowsCliTools");
+    expect(mainSource).toContain("installPackagedWindowsCliOnBoot");
     expect(mainSource).toContain("resolveCliInstallStrategy(");
     expect(mainSource).toContain('Boolean((process as NodeJS.Process & { windowsStore?: boolean }).windowsStore)');
     expect(mainSource).toContain(') === "packaged-windows"');
@@ -1140,6 +1141,8 @@ describe("desktop packaged runtime boundaries", () => {
 
     expect(agentPackage.bin).toEqual({ memmy: "./dist/main.js" });
     expect(agentPackageLock.packages?.[""]?.bin).toEqual({ memmy: "dist/main.js" });
+    expect(mainSource).toContain("await installPackagedMacCliLaunchers()");
+    expect(mainSource).toContain("renderMemmyCliLauncher");
     expect(mainSource).toContain('["memmy", join(cliDirectory, "memmy")]');
     expect(mainSource).toContain('["memmy-session", join(cliDirectory, "memmy-session")]');
     expect(mainSource).toContain("bundledCliInstallDecision");

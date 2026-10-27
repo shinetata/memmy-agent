@@ -1824,7 +1824,7 @@ export function AppFrame(props: AppFrameProps) {
         )}
         <div
           data-tour-anchor={PRODUCT_TOUR_CHAT_CONTENT_ANCHOR}
-          className={`min-h-0 h-full flex-1 overflow-hidden${
+          className={`min-h-0 min-w-0 h-full flex-1 overflow-hidden${
             sidebarHidden && !props.topBarBorder ? " app-frame-content-body--sidebar-hidden" : ""
           }`}
           style={topBarInset ? { paddingTop: "calc(var(--codex-toolbar-height) + var(--app-frame-topbar-offset, 0px))" } : undefined}

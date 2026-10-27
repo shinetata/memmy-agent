@@ -57,6 +57,54 @@ describe("memmy-session", () => {
     expect(await run(["search", "nothing"], { fetch: fetcher, runtimeConfigPath })).toMatch(/^没有匹配的任务。/u);
   });
 
+  it("lists the projects the person is in, and says when there is nothing to search", async () => {
+    let projects: unknown[] = [];
+    let lastUrl = "";
+    const fetcher = (async (input: string | URL) => {
+      lastUrl = String(input);
+      return new Response(JSON.stringify({ projects }), { status: 200 });
+    }) as typeof fetch;
+    const runtimeConfigPath = runtimeFile({ baseUrl: "http://127.0.0.1:62315", localToken: "t" });
+
+    projects = [
+      { id: "p1", name: "Memmy 开发", memberCount: 5, sessionCount: 32 },
+      { id: "p2", name: "设计评审", memberCount: 3, sessionCount: 0 }
+    ];
+    expect(await run(["projects"], { fetch: fetcher, runtimeConfigPath }))
+      .toBe("已加入 2 个协作项目：\nMemmy 开发 · 5 位成员 · 32 个任务\n设计评审 · 3 位成员 · 0 个任务");
+    expect(new URL(lastUrl).pathname).toBe("/api/collab/projects");
+
+    projects = [{ id: "p2", name: "设计评审", memberCount: 3, sessionCount: 0 }];
+    expect(await run(["projects"], { fetch: fetcher, runtimeConfigPath })).toMatch(/还没有共享的任务，换关键词也找不到/u);
+
+    projects = [];
+    expect(await run(["projects"], { fetch: fetcher, runtimeConfigPath })).toMatch(/^你还没有加入任何 Memmy 协作项目/u);
+  });
+
+  it("tells an empty search apart: no project, no shared task, or other keywords to try", async () => {
+    let projects: unknown = [];
+    const fetcher = (async (input: string | URL) => {
+      const path = new URL(String(input)).pathname;
+      if (path === "/api/collab/projects") {
+        return projects === "down"
+          ? new Response(JSON.stringify({ error: { message: "暂时无法连接 Memmy 云端，请稍后重试。" } }), { status: 503 })
+          : new Response(JSON.stringify({ projects }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ sessions: [] }), { status: 200 });
+    }) as typeof fetch;
+    const runtimeConfigPath = runtimeFile({ baseUrl: "http://127.0.0.1:62315", localToken: "t" });
+    const search = () => run(["search", "分享 弹窗"], { fetch: fetcher, runtimeConfigPath });
+
+    expect(await search()).toMatch(/^你还没有加入任何 Memmy 协作项目/u);
+    projects = [{ id: "p1", name: "Memmy 开发", memberCount: 2, sessionCount: 0 }];
+    expect(await search()).toMatch(/^你加入的协作项目中还没有共享的任务/u);
+    projects = [{ id: "p1", name: "Memmy 开发", memberCount: 2, sessionCount: 4 }];
+    expect(await search()).toMatch(/^没有匹配的任务。/u);
+    // Failing to look at the projects must not turn an ordinary miss into "you are in no project".
+    projects = "down";
+    expect(await search()).toMatch(/^没有匹配的任务。/u);
+  });
+
   it("names every project a merged result is shared to and passes --since through", async () => {
     let lastUrl = "";
     const sessions = [{
@@ -122,5 +170,32 @@ describe("memmy-session", () => {
     await expect(run(["search", "连接器"], { fetch: failing("EPERM"), runtimeConfigPath })).rejects.toThrow(/沙箱外权限重新运行/u);
     await expect(run(["search", "连接器"], { fetch: failing("ECONNREFUSED"), runtimeConfigPath }))
       .rejects.toThrow("无法连接 Memmy，请打开 Memmy 后重试。");
+  });
+
+  it("sends the current directory and prints how to add the task", async () => {
+    let body: unknown;
+    const fetcher = (async (_input: string | URL, init?: RequestInit) => {
+      body = JSON.parse(String(init?.body));
+      return new Response(JSON.stringify({ text: "已把当前任务「分享接口限流」加入协作项目「Memmy 开发」。\n只加入这一条，没有关联整个工作区。" }), { status: 200 });
+    }) as typeof fetch;
+    const runtimeConfigPath = runtimeFile({ baseUrl: "http://127.0.0.1:62315", localToken: "t" });
+
+    const output = await run(
+      ["add", "--project", "Memmy 开发", "--hint", "给分享接口加上限流"],
+      { fetch: fetcher, runtimeConfigPath, cwd: "/repo", env: {} }
+    );
+
+    expect(body).toEqual({ cwd: "/repo", project: "Memmy 开发", hint: "给分享接口加上限流" });
+    expect(output).toContain("只加入这一条，没有关联整个工作区。");
+
+    await run(["add", "--project", "Memmy 开发"], {
+      fetch: fetcher,
+      runtimeConfigPath,
+      cwd: "/repo",
+      env: { CURSOR_CONVERSATION_ID: "composer-current" }
+    });
+    expect(body).toEqual({ cwd: "/repo", project: "Memmy 开发", sourceId: "cursor", conversationId: "composer-current" });
+    await expect(run(["add", "Memmy 开发"], { runtimeConfigPath })).rejects.toThrow(/--project/);
+    expect(await run(["help"], { runtimeConfigPath })).toContain("memmy-session add");
   });
 });

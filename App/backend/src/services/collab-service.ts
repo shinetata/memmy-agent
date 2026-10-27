@@ -10,6 +10,19 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { ApiErrorCode } from "./error-envelope.js";
 import { LocalSessionReadError, type LocalSessionReader } from "../adapters/outbound/agent-source/session-reference/local-session-reader.js";
+import {
+  formatAdded,
+  formatAlready,
+  formatCurrentSessionMissing,
+  formatNeedProject,
+  formatNoDirectory,
+  formatNoProjects,
+  formatProjectProblem,
+  formatSessionProblem,
+  matchProjectName,
+  pickAddCandidates,
+  type SessionPick
+} from "./collab-add-session.js";
 import { ensureDirectory, uniqueProjectDirectory } from "./project-directory.js";
 import { MAX_PROJECT_INSTRUCTIONS_CHARS } from "@memmy/local-api-contracts";
 import type { ProjectInstructionsService } from "./project-instructions-service.js";
@@ -70,6 +83,10 @@ const OUTLINE_QUESTION_CHARS = 80;
  */
 const CLOUD_SEARCH_LIMIT = 20;
 const DEFAULT_SEARCH_RESULTS = 5;
+/** How many local tasks `add` looks at in the working directory. The current one is among the newest. */
+const ADD_CANDIDATE_LIMIT = 50;
+/** Tasks reread to see whether a sentence from the conversation is in them. */
+const ADD_HINT_READS = 8;
 const SINCE_UNITS_MS: Record<string, number> = { h: 3_600_000, d: 86_400_000, w: 604_800_000 };
 
 export class CollabError extends Error {
@@ -425,6 +442,18 @@ export interface CollabService {
   searchSessions(input: SessionSearchInput): Promise<{ sessions: SessionSearchHit[] }>;
   /** Reads a referenced session from the cloud; a `view` picks the turns to print. Nothing is saved locally. */
   readSession(reference: string, view?: SessionView): Promise<CollabSessionReference>;
+  /**
+   * Adds the agent's current local task to one project, as that one session and not the whole workspace.
+   * A project name that is not exact, or a task that cannot be told apart, only produces the next command.
+   */
+  addCurrentSession(input: {
+    project?: string;
+    cwd?: string;
+    hint?: string;
+    /** The conversation this command is running inside, when the agent exposes it. */
+    sourceId?: string;
+    conversationId?: string;
+  }): Promise<{ text: string }>;
   /** Who is in the project and how people join it; owners and admins also get the requests waiting for them. */
   listMembers(projectId: string): Promise<CollabMembers>;
   /** The person's own invite link to the project; any member may invite. */
@@ -1061,6 +1090,90 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
   }
   void removeLegacySessionCaches();
 
+  /**
+   * Questions of these tasks, one read per agent. The title and the latest question are already known; the read
+   * adds the earlier ones. An agent that is gone contributes only what the list already had.
+   */
+  async function questionText(sessions: readonly LocalAgentSession[]): Promise<Map<string, string>> {
+    const textOf = new Map(sessions.map((session) => [sessionKey(session), squash(`${session.title}\n${session.lastQuestion}`)]));
+    const bySource = new Map<string, LocalAgentSession[]>();
+    for (const session of sessions) {
+      const group = bySource.get(session.sourceId) ?? [];
+      group.push(session);
+      bySource.set(session.sourceId, group);
+    }
+    await Promise.all([...bySource].map(async ([sourceId, group]) => {
+      try {
+        const data = await readLocal((reader) => reader.readMany({
+          sourceId,
+          conversationIds: group.map((session) => session.conversationId)
+        }));
+        for (const full of data.sessions) {
+          textOf.set(
+            sessionKey({ sourceId, conversationId: full.conversationId }),
+            squash([full.title, ...full.turns.map((turn) => turn.question)].join("\n"))
+          );
+        }
+      } catch (error) {
+        if (error instanceof CollabError && (error.code === "not_found" || error.code === "invalid_argument")) return;
+        throw error;
+      }
+    }));
+    return textOf;
+  }
+
+  /** The named conversation, from the fresh list or a direct read. Null when Memmy has not seen it. */
+  async function sessionByIdentity(sourceId: string, conversationId: string): Promise<LocalAgentSession | null> {
+    const listed = await readLocal((reader) => reader.available({ sourceIds: [sourceId], limit: ADD_CANDIDATE_LIMIT, fresh: true }));
+    const found = listed.sessions.map(toLocalSession).find((session) => session.sourceId === sourceId && session.conversationId === conversationId);
+    if (found) return found;
+    try {
+      const full = await readLocal((reader) => reader.read({ sourceId, conversationId }));
+      return {
+        sourceId: full.sourceId,
+        agentName: full.agentName,
+        conversationId: full.conversationId,
+        title: full.title,
+        lastQuestion: full.lastQuestion,
+        workspacePath: full.workspacePath,
+        group: full.group,
+        updatedAt: full.updatedAt,
+        turnCount: full.turns.length
+      };
+    } catch (error) {
+      if (error instanceof CollabError && error.code === "not_found") return null;
+      throw error;
+    }
+  }
+
+  /**
+   * The task this command is running inside, when the agent did not name it. One task in the directory is that
+   * one, unless a sentence was given and it is not in the task. Several tasks need a sentence that is in exactly
+   * one of them.
+   */
+  async function chooseAddSession(candidates: readonly LocalAgentSession[], hint: string): Promise<SessionPick | { kind: "one"; session: LocalAgentSession }> {
+    if (!candidates.length) return { kind: "none" };
+    const shown = candidates.slice(0, ADD_HINT_READS);
+    if (!hint) {
+      return candidates.length === 1
+        ? { kind: "one", session: candidates[0]! }
+        : { kind: "many", sessions: shown, reason: "need-hint" };
+    }
+    const needle = squash(hint);
+    const listed = (session: LocalAgentSession) => squash(`${session.title}\n${session.lastQuestion}`).includes(needle);
+    const fast = shown.filter(listed);
+    if (fast.length === 1) return { kind: "one", session: fast[0]! };
+    if (fast.length > 1) return { kind: "many", sessions: fast, reason: "ambiguous" };
+    const textOf = await questionText(shown);
+    const matched = shown.filter((session) => (textOf.get(sessionKey(session)) ?? "").includes(needle));
+    if (candidates.length === 1) {
+      return matched.length === 1 ? { kind: "one", session: matched[0]! } : { kind: "unmatched", session: candidates[0]! };
+    }
+    if (matched.length === 1) return { kind: "one", session: matched[0]! };
+    if (!matched.length) return { kind: "many", sessions: shown, reason: "miss" };
+    return { kind: "many", sessions: matched, reason: "ambiguous" };
+  }
+
   return {
     async listProjects() {
       const account = requireAccount();
@@ -1462,6 +1575,52 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
       const turns = list(data.turns).map(toTurn);
       // 协作任务只在云端保留，读取结果直接交给调用方，不在本机写文件。
       return { session, text: renderSessionView(session, turns, now(), view ?? {}) };
+    },
+
+    async addCurrentSession(input) {
+      const { projects } = await this.listProjects();
+      if (!projects.length) return { text: formatNoProjects() };
+      const hint = input.hint?.trim() ?? "";
+      const project = input.project?.trim() ?? "";
+      const sourceId = input.sourceId?.trim() ?? "";
+      const conversationId = input.conversationId?.trim() ?? "";
+      // The running conversation, when the agent names it. That whole task is added; a different one is not.
+      const named = sourceId && conversationId ? await sessionByIdentity(sourceId, conversationId) : undefined;
+      if (sourceId && conversationId && !named) return { text: formatCurrentSessionMissing() };
+      const cwd = input.cwd?.trim() ?? "";
+      let session = named;
+      if (!session) {
+        if (!cwd) return { text: formatNoDirectory() };
+        const listed = await readLocal((reader) => reader.available({ cwd, limit: ADD_CANDIDATE_LIMIT, fresh: true }));
+        const candidates = pickAddCandidates(listed.sessions.map(toLocalSession), cwd);
+        const chosen = await chooseAddSession(candidates, squash(hint) ? hint : "");
+        if (chosen.kind !== "one") {
+          return { text: formatSessionProblem(chosen, { hint, ...(project ? { project } : {}) }) };
+        }
+        session = chosen.session;
+      }
+      if (!project) return { text: formatNeedProject(projects, session, hint) };
+      const matched = matchProjectName(projects, project);
+      if (matched.kind !== "exact") return { text: formatProjectProblem(matched, project, hint) };
+
+      const account = requireAccount();
+      const stored = await readLinks(matched.project.id, account.accountId);
+      const covered = linkedSessionKeys(stored, [{
+        sourceId: session.sourceId,
+        conversationId: session.conversationId,
+        groupId: session.group?.id ?? null
+      }]);
+      if (covered.has(sessionKey(session))) {
+        const groupId = session.group?.id ?? "";
+        const viaGroup = stored.groups.some((group) =>
+          group.sourceId === session.sourceId && group.groupId === groupId && !group.excluded.includes(session.conversationId));
+        return { text: formatAlready(session, matched.project.name, viaGroup) };
+      }
+      const saved = await this.saveLinks(matched.project.id, {
+        groups: stored.groups,
+        sessions: [...stored.sessions, { sourceId: session.sourceId, conversationId: session.conversationId }]
+      });
+      return { text: formatAdded(session, matched.project.name, (saved.started ?? 0) > 0 || saved.uploaded > 0) };
     }
   };
 }

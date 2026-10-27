@@ -289,12 +289,19 @@ async function upsertClaudeCodeHookSettings(filePath: string, hookScriptPath: st
 }
 
 /**
- * Shared project sessions are read through the read-only `memmy-session` commands and saved under ~/.memmy/projects.
- * Allowing them keeps a pasted session link from stopping on an approval prompt at every step.
+ * Shared project sessions are read through `memmy-session`, and the current task can be added to one project.
+ * Allowing the commands keeps a pasted link, or adding the current task, from stopping on an approval prompt.
  */
 const MEMMY_SESSION_PERMISSION_RULES = [
   "Bash(memmy-session read:*)",
   "Bash(memmy-session search:*)",
+  "Bash(memmy-session projects:*)",
+  "Bash(memmy-session add:*)",
+  "Bash(~/.local/bin/memmy-session:*)",
+  "Bash(/Applications/Memmy.app/Contents/Resources/cli/memmy-session:*)",
+  "Bash(~/Applications/Memmy.app/Contents/Resources/cli/memmy-session:*)",
+  "Bash(%LOCALAPPDATA%\\Programs\\Memmy\\resources\\cli\\memmy-session.cmd:*)",
+  "Bash(%ProgramFiles%\\Memmy\\resources\\cli\\memmy-session.cmd:*)",
   "Read(~/.memmy/projects/**)"
 ];
 /** Rules for the commands sessions were read through before `memmy-session`; a reinstall drops them. */

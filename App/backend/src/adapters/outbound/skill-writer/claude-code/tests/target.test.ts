@@ -119,7 +119,7 @@ describe("claude code skill target", () => {
     }
   });
 
-  it("allows the read-only session commands once and removes only its own rules", async () => {
+  it("allows the session commands once and removes only its own rules", async () => {
     const { rootDirectory, memmyConfigPath } = createFixture();
     const target = createClaudeCodeSkillTarget({ rootDirectory, memmyConfigPath });
     // An earlier install allowed the commands sessions were read through before `memmy-session`.
@@ -132,12 +132,29 @@ describe("claude code skill target", () => {
     await target.installPlugin?.("claude_code");
 
     expect(readSettings().permissions).toEqual({
-      allow: ["Bash(npm test:*)", "Bash(memmy-session read:*)", "Bash(memmy-session search:*)", "Read(~/.memmy/projects/**)"],
+      allow: [
+        "Bash(npm test:*)",
+        "Bash(memmy-session read:*)",
+        "Bash(memmy-session search:*)",
+        "Bash(memmy-session projects:*)",
+        "Bash(memmy-session add:*)",
+        "Bash(~/.local/bin/memmy-session:*)",
+        "Bash(/Applications/Memmy.app/Contents/Resources/cli/memmy-session:*)",
+        "Bash(~/Applications/Memmy.app/Contents/Resources/cli/memmy-session:*)",
+        "Bash(%LOCALAPPDATA%\\Programs\\Memmy\\resources\\cli\\memmy-session.cmd:*)",
+        "Bash(%ProgramFiles%\\Memmy\\resources\\cli\\memmy-session.cmd:*)",
+        "Read(~/.memmy/projects/**)"
+      ],
       deny: ["Bash(rm:*)"]
     });
     const sessionSkillFile = readFileSync(join(rootDirectory, "skills", "memmy-session", "SKILL.md"), "utf8");
     expect(sessionSkillFile).toContain("name: memmy-session");
-    expect(sessionSkillFile).not.toContain("outside the sandbox");
+    expect(sessionSkillFile).toContain("## 把当前任务加入项目");
+    expect(sessionSkillFile).toContain("memmy-session add --project");
+    expect(sessionSkillFile).toContain("不要运行不带路径的 `memmy-session`");
+    expect(sessionSkillFile).toContain("%LOCALAPPDATA%\\Programs\\Memmy\\resources\\cli\\memmy-session.cmd");
+    expect(sessionSkillFile).toContain("/Applications/Memmy.app/Contents/Resources/cli/memmy-session");
+    expect(sessionSkillFile).not.toContain("escalated permissions");
 
     await target.uninstallPlugin?.("claude_code");
 

@@ -20,9 +20,14 @@
 .page {
   display: flex;
   /* 看板与会话列表并排：左侧会话列表滚动，右侧项目配置留在原位 */
+  position: relative;
   flex-direction: row;
+  width: 100%;
   height: 100%;
+  min-width: 0;
   min-height: 0;
+  /* 断点跟看板实际宽度走，不跟整个窗口：侧边栏已经占掉一块 */
+  container: collab-board / inline-size;
   color: var(--collab-ink);
   font-family: var(--font-sans);
 }
@@ -42,6 +47,7 @@
 
 .wrap {
   max-width: 920px;
+  min-width: 0;
   margin: 0 auto;
   padding: 18px 40px 40px;
 }
@@ -50,6 +56,7 @@
   display: flex;
   align-items: center;
   gap: 14px;
+  min-width: 0;
   padding-top: 6px;
 }
 
@@ -66,13 +73,18 @@
 
 .boardName {
   margin: 0;
+  min-width: 0;
+  overflow: hidden;
   font-size: 24px;
   font-weight: 800;
   letter-spacing: -0.01em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* The project's sharing state, said once in the header: members, or only this computer. */
 .boardScope {
+  flex-shrink: 0;
   padding: 2px 9px;
   border-radius: 999px;
   background: rgba(47, 125, 105, 0.08);
@@ -84,8 +96,10 @@
 
 .toolbar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
+  min-width: 0;
   margin-top: 18px;
 }
 
@@ -449,9 +463,11 @@
 
 .searchBox {
   display: flex;
+  flex: 0 1 240px;
   align-items: center;
   gap: 8px;
-  min-width: 240px;
+  min-width: 140px;
+  max-width: 420px;
   padding: 6px 10px;
   border: 1px solid var(--collab-line);
   border-radius: 10px;
@@ -468,11 +484,17 @@
   min-width: 0;
   border: 0;
   padding: 0;
+  overflow: hidden;
   background: transparent;
   color: var(--collab-ink);
   font: inherit;
   font-size: 13px;
+  text-overflow: ellipsis;
   outline: none;
+}
+
+.iconAction {
+  gap: 4px;
 }
 
 .searchGo {
@@ -1543,6 +1565,7 @@
 }
 
 .configCard {
+  min-width: 0;
   border: 1px solid var(--collab-line);
   border-radius: 12px;
   background: var(--color-background-paper, #fff);
@@ -1597,7 +1620,9 @@
 /* 指令卡片只露前三行，全文在「项目指令」里看 */
 .configText {
   display: -webkit-box;
+  min-width: 0;
   overflow: hidden;
+  overflow-wrap: anywhere;
   color: var(--collab-ink-2);
   font-size: 12.5px;
   line-height: 1.65;
@@ -1667,9 +1692,50 @@
   white-space: pre-wrap;
 }
 
-@media (max-width: 900px) {
+/* 窄看板仍渲染，但默认不占位；用户再打开时盖在任务列表上，不把列表挤出窗口。 */
+.configScrim {
+  display: none;
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  border: 0;
+  padding: 0;
+  background: rgba(17, 29, 28, 0.18);
+  cursor: default;
+}
+
+/* 与 NARROW_BOARD_PX（860）一致：再窄则配置改为浮层。 */
+@container collab-board (max-width: 859px) {
+  .configScrim {
+    display: block;
+  }
+
   .config {
-    flex-basis: 240px;
-    padding: 16px 12px 20px;
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 6;
+    width: min(300px, 100%);
+    flex-basis: auto;
+    background: var(--color-content-bg, #fff);
+    box-shadow: -12px 0 32px rgba(17, 29, 28, 0.12);
+  }
+}
+
+@container collab-board (max-width: 999px) {
+  .wrap {
+    padding-right: 20px;
+    padding-left: 20px;
+  }
+
+  .searchBox {
+    flex: 1 1 160px;
+    min-width: min(120px, 100%);
+  }
+
+  /* 刷新、多选让出文字，筛选、搜索和关联任务留着。 */
+  .actionLabel {
+    display: none;
   }
 }

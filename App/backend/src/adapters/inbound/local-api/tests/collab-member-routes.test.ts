@@ -70,4 +70,30 @@ describe("collab member routes", () => {
     expect(response.statusCode).toBe(400);
     expect(response.json()).toMatchObject({ error: { code: "invalid_argument", message: "成员 ID 无效" } });
   });
+
+  it("adds the current task with the project, directory and sentence the command sent", async () => {
+    const addCurrentSession = vi.fn(async () => ({ text: "已把当前任务「分享」加入协作项目「Memmy 开发」。" }));
+    app = Fastify();
+    registerCollabRoutes(app, {
+      collab: { addCurrentSession } as unknown as CollabService,
+      authenticateRuntimeToken: async () => undefined
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/collab/sessions/add",
+      payload: { project: " Memmy 开发 ", cwd: "/repo", hint: "给分享接口加上限流" }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(addCurrentSession).toHaveBeenCalledWith({ project: "Memmy 开发", cwd: "/repo", hint: "给分享接口加上限流" });
+    expect(response.json()).toEqual({ text: "已把当前任务「分享」加入协作项目「Memmy 开发」。" });
+
+    const rejected = await app.inject({
+      method: "POST",
+      url: "/api/collab/sessions/add",
+      payload: { cwd: "/repo", group: true }
+    });
+    expect(rejected.statusCode).toBe(400);
+  });
 });

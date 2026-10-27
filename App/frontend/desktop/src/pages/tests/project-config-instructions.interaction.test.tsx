@@ -237,4 +237,41 @@ describe("project board configuration", () => {
     expect(document.body.textContent).toContain("设定项目的背景与规范");
     expect(document.querySelector('button[aria-label="展开项目配置"]')).toBeNull();
   });
+
+  it("collapses project configuration on a narrow board until the user chooses", async () => {
+    const observers: ResizeObserverCallback[] = [];
+    const original = globalThis.ResizeObserver;
+    class FakeResizeObserver {
+      constructor(callback: ResizeObserverCallback) {
+        observers.push(callback);
+      }
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    }
+    globalThis.ResizeObserver = FakeResizeObserver as unknown as typeof ResizeObserver;
+    try {
+      await renderBoard();
+      expect(document.body.textContent).toContain("设定项目的背景与规范");
+      const notify = (width: number) => {
+        const callback = observers.at(-1);
+        expect(callback, "应已观察看板宽度").toBeTruthy();
+        callback!([{ contentRect: { width } } as ResizeObserverEntry], {} as ResizeObserver);
+      };
+
+      await act(async () => notify(700));
+      expect(document.body.textContent).not.toContain("设定项目的背景与规范");
+      expect(document.querySelector('button[aria-label="展开项目配置"]')).toBeTruthy();
+
+      await act(async () => notify(1200));
+      expect(document.body.textContent).toContain("设定项目的背景与规范");
+
+      await act(async () => iconButton("收起项目配置").click());
+      await act(async () => notify(1200));
+      expect(document.querySelector('button[aria-label="展开项目配置"]')).toBeTruthy();
+      expect(document.body.textContent).not.toContain("设定项目的背景与规范");
+    } finally {
+      globalThis.ResizeObserver = original;
+    }
+  });
 });

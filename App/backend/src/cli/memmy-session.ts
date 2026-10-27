@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /**
- * `memmy-session`: lets an agent find and read the sessions of the person's shared Memmy projects. The desktop app
- * holds the account and reads the sessions from the cloud, so every command goes through its local API, found via
- * ~/.memmy/runtime.json. Nothing is cached on this computer and nothing here touches memory.
+ * `memmy-session`: lets an agent check which shared Memmy projects the person is in, find and read their sessions,
+ * and add the current local task to one project. The desktop app holds the account and talks to the cloud, so
+ * every command goes through its local API, found via ~/.memmy/runtime.json. Nothing here touches memory.
  *
  * Only Node built-ins are imported: the desktop build copies this one file next to its launcher.
  */
@@ -18,17 +18,26 @@ const DESKTOP_NOT_RUNNING = "无法连接 Memmy，请打开 Memmy 后重试。";
 // command outside the sandbox does.
 const SANDBOX_BLOCKED = "当前环境不允许连接本机的 Memmy，通常是 Agent 的沙箱（sandbox）关闭了网络访问，Memmy 本身可能正常运行。请用沙箱外权限重新运行这条命令，不需要重新打开 Memmy。";
 const NO_MATCH = "没有匹配的任务。可以换更短的关键词，或去掉 --member、--since 后重试；任务也可能还没有共享到项目。";
+// Both say that no keyword can find anything, so an agent stops instead of retrying the search.
+const NO_PROJECT = "你还没有加入任何 Memmy 协作项目，没有可检索的任务，换关键词也找不到。在 Memmy 中新建或加入协作项目后再试。";
+const NO_SHARED_TASKS = "你加入的协作项目中还没有共享的任务，换关键词也找不到。成员在 Memmy 中开启协作、同步任务后才能找到。";
 const USAGE = [
   "Usage:",
+  "  memmy-session projects",
   "  memmy-session search <keywords> [--member <name>] [--project <project name>] [--since 30d] [--limit <n>]",
   "  memmy-session read <link|id> [--turns <from>-<to> | --around <turn> | --find \"<sentence>\" | --all]",
+  "  memmy-session add [--project <project name>] [--hint \"<sentence>\"]",
   "",
-  "Finds and reads sessions of your shared Memmy projects. Memmy must be running."
+  "Finds and reads sessions of your shared Memmy projects, and adds the current one to a project. Memmy must be running."
 ].join("\n");
 
 export interface MemmySessionDeps {
   fetch?: typeof fetch;
   runtimeConfigPath?: string;
+  /** Working directory of the conversation. Tests pass one; otherwise the command uses its own. */
+  cwd?: string;
+  /** Environment of the running agent. Tests pass one; otherwise the command uses its own. */
+  env?: NodeJS.ProcessEnv;
 }
 
 export interface ParsedArgs {
@@ -66,12 +75,19 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
   return { positionals, options };
 }
 
-/** Runs `read <link-or-id> [--turns|--around|--find|--all]` or `search <keywords> [--member] [--project] [--since] [--limit]`. */
+/**
+ * Runs `projects`, `read`, `search`, or `add` (the current task, into one project).
+ */
 export async function runMemmySession(argv: readonly string[], deps: MemmySessionDeps = {}): Promise<string> {
   const parsed = parseArgs(argv);
   const [action, ...rest] = parsed.positionals;
   if (!action || action === "help" || parsed.options.help) {
     return USAGE;
+  }
+  if (action === "projects") {
+    const projects = await listProjects(deps);
+    if (!projects) throw new Error("无法读取协作项目列表，请稍后重试。");
+    return formatProjects(projects);
   }
   if (action === "read") {
     const reference = rest.join(" ").trim();
@@ -79,6 +95,19 @@ export async function runMemmySession(argv: readonly string[], deps: MemmySessio
       throw new Error("read 需要 Memmy 任务链接或任务 ID");
     }
     const result = await localApi(deps, "POST", "/api/collab/sessions/read", { reference, view: readView(parsed) });
+    return typeof result.text === "string" ? result.text : "";
+  }
+  if (action === "add") {
+    if (rest.length) throw new Error("add 用 --project 指定项目名称");
+    const project = optionString(parsed, "project")?.trim();
+    const hint = optionString(parsed, "hint")?.trim();
+    const running = runningConversation(deps.env ?? process.env);
+    const result = await localApi(deps, "POST", "/api/collab/sessions/add", {
+      cwd: deps.cwd ?? process.cwd(),
+      ...(project ? { project } : {}),
+      ...(hint ? { hint } : {}),
+      ...(running ?? {})
+    });
     return typeof result.text === "string" ? result.text : "";
   }
   if (action === "search") {
@@ -91,11 +120,60 @@ export async function runMemmySession(argv: readonly string[], deps: MemmySessio
     const result = await localApi(deps, "GET", `/api/collab/sessions/search?${params.toString()}`);
     const sessions = Array.isArray(result.sessions) ? result.sessions.filter(isRecord) : [];
     if (!sessions.length) {
-      return NO_MATCH;
+      return noMatchMessage(deps);
     }
     return sessions.map(formatSearchLine).join("\n");
   }
   throw new Error(`未知命令：${action}\n\n${USAGE}`);
+}
+
+/**
+ * The conversation this command is running inside. Memmy uses the same id for that agent's task, so the whole
+ * current task can be added without guessing among others in the directory.
+ */
+export function runningConversation(env: NodeJS.ProcessEnv): { sourceId: string; conversationId: string } | undefined {
+  const cursor = env.CURSOR_CONVERSATION_ID?.trim();
+  if (cursor) return { sourceId: "cursor", conversationId: cursor };
+  const claude = env.CLAUDE_SESSION_ID?.trim() || env.CLAUDE_CODE_SESSION_ID?.trim();
+  if (claude) return { sourceId: "claude_code", conversationId: claude };
+  const codex = env.CODEX_THREAD_ID?.trim();
+  if (codex) return { sourceId: "codex", conversationId: codex };
+  return undefined;
+}
+
+/**
+ * The projects the person is in, as the board lists them; a pending join request is not membership. Null when the
+ * answer does not list projects, so a caller cannot mistake an unknown for none.
+ */
+async function listProjects(deps: MemmySessionDeps): Promise<Record<string, unknown>[] | null> {
+  const result = await localApi(deps, "GET", "/api/collab/projects");
+  return Array.isArray(result.projects) ? result.projects.filter(isRecord) : null;
+}
+
+/** One line per project: the name `--project` takes, its members and its shared tasks. */
+function formatProjects(projects: readonly Record<string, unknown>[]): string {
+  if (!projects.length) return NO_PROJECT;
+  const lines = projects.map((project) => `${text(project.name)} · ${count(project.memberCount)} 位成员 · ${count(project.sessionCount)} 个任务`);
+  return [`已加入 ${projects.length} 个协作项目：`, ...lines, ...(sharedTasks(projects) ? [] : ["", NO_SHARED_TASKS])].join("\n");
+}
+
+/**
+ * Why a search found nothing. Only someone with shared tasks can fix it with other keywords; looking costs a second
+ * request, made only on an empty result, and any failure there falls back to the keyword advice.
+ */
+async function noMatchMessage(deps: MemmySessionDeps): Promise<string> {
+  const projects = await listProjects(deps).catch(() => null);
+  if (!projects) return NO_MATCH;
+  if (!projects.length) return NO_PROJECT;
+  return sharedTasks(projects) ? NO_MATCH : NO_SHARED_TASKS;
+}
+
+function sharedTasks(projects: readonly Record<string, unknown>[]): number {
+  return projects.reduce((sum, project) => sum + count(project.sessionCount), 0);
+}
+
+function count(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 
 /** What `read` prints inline; no flag is the overview. At most one range, since each answers a different need. */

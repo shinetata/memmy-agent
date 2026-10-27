@@ -37,7 +37,7 @@ describe("codex skill target", () => {
     expect(resumeSkillFile).toContain("--source codex");
     // Codex's sandbox blocks the command's connection to Memmy, so its session skill says how to run it outside.
     const sessionSkillFile = readFileSync(join(rootDirectory, "skills", "memmy-session", "SKILL.md"), "utf8");
-    expect(sessionSkillFile).toContain("with escalated permissions, outside the sandbox");
+    expect(sessionSkillFile).toContain("用 escalated permissions（沙箱外权限）重新运行同一条命令");
     await expect(target.isInstalled("codex")).resolves.toBe(true);
   });
 

@@ -71,6 +71,15 @@ const ReadViewSchema = z.object({
   all: z.boolean().optional()
 }).strict().refine((view) => Object.keys(view).length <= 1, "只能指定一种读取范围");
 const ReadSchema = z.object({ reference: z.string().trim().min(1).max(2_000), view: ReadViewSchema.optional() }).strict();
+/** Adds the current local task. The project name is optional so a partial name can be answered with the next command. */
+const AddSessionSchema = z.object({
+  project: z.string().trim().min(1).max(100).optional(),
+  cwd: z.string().trim().min(1).max(4_000).optional(),
+  hint: z.string().trim().min(1).max(500).optional(),
+  /** Set together: the conversation the command is running inside. */
+  sourceId: SourceIdSchema.optional(),
+  conversationId: ConversationIdSchema.optional()
+}).strict();
 const RenameProjectSchema = z.object({
   name: z.string().trim().min(1, "请填写项目名称").max(20, "项目名称不超过 20 个字")
 }).strict();
@@ -268,5 +277,17 @@ export function registerCollabRoutes(app: FastifyInstance, options: RegisterColl
   app.post("/api/collab/sessions/read", guard, withErrorEnvelope(async (request, reply) => {
     const input = ReadSchema.parse(request.body ?? {});
     return reply.send(await options.collab.readSession(input.reference, input.view));
+  }));
+
+  // One local task joins a project. The reply is the text `memmy-session add` prints, including what to run next.
+  app.post("/api/collab/sessions/add", guard, withErrorEnvelope(async (request, reply) => {
+    const input = AddSessionSchema.parse(request.body ?? {});
+    return reply.send(await options.collab.addCurrentSession({
+      ...(input.project === undefined ? {} : { project: input.project }),
+      ...(input.cwd === undefined ? {} : { cwd: input.cwd }),
+      ...(input.hint === undefined ? {} : { hint: input.hint }),
+      ...(input.sourceId === undefined ? {} : { sourceId: input.sourceId }),
+      ...(input.conversationId === undefined ? {} : { conversationId: input.conversationId })
+    }));
   }));
 }
