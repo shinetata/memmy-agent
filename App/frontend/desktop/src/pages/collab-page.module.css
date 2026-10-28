@@ -348,25 +348,6 @@
   color: var(--collab-ink);
 }
 
-/*
- * 任务列表（看板与项目里本机任务共用）：原型里的无边框行，按天分组。
- * 下面这些规则都带 .stream 前缀，只收紧任务列表的外观；关联弹窗与本地任务弹窗里的 .row 保持不变。
- */
-.dayGroup {
-  display: block;
-}
-
-/* 分组标题：今天 / 昨天 / 本周 / 更早 */
-.groupLabel {
-  margin: 0;
-  padding: 18px 0 8px;
-  color: var(--collab-muted);
-  font-size: 12.5px;
-  font-weight: 650;
-  letter-spacing: 0.01em;
-}
-
-/* 分组可点开收起：收起时只剩一行标题加条数，一屏不到底 */
 .groupToggle {
   display: inline-flex;
   align-items: center;
@@ -386,28 +367,16 @@
   color: var(--collab-ink-2);
 }
 
-.groupChevron {
-  flex: none;
-  color: var(--collab-ter);
-  transition: transform 140ms ease;
-}
-
-.groupChevronOpen {
-  transform: rotate(90deg);
-}
-
-.groupCount {
-  color: var(--collab-ter);
-  font-size: 11.5px;
-  font-weight: 550;
-  font-variant-numeric: tabular-nums;
-}
-
+/* 任务列表使用无边框行，保持当前页的连续阅读顺序。 */
 .stream {
   margin: 0;
   border: 0;
   border-radius: 0;
   background: transparent;
+}
+
+.flatStream {
+  margin-top: 18px;
 }
 
 .stream .row {
@@ -425,6 +394,19 @@
 .stream .row:last-child,
 .stream .row:only-child {
   border-radius: 12px;
+}
+
+/* 选择模式用连续的浅色列表，避免相邻行的圆角形成锯齿。 */
+.stream .row.rowSelecting {
+  border-radius: 0;
+}
+
+.stream .row.rowSelected {
+  background: color-mix(in srgb, var(--collab-active) 55%, var(--color-background-paper, #fff));
+}
+
+.stream .rowSelected + .rowSelected {
+  box-shadow: inset 0 1px var(--collab-line-soft);
 }
 
 .stream .rowOpenable:hover {
@@ -626,24 +608,33 @@
   white-space: nowrap;
 }
 
-.configKnowledgeRemove {
-  flex: none;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 18px;
-  height: 18px;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
+.configKnowledgeCount {
+  margin-left: 7px;
   color: var(--collab-ter);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.configKnowledgeAction,
+.configKnowledgeMore {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--collab-accent-deep);
+  font: inherit;
+  font-size: 12px;
   cursor: pointer;
 }
 
-.configKnowledgeRemove:hover {
-  background: var(--collab-hover);
-  color: var(--collab-ink);
+.configKnowledgeMore {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-top: 10px;
 }
+
+.configKnowledgeAction:hover,
+.configKnowledgeMore:hover { text-decoration: underline; }
 
 .searchBox {
   display: flex;

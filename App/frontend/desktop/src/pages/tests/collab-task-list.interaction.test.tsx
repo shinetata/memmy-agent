@@ -1,8 +1,7 @@
 // @vitest-environment happy-dom
 
 /**
- * The board's task list, as the prototype draws it: a segmented member filter, day headings
- * (今天 / 昨天 / 本周 / 更早), and rows whose right side is the member and the moment.
+ * The board displays a continuous, paginated task list with a member filter and row timestamps.
  */
 import { act } from "react";
 import type { ReactNode } from "react";
@@ -138,54 +137,34 @@ describe("collab task list", () => {
     await flush();
   }
 
-  function groupButtons(): HTMLElement[] {
-    return Array.from(document.querySelectorAll<HTMLElement>("h2 button"));
-  }
-
-  /** 「今天 1」这样的标题文字：分组名后面跟着这一组的条数。 */
-  function headings(): string[] {
-    return groupButtons().map((element) => element.textContent?.trim() ?? "");
-  }
-
-  async function toggleGroup(label: string): Promise<void> {
-    const found = groupButtons().find((element) => element.textContent?.trim().startsWith(label));
-    expect(found, `分组「${label}」应已渲染`).toBeTruthy();
-    await act(async () => found!.click());
-    await flush();
-  }
-
-  it("splits the rows into 今天 / 昨天 / 更早 headings, with their counts", async () => {
+  it("displays every task on the page in the returned order, without time sections", async () => {
     await renderBoard();
-    // 本周内没有任务时不出现「本周」，避免空标题。
-    expect(headings()).toEqual(["今天1", "昨天1", "更早1"]);
-  });
-
-  it("opens only the newest group until another one is opened", async () => {
-    await renderBoard();
-    // 默认只展开最近的一组：一屏不铺开十几条。
-    expect(document.querySelectorAll("li")).toHaveLength(1);
-    expect(document.body.textContent).toContain("你 · 09:05");
-    expect(document.body.textContent).not.toContain("你 · 昨天");
-
-    await toggleGroup("昨天");
-    expect(document.querySelectorAll("li")).toHaveLength(2);
-    expect(document.body.textContent).toContain("你 · 昨天");
-
-    // 点过之后按点过的算：再点一次收起
-    await toggleGroup("昨天");
-    expect(document.querySelectorAll("li")).toHaveLength(1);
-    expect(groupButtons()[1]?.getAttribute("aria-expanded")).toBe("false");
-  });
-
-  it("puts the member and the moment on the right of each row", async () => {
-    await renderBoard();
-    await toggleGroup("昨天");
-    await toggleGroup("更早");
-    expect(document.querySelectorAll("li")).toHaveLength(3);
+    const rows = Array.from(container.querySelectorAll("li"));
+    expect(rows).toHaveLength(3);
+    expect(rows.map((row) => SESSIONS.find((entry) => row.textContent?.includes(entry.title))?.id)).toEqual(["s-1", "s-2", "s-3"]);
+    expect(container.querySelectorAll("h2 button")).toHaveLength(0);
     expect(document.body.textContent).toContain("你 · 09:05");
     expect(document.body.textContent).toContain("你 · 昨天");
-    // 更早的任务写日期：月日跟着本机时区走，只断言格式。
     expect(document.body.textContent).toMatch(/陈墨 · \d{1,2}月\d{1,2}日/);
+  });
+
+  it("shows 10 tasks on the first page and loads the next page", async () => {
+    const all = Array.from({ length: 13 }, (_, index) => ({ ...SESSIONS[0]!, id: `page-${index}`, title: `任务 ${index + 1}` }));
+    mocks.listSessions.mockImplementation(async (_project, options) => ({
+      project: CLOUD_PROJECT,
+      sessions: all.slice(options.offset, options.offset + options.limit),
+      total: all.length
+    }));
+    await renderBoard();
+    expect(container.querySelectorAll("li")).toHaveLength(10);
+    const next = Array.from(container.querySelectorAll<HTMLButtonElement>("button"))
+      .find((entry) => entry.textContent?.trim() === "下一页");
+    expect(next).toBeTruthy();
+    await act(async () => next!.click());
+    await flush();
+    expect(container.querySelectorAll("li")).toHaveLength(3);
+    expect(container.textContent).toContain("任务 11");
+    expect(mocks.listSessions).toHaveBeenLastCalledWith(CLOUD_PROJECT.id, expect.objectContaining({ offset: 10, limit: 10 }));
   });
 
   it("filters by member from the segmented control", async () => {
@@ -201,6 +180,29 @@ describe("collab task list", () => {
     expect(mocks.listSessions).toHaveBeenLastCalledWith(CLOUD_PROJECT.id, expect.objectContaining({ member: "me" }));
   });
 
+  it("selects and clears only the current page's own tasks", async () => {
+    const rows = SESSIONS.map((entry) => ({ ...entry, lastActiveAt: daysBack(0, 9, 5) }));
+    mocks.listSessions.mockResolvedValue({ project: CLOUD_PROJECT, sessions: rows, total: rows.length });
+    await renderBoard();
+    const button = (label: string) => Array.from(document.querySelectorAll<HTMLButtonElement>("button"))
+      .find((entry) => entry.textContent?.trim() === label);
+
+    await act(async () => button("多选")!.click());
+    const checks = Array.from(container.querySelectorAll<HTMLInputElement>('input[type="checkbox"]'));
+    expect(checks).toHaveLength(2);
+    await act(async () => checks[0]!.click());
+    expect(document.body.textContent).toContain("已选 1 个");
+    expect(button("全选本页")).toBeTruthy();
+
+    await act(async () => button("全选本页")!.click());
+    expect(checks.every((check) => check.checked)).toBe(true);
+    expect(document.body.textContent).toContain("已选 2 个");
+    expect(button("取消全选")).toBeTruthy();
+    await act(async () => button("取消全选")!.click());
+    expect(checks.every((check) => !check.checked)).toBe(true);
+    expect(button("全选本页")).toBeTruthy();
+  });
+
   it("opens someone else's session as a floating panel, not a dialog", async () => {
     // 云端里别人的任务用右侧浮起的面板读：看板留在原处，不是抽屉也不是居中弹窗。
     mocks.readSessionDetail.mockResolvedValue({
@@ -211,13 +213,6 @@ describe("collab task list", () => {
       ]
     });
     await renderBoard();
-    // 同一天一组默认只展开「今天」，别人这条在「更早」里，先展开再点。
-    const earlier = Array.from(document.querySelectorAll<HTMLElement>("button"))
-      .find((element) => element.textContent?.trim().startsWith("更早"));
-    expect(earlier, "应有「更早」分组").toBeTruthy();
-    await act(async () => earlier!.click());
-    await flush();
-
     const title = Array.from(document.querySelectorAll<HTMLElement>("span"))
       .find((element) => element.textContent?.trim() === SESSIONS[2]!.title);
     expect(title, "列表应显示这条任务").toBeTruthy();

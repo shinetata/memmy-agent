@@ -36,8 +36,7 @@ import { openAgentTaskInChat } from "../app/open-agent-task.js";
 import type { AgentTaskView } from "../state/agent-chat-slice.js";
 import { useOptionalAppState } from "../state/app-state.js";
 import { ApiRequestError } from "../api/http.js";
-import { listKnowledgeBases, type KnowledgeBaseOption } from "../api/knowledge-bases-client.js";
-import type { RuntimeConfig } from "@memmy/local-api-contracts";
+import { ProjectKnowledgeDialog, ProjectKnowledgeManageDialog } from "./collab-knowledge-dialog.js";
 import {
   readProjectInstructions,
   saveProjectInstructions,
@@ -198,7 +197,6 @@ export function formatSessionTime(value: string | null): string {
 export type TaskDayGroup = "today" | "yesterday" | "week" | "earlier";
 
 const DAY_MS = 86_400_000;
-const TASK_DAY_GROUPS: readonly TaskDayGroup[] = ["today", "yesterday", "week", "earlier"];
 
 /** Midnight of the day the moment falls on, in this computer's time zone. */
 function startOfLocalDay(moment: Date): number {
@@ -221,24 +219,6 @@ export function taskDayGroup(value: string | null, now: Date = new Date()): Task
   if (days <= 0) return "today";
   if (days === 1) return "yesterday";
   return time >= startOfLocalWeek(now) ? "week" : "earlier";
-}
-
-/**
- * Splits the list into its day sections, keeping the order the cloud sent as the order inside each one.
- * Empty days are left out, so a list of today's sessions has one heading, not four.
- */
-export function groupSessionsByDay<T extends { lastActiveAt: string | null }>(
-  sessions: readonly T[],
-  now: Date = new Date()
-): { group: TaskDayGroup; sessions: T[] }[] {
-  const buckets = new Map<TaskDayGroup, T[]>();
-  for (const session of sessions) {
-    const group = taskDayGroup(session.lastActiveAt, now);
-    const bucket = buckets.get(group);
-    if (bucket) bucket.push(session);
-    else buckets.set(group, [session]);
-  }
-  return TASK_DAY_GROUPS.filter((group) => buckets.has(group)).map((group) => ({ group, sessions: buckets.get(group)! }));
 }
 
 /** What a row shows on the right of its title: the hour today, the day before yesterday, the date after that. */
@@ -308,6 +288,7 @@ export function CollabPage() {
   /** 项目关联的知识库：只影响本项目的检索，成员都能关联，解除限本人添加或所有者、管理员。 */
   const [knowledge, setKnowledge] = useState<CollabKnowledgeView | null>(null);
   const [knowledgeOpen, setKnowledgeOpen] = useState(false);
+  const [knowledgeManageOpen, setKnowledgeManageOpen] = useState(false);
   /** 「邀请」in the header and「项目成员」in the sidebar menu open the same dialog. */
   const [membersOpen, setMembersOpen] = useState(false);
   const [deleting, setDeleting] = useState<CollabProjectSession | null>(null);
@@ -471,11 +452,7 @@ export function CollabPage() {
   /** 解除关联：权限由云端判定，被拒绝时把原因显示出来。 */
   async function removeKnowledge(baseId: string): Promise<void> {
     if (!sharedId || !collab) return;
-    try {
-      setKnowledge(await collab.removeKnowledge(sharedId, baseId));
-    } catch (cause) {
-      showToast(messageOf(cause) || t("collab.knowledge.removeFailed"));
-    }
+    setKnowledge(await collab.removeKnowledge(sharedId, baseId));
   }
 
   // One request builds every page: the query and the member filter decide what `total` counts.
@@ -678,7 +655,7 @@ export function CollabPage() {
 
   function selectAllMine() {
     const mine = (page?.sessions ?? []).filter((session) => session.mine).map((session) => session.id);
-    setSelected((current) => (current.size === mine.length ? new Set() : new Set(mine)));
+    setSelected((current) => (mine.length > 0 && mine.every((id) => current.has(id)) ? new Set() : new Set(mine)));
   }
 
   async function deleteSelected() {
@@ -707,8 +684,6 @@ export function CollabPage() {
   useEffect(() => {
     // 换页、换筛选或进入/退出选择模式后，旧的勾选不再有效。
     setSelected(new Set());
-    // 分组也回到默认：新的一页里只有最近的一组展开，不会出现整页都是收起的标题。
-    setOpenGroups(null);
   }, [pageIndex, member, query, selecting]);
 
   const memberOptions: { value: MemberFilter; label: string }[] = [
@@ -717,23 +692,8 @@ export function CollabPage() {
     { value: "others", label: t("collab.filter.others") }
   ];
 
-  // 任务列表按天分组：今天 / 昨天 / 本周 / 更早。同一天内保持云端给的顺序。
-  const dayGroups = useMemo(() => groupSessionsByDay(sessions ?? []), [sessions]);
-  /**
-   * 分组默认收起，只看最近的一组：一屏不铺开十几条，想看哪天再展开。
-   * 为 null 表示没动过，只算「最近的一组」展开；点过之后按点过的算。
-   */
-  const [openGroups, setOpenGroups] = useState<Set<TaskDayGroup> | null>(null);
-  const firstGroup = dayGroups[0]?.group ?? null;
-  const groupOpen = (group: TaskDayGroup): boolean => (openGroups === null ? group === firstGroup : openGroups.has(group));
-  const toggleGroup = (group: TaskDayGroup): void => {
-    setOpenGroups((current) => {
-      const next = new Set(current ?? (firstGroup === null ? [] : [firstGroup]));
-      if (next.has(group)) next.delete(group);
-      else next.add(group);
-      return next;
-    });
-  };
+  const selectableSessions = (page?.sessions ?? []).filter((session) => session.mine);
+  const allPageSelected = selectableSessions.length > 0 && selectableSessions.every((session) => selected.has(session.id));
 
   return (
     <AppFrame title={project?.name ?? t("nav.collab")}>
@@ -869,8 +829,8 @@ export function CollabPage() {
                           <span className={styles.selectCount}>
                             {t("collab.sessions.selectedCount", { count: String(selected.size) })}
                           </span>
-                          <Button size="sm" variant="ghost" onClick={selectAllMine}>
-                            {t("collab.sessions.selectAll")}
+                          <Button size="sm" variant="ghost" disabled={!selectableSessions.length || bulkDeleting} onClick={selectAllMine}>
+                            {t(allPageSelected ? "collab.sessions.deselectAll" : "collab.sessions.selectAll")}
                           </Button>
                           <Button size="sm" variant="ghost" disabled={bulkDeleting} onClick={() => setSelecting(false)}>
                             {t("collab.cancel")}
@@ -970,121 +930,100 @@ export function CollabPage() {
                       </section>
                     ) : (
                       <>
-                      {dayGroups.map(({ group, sessions: rows }) => {
-                        const label = t(`collab.sessions.group.${group}` as MessageKey);
-                        const open = groupOpen(group);
-                        return (
-                        <section key={group} className={styles.dayGroup} aria-label={label}>
-                          <h2 className={styles.groupLabel}>
-                            <button type="button" className={styles.groupToggle} aria-expanded={open} onClick={() => toggleGroup(group)}>
-                              <ChevronRight
-                                size={12}
+                      <ul className={`${styles.list} ${styles.stream} ${styles.flatStream}`}>
+                        {sessions.map((session) => {
+                          // Members see this person's nickname in their own Memmy, so the avatar keeps the nickname.
+                          const name = session.memberName || (session.mine ? t("collab.session.you") : "");
+                          // 本人的任务写「你」，与侧栏和原型一致；他人仍写昵称。
+                          const who = session.mine ? t("collab.session.you") : name;
+                          const menuOpen = openMenuId === session.id;
+                          return (
+                            <li
+                              key={session.id}
+                              className={`${styles.row} ${selecting ? styles.rowSelecting : styles.rowOpenable} ${menuOpen ? styles.rowMenuOpen : ""} ${selected.has(session.id) ? styles.rowSelected : ""}`}
+                              onClick={() => {
+                                if (!selecting) {
+                                  void openSession(session);
+                                  return;
+                                }
+                                // 选择模式下点击整行就是勾选；他人的任务不可选。
+                                if (session.mine) toggleSelected(session.id);
+                              }}
+                            >
+                              {selecting && session.mine ? (
+                                <input
+                                  type="checkbox"
+                                  className={styles.rowCheck}
+                                  checked={selected.has(session.id)}
+                                  aria-label={session.title}
+                                  onClick={(event) => event.stopPropagation()}
+                                  onChange={() => toggleSelected(session.id)}
+                                />
+                              ) : null}
+                              {/* 头像只用成员自身颜色的浅底与字色，接近原型里的淡色头像 */}
+                              <span
+                                className={`${styles.avatar} ${styles.avatarSoft}`}
+                                style={{ "--member": memberColor(name) } as CSSProperties}
                                 aria-hidden="true"
-                                className={`${styles.groupChevron} ${open ? styles.groupChevronOpen : ""}`}
-                              />
-                              <span>{label}</span>
-                              <span className={styles.groupCount}>{rows.length}</span>
-                            </button>
-                          </h2>
-                          {open ? (
-                          <ul className={`${styles.list} ${styles.stream}`}>
-                            {rows.map((session) => {
-                              // Members see this person's nickname in their own Memmy, so the avatar keeps the nickname.
-                              const name = session.memberName || (session.mine ? t("collab.session.you") : "");
-                              // 本人的任务写「你」，与侧栏和原型一致；他人仍写昵称。
-                              const who = session.mine ? t("collab.session.you") : name;
-                              const menuOpen = openMenuId === session.id;
-                              return (
-                                <li
-                                  key={session.id}
-                                  className={`${styles.row} ${selecting ? styles.rowSelecting : styles.rowOpenable} ${menuOpen ? styles.rowMenuOpen : ""} ${selected.has(session.id) ? styles.rowSelected : ""}`}
-                                  onClick={() => {
-                                    if (!selecting) {
-                                      void openSession(session);
-                                      return;
-                                    }
-                                    // 选择模式下点击整行就是勾选；他人的任务不可选。
-                                    if (session.mine) toggleSelected(session.id);
-                                  }}
-                                >
-                                  {selecting && session.mine ? (
-                                    <input
-                                      type="checkbox"
-                                      className={styles.rowCheck}
-                                      checked={selected.has(session.id)}
-                                      aria-label={session.title}
-                                      onClick={(event) => event.stopPropagation()}
-                                      onChange={() => toggleSelected(session.id)}
-                                    />
-                                  ) : null}
-                                  {/* 头像只用成员自身颜色的浅底与字色，接近原型里的淡色头像 */}
-                                  <span
-                                    className={`${styles.avatar} ${styles.avatarSoft}`}
-                                    style={{ "--member": memberColor(name) } as CSSProperties}
-                                    aria-hidden="true"
-                                  >
-                                    {Array.from(name)[0] ?? "?"}
-                                  </span>
-                                  <div className={styles.rowText}>
-                                    <span className={styles.rowTitle}>{session.title}</span>
-                                    {session.lastQuestion ? <span className={styles.rowSummary}>{session.lastQuestion}</span> : null}
-                                  </div>
-                                  <span className={styles.meta}>
-                                    {[who, stampLabel(taskStamp(session.lastActiveAt), t)].filter(Boolean).join(" · ")}
-                                  </span>
-                                  {selecting ? null : (
+                              >
+                                {Array.from(name)[0] ?? "?"}
+                              </span>
+                              <div className={styles.rowText}>
+                                <span className={styles.rowTitle}>{session.title}</span>
+                                {session.lastQuestion ? <span className={styles.rowSummary}>{session.lastQuestion}</span> : null}
+                              </div>
+                              <span className={styles.meta}>
+                                {[who, stampLabel(taskStamp(session.lastActiveAt), t)].filter(Boolean).join(" · ")}
+                              </span>
+                              {selecting ? null : (
+                              <button
+                                type="button"
+                                className={styles.moreButton}
+                                aria-label={t("collab.session.more")}
+                                title={t("collab.session.more")}
+                                aria-expanded={menuOpen}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  setOpenMenuId(menuOpen ? null : session.id);
+                                }}
+                              >
+                                <MoreHorizontal size={15} aria-hidden="true" />
+                              </button>
+                              )}
+                              {menuOpen ? (
+                                <>
+                                  {/*
+                                   * The row itself opens the session reader. Every click that belongs to the menu has to
+                                   * stop here, or copying a link also opens the session behind the toast.
+                                   */}
                                   <button
                                     type="button"
-                                    className={styles.moreButton}
-                                    aria-label={t("collab.session.more")}
-                                    title={t("collab.session.more")}
-                                    aria-expanded={menuOpen}
+                                    className={styles.menuScrim}
+                                    aria-label={t("collab.cancel")}
                                     onClick={(event) => {
                                       event.stopPropagation();
-                                      setOpenMenuId(menuOpen ? null : session.id);
+                                      setOpenMenuId(null);
                                     }}
-                                  >
-                                    <MoreHorizontal size={15} aria-hidden="true" />
-                                  </button>
-                                  )}
-                                  {menuOpen ? (
-                                    <>
-                                      {/*
-                                       * The row itself opens the session reader. Every click that belongs to the menu has to
-                                       * stop here, or copying a link also opens the session behind the toast.
-                                       */}
-                                      <button
-                                        type="button"
-                                        className={styles.menuScrim}
-                                        aria-label={t("collab.cancel")}
-                                        onClick={(event) => {
-                                          event.stopPropagation();
-                                          setOpenMenuId(null);
-                                        }}
-                                      />
-                                      <div className={styles.menu} role="menu" onClick={(event) => event.stopPropagation()}>
-                                        <button type="button" role="menuitem" className={styles.menuItem} onClick={() => { setOpenMenuId(null); void copyLink(session); }}>
-                                          {t("collab.session.copyLink")}
+                                  />
+                                  <div className={styles.menu} role="menu" onClick={(event) => event.stopPropagation()}>
+                                    <button type="button" role="menuitem" className={styles.menuItem} onClick={() => { setOpenMenuId(null); void copyLink(session); }}>
+                                      {t("collab.session.copyLink")}
+                                    </button>
+                                    {session.mine ? (
+                                      <>
+                                        <div className={styles.menuSeparator} role="separator" />
+                                        <button type="button" role="menuitem" className={`${styles.menuItem} ${styles.menuItemDanger}`} onClick={() => { setOpenMenuId(null); setDeleting(session); }}>
+                                          {t("collab.session.delete")}
                                         </button>
-                                        {session.mine ? (
-                                          <>
-                                            <div className={styles.menuSeparator} role="separator" />
-                                            <button type="button" role="menuitem" className={`${styles.menuItem} ${styles.menuItemDanger}`} onClick={() => { setOpenMenuId(null); setDeleting(session); }}>
-                                              {t("collab.session.delete")}
-                                            </button>
-                                          </>
-                                        ) : null}
-                                      </div>
-                                    </>
-                                  ) : null}
-                                </li>
-                              );
-                            })}
-                          </ul>
-                          ) : null}
-                        </section>
-                        );
-                      })}
+                                      </>
+                                    ) : null}
+                                  </div>
+                                </>
+                              ) : null}
+                            </li>
+                          );
+                        })}
+                      </ul>
                       {total > SESSION_PAGE_SIZE ? (
                         <nav className={styles.pager} aria-label={t("collab.sessions.pager")}>
                           <span className={styles.pagerInfo}>
@@ -1128,7 +1067,7 @@ export function CollabPage() {
                 knowledgeAvailable={Boolean(shared)}
                 onEdit={() => setInstructionsOpen(true)}
                 onAddKnowledge={() => setKnowledgeOpen(true)}
-                onRemoveKnowledge={(baseId) => void removeKnowledge(baseId)}
+                onManageKnowledge={() => setKnowledgeManageOpen(true)}
                 onCollapse={() => chooseConfig(false)}
               />
             ) : null}
@@ -1159,12 +1098,21 @@ export function CollabPage() {
         />
       ) : null}
       {project ? (
+        <ProjectKnowledgeManageDialog
+          open={knowledgeManageOpen}
+          knowledge={knowledge}
+          onClose={() => setKnowledgeManageOpen(false)}
+          onAdd={() => { setKnowledgeManageOpen(false); setKnowledgeOpen(true); }}
+          onRemove={removeKnowledge}
+        />
+      ) : null}
+      {project ? (
         <ProjectKnowledgeDialog
           open={knowledgeOpen}
           linked={knowledge?.bases ?? []}
           maxBases={knowledge?.maxBases ?? 10}
           config={runtimeConfig}
-          onClose={() => setKnowledgeOpen(false)}
+          onClose={() => { setKnowledgeOpen(false); setKnowledgeManageOpen(true); }}
           onAdd={addKnowledge}
           onAdded={(count) => showToast(t("collab.knowledge.added", { count: String(count) }))}
         />
@@ -1468,7 +1416,7 @@ function ProjectConfigPanel(props: {
   knowledgeAvailable: boolean;
   onEdit: () => void;
   onAddKnowledge: () => void;
-  onRemoveKnowledge: (baseId: string) => void;
+  onManageKnowledge: () => void;
   onCollapse: () => void;
 }) {
   const { t } = useTranslation();
@@ -1514,40 +1462,35 @@ function ProjectConfigPanel(props: {
         {props.knowledgeAvailable ? (
           <section className={styles.configCard}>
             <div className={styles.configCardHead}>
-              <span className={styles.configCardTitle}>{t("collab.config.knowledge")}</span>
-              <button
-                type="button"
-                className={styles.configIcon}
-                aria-label={t("collab.config.knowledgeAdd")}
-                title={t("collab.config.knowledgeAdd")}
-                onClick={props.onAddKnowledge}
-              >
-                <Plus size={13} aria-hidden="true" />
-              </button>
+              <span className={styles.configCardTitle}>
+                {t("collab.config.knowledge")}
+                {props.knowledge?.bases.length ? <span className={styles.configKnowledgeCount}>{props.knowledge.bases.length}</span> : null}
+              </span>
+              {props.knowledge?.bases.length ? (
+                <button type="button" className={styles.configKnowledgeAction} onClick={props.onManageKnowledge}>
+                  {t("collab.config.knowledgeManage")}
+                </button>
+              ) : null}
             </div>
             <div className={styles.configCardBody}>
               {props.knowledge?.bases.length ? (
-                <ul className={styles.configKnowledgeList}>
-                  {props.knowledge.bases.map((base) => (
-                    <li key={base.id} className={styles.configKnowledgeRow}>
-                      <BookOpen size={12} aria-hidden="true" />
-                      <span className={styles.configKnowledgeName}>{base.name}</span>
-                      {base.mine || props.knowledge?.canManage ? (
-                        <button
-                          type="button"
-                          className={styles.configKnowledgeRemove}
-                          aria-label={t("collab.knowledge.remove", { name: base.name })}
-                          title={t("collab.knowledge.remove", { name: base.name })}
-                          onClick={() => props.onRemoveKnowledge(base.id)}
-                        >
-                          <X size={11} aria-hidden="true" />
-                        </button>
-                      ) : null}
-                    </li>
-                  ))}
-                </ul>
+                <>
+                  <ul className={styles.configKnowledgeList}>
+                    {props.knowledge.bases.slice(0, 3).map((base) => (
+                      <li key={base.id} className={styles.configKnowledgeRow}>
+                        <BookOpen size={12} aria-hidden="true" />
+                        <span className={styles.configKnowledgeName} title={base.name}>{base.name}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </>
               ) : (
-                <span className={styles.configEmpty}>{t("collab.config.knowledgeEmpty")}</span>
+                <>
+                  <span className={styles.configEmpty}>{t("collab.config.knowledgeEmpty")}</span>
+                  <button type="button" className={styles.configKnowledgeMore} onClick={props.onAddKnowledge}>
+                    {t("collab.config.knowledgeAdd")}
+                  </button>
+                </>
               )}
             </div>
           </section>
@@ -1657,148 +1600,6 @@ function ProjectInstructionsDialog(props: {
         <div className={styles.instructionsReadonly}>
           {props.instructions.text.trim() || t("collab.instructions.empty")}
         </div>
-      )}
-    </Modal>
-  );
-}
-
-/**
- * 添加知识库：候选只来自本人可访问的知识库，已经关联的标出来且不能再选。
- *
- * <p>关联不会改变谁能看原文——那是知识库自己的共享设置；它只让本项目的任务在检索时把所选知识库也算进去，
- * 所以这里不提供「浏览文件」，选择时能确认的只有库名。</p>
- */
-function ProjectKnowledgeDialog(props: {
-  open: boolean;
-  linked: Array<{ id: string; name: string }>;
-  maxBases: number;
-  config: RuntimeConfig | null;
-  onClose: () => void;
-  onAdd: (baseId: string) => Promise<void>;
-  onAdded: (count: number) => void;
-}) {
-  const { t } = useTranslation();
-  const [options, setOptions] = useState<KnowledgeBaseOption[] | null>(null);
-  const [query, setQuery] = useState("");
-  const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const linkedIds = useMemo(() => new Set(props.linked.map((base) => base.id)), [props.linked]);
-
-  useEffect(() => {
-    if (!props.open) return;
-    setQuery("");
-    setSelected(new Set());
-    setError(null);
-    if (!props.config) {
-      setOptions([]);
-      return;
-    }
-    let cancelled = false;
-    setOptions(null);
-    void listKnowledgeBases(props.config).then((bases) => {
-      if (!cancelled) setOptions(bases);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [props.open, props.config]);
-
-  const remaining = Math.max(0, props.maxBases - props.linked.length);
-  const visible = useMemo(() => {
-    const keyword = query.trim().toLowerCase();
-    return (options ?? []).filter((base) => !keyword || base.name.toLowerCase().includes(keyword));
-  }, [options, query]);
-
-  function toggle(id: string) {
-    setSelected((current) => {
-      const next = new Set(current);
-      if (next.has(id)) next.delete(id);
-      else if (next.size < remaining) next.add(id);
-      return next;
-    });
-  }
-
-  async function add() {
-    if (saving || !selected.size) return;
-    setSaving(true);
-    setError(null);
-    let added = 0;
-    try {
-      for (const baseId of selected) {
-        await props.onAdd(baseId);
-        added += 1;
-      }
-      props.onAdded(added);
-      props.onClose();
-    } catch (cause) {
-      setError(messageOf(cause) || t("collab.knowledge.addFailed"));
-      if (added > 0) props.onAdded(added);
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  return (
-    <Modal
-      open={props.open}
-      title={t("collab.knowledge.title")}
-      onClose={props.onClose}
-      closeLabel={t("common.close")}
-      closeContent={<X size={16} aria-hidden="true" />}
-      className={styles.createModal}
-      backdropClassName={styles.backdrop}
-      footer={(
-        <>
-          <span className={styles.dialogHint}>{t("collab.knowledge.remaining", { count: String(remaining) })}</span>
-          <span className={styles.footerButtons}>
-            <Button onClick={props.onClose}>{t("collab.cancel")}</Button>
-            <Button variant="primary" disabled={saving || !selected.size} onClick={() => void add()}>
-              {t("collab.knowledge.add")}
-            </Button>
-          </span>
-        </>
-      )}
-    >
-      <p className={styles.dialogHint}>{t("collab.knowledge.hint")}</p>
-      <label className={styles.searchBox}>
-        <Search size={14} aria-hidden="true" className={styles.searchIcon} />
-        <input
-          type="search"
-          value={query}
-          placeholder={t("collab.knowledge.search")}
-          aria-label={t("collab.knowledge.search")}
-          onChange={(event) => setQuery(event.target.value)}
-        />
-      </label>
-      {error ? <span className={styles.instructionsError} role="alert">{error}</span> : null}
-      {options === null ? (
-        <p className={styles.dialogHint}>{t("collab.knowledge.loading")}</p>
-      ) : visible.length === 0 ? (
-        <p className={styles.dialogHint}>{t("collab.knowledge.empty")}</p>
-      ) : (
-        <ul className={styles.tasksList}>
-          {visible.map((base) => {
-            const linked = linkedIds.has(base.id);
-            const full = !linked && !selected.has(base.id) && selected.size >= remaining;
-            return (
-              <li key={base.id} className={styles.row}>
-                <input
-                  type="checkbox"
-                  className={styles.tasksCheck}
-                  checked={linked || selected.has(base.id)}
-                  disabled={linked || full}
-                  aria-label={base.name}
-                  onChange={() => toggle(base.id)}
-                />
-                <div className={styles.rowText}>
-                  <span className={styles.rowTitle}>{base.name}</span>
-                </div>
-                {linked ? <span className={styles.configEmpty}>{t("collab.knowledge.linked")}</span> : null}
-              </li>
-            );
-          })}
-        </ul>
       )}
     </Modal>
   );

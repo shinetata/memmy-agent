@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   listProjects: vi.fn(),
   // 项目配置会读关联的知识库；这一层不关心内容，给空列表即可。
   knowledge: vi.fn(),
+  removeKnowledge: vi.fn(),
   listSessions: vi.fn(),
   getSyncProgress: vi.fn(),
   syncSessions: vi.fn(),
@@ -34,6 +35,8 @@ vi.mock("../../api/collab-client.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../api/collab-client.js")>();
   return { ...actual, createHttpCollabClient: () => mocks };
 });
+
+vi.mock("../../api/knowledge-bases-client.js", () => ({ listKnowledgeBases: vi.fn().mockResolvedValue([]) }));
 
 vi.mock("../../api/projects-client.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../api/projects-client.js")>();
@@ -224,6 +227,122 @@ describe("project board configuration", () => {
     expect(document.body.textContent).toContain("仅所有者与管理员可编辑");
     expect(document.body.textContent).toContain("前端代码遵循《前端代码规范》。");
     expect(document.querySelector("textarea")).toBeNull();
+  });
+
+  it("summarizes linked knowledge and manages the complete list with permissions", async () => {
+    const bases = Array.from({ length: 20 }, (_, index) => ({ id: String(index), name: `资料 ${index + 1}`, mine: index === 19 }));
+    mocks.knowledge.mockResolvedValue({ bases, maxBases: 20, canManage: false });
+    mocks.removeKnowledge.mockResolvedValue({ bases: bases.slice(0, 19), maxBases: 20, canManage: false });
+    await renderBoard(CLOUD_PROJECT);
+    const sidebar = document.querySelector("aside")!;
+    expect(sidebar.textContent).toContain("资料 1");
+    expect(sidebar.textContent).toContain("资料 3");
+    expect(sidebar.textContent).not.toContain("资料 4");
+    expect(sidebar.textContent).toContain("知识库20");
+    expect(sidebar.textContent).not.toContain("还有 17 个知识库");
+    expect(sidebar.querySelector('button[aria-label^="移除"]')).toBeNull();
+
+    await act(async () => byText("管理").click());
+    expect(document.body.textContent).toContain("已关联 20 个知识库");
+    expect(document.body.textContent).toContain("资料 20");
+    expect(document.querySelector('button[aria-label="移除 资料 1"]')).toBeNull();
+    expect(document.querySelector('button[aria-label="移除 资料 20"]')).toBeTruthy();
+    const search = document.querySelector<HTMLInputElement>('input[aria-label="搜索知识库"]')!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(search, "资料 20");
+      search.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    expect(document.querySelector('button[aria-label="移除 资料 20"]')).toBeTruthy();
+    await act(async () => iconButton("移除 资料 20").click());
+    await flush();
+    expect(mocks.removeKnowledge).toHaveBeenCalledWith("cloud-1", "19");
+    expect(document.body.textContent).toContain("已关联 19 个知识库");
+    expect(document.body.textContent).toContain("未找到相关知识库");
+    await act(async () => iconButton("关闭").click());
+    expect(sidebar.textContent).toContain("知识库19");
+  });
+
+  it("keeps the linked base visible when removal fails and can open the existing picker", async () => {
+    mocks.knowledge.mockResolvedValue({ bases: [{ id: "one", name: "团队资料", mine: true }], maxBases: 10, canManage: false });
+    mocks.removeKnowledge.mockRejectedValue(new Error("网络不可用"));
+    await renderBoard(CLOUD_PROJECT);
+    await act(async () => byText("管理").click());
+    await act(async () => iconButton("移除 团队资料").click());
+    await flush();
+    expect(document.querySelector('[role="alert"]')?.textContent).toContain("网络不可用");
+    expect(document.body.textContent).toContain("团队资料");
+    await act(async () => byText("添加知识库").click());
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain("关联知识库");
+    await act(async () => byText("取消").click());
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain("管理知识库");
+  });
+
+  it("bulk removes only selectable knowledge and preserves selections across search", async () => {
+    const bases = [
+      { id: "a", name: "产品资料", mine: true },
+      { id: "b", name: "研发资料", mine: true },
+      { id: "c", name: "其他资料", mine: false }
+    ];
+    mocks.knowledge.mockResolvedValue({ bases, maxBases: 10, canManage: false });
+    mocks.removeKnowledge.mockResolvedValueOnce({ bases: bases.slice(1), maxBases: 10, canManage: false })
+      .mockResolvedValueOnce({ bases: bases.slice(2), maxBases: 10, canManage: false });
+    await renderBoard(CLOUD_PROJECT);
+    await act(async () => byText("管理").click());
+    await act(async () => byText("多选").click());
+    expect(document.querySelector('input[aria-label="其他资料"]')).toBeNull();
+    const input = document.querySelector<HTMLInputElement>('input[aria-label="搜索知识库"]')!;
+    async function search(value: string) {
+      await act(async () => {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, value);
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+    }
+    await search("产品");
+    await act(async () => byText("全选当前结果").click());
+    await search("研发");
+    await act(async () => byText("全选当前结果").click());
+    expect(document.body.textContent).toContain("已选 2 个");
+    await act(async () => byText("移除").click());
+    expect(document.body.textContent).toContain("选中的 2 个知识库将解除与项目的关联");
+    expect(mocks.removeKnowledge).not.toHaveBeenCalled();
+    await act(async () => byText("取消").click());
+    expect(document.body.textContent).toContain("已选 2 个");
+    await act(async () => byText("移除").click());
+    await act(async () => byText("移除").click());
+    await flush();
+    expect(mocks.removeKnowledge.mock.calls.map((args) => args[1])).toEqual(["a", "b"]);
+    expect(document.body.textContent).toContain("已关联 1 个知识库");
+    expect(document.body.textContent).not.toContain("已选 2 个");
+  });
+
+  it("keeps failed bulk removals selected for retry", async () => {
+    const bases = [{ id: "a", name: "产品资料", mine: true }, { id: "b", name: "研发资料", mine: true }];
+    mocks.knowledge.mockResolvedValue({ bases, maxBases: 10, canManage: false });
+    mocks.removeKnowledge.mockResolvedValueOnce({ bases: [bases[1]], maxBases: 10, canManage: false })
+      .mockRejectedValueOnce(new Error("网络不可用"))
+      .mockResolvedValueOnce({ bases: [], maxBases: 10, canManage: false });
+    await renderBoard(CLOUD_PROJECT);
+    await act(async () => byText("管理").click());
+    await act(async () => byText("多选").click());
+    await act(async () => byText("全选当前结果").click());
+    await act(async () => byText("移除").click());
+    await act(async () => byText("移除").click());
+    await flush();
+    expect(document.querySelector('[role="alert"]')?.textContent).toContain("已移除 1 个，1 个未能移除");
+    expect(document.querySelector<HTMLInputElement>('input[aria-label="研发资料"]')?.checked).toBe(true);
+    expect(document.body.textContent).toContain("已选 1 个");
+    await act(async () => byText("移除").click());
+    await act(async () => byText("移除").click());
+    await flush();
+    expect(mocks.removeKnowledge.mock.calls.map((args) => args[1])).toEqual(["a", "b", "b"]);
+    expect(document.body.textContent).toContain("已关联 0 个知识库");
+  });
+
+  it("offers direct addition when no knowledge is linked", async () => {
+    await renderBoard(CLOUD_PROJECT);
+    expect(document.querySelector("aside")?.textContent).toContain("尚未关联知识库");
+    await act(async () => byText("添加知识库").click());
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain("关联知识库");
   });
 
   it("keeps one control for the panel: collapse inside it, expand in the header", async () => {

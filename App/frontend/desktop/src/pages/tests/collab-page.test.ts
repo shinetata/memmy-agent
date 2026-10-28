@@ -3,7 +3,6 @@ import type { CollabLinks, LocalAgentSession } from "../../api/collab-client.js"
 import {
   agentHasLinks,
   formatSessionTime,
-  groupSessionsByDay,
   groupAgentSessions,
   groupCheckState,
   groupingKind,
@@ -124,25 +123,13 @@ describe("task list days", () => {
     return new Date(year, month - 1, day, hour, minute, 0).toISOString();
   }
 
-  it("puts each day in its own heading, this week starting on Monday", () => {
+  it("classifies dates for compact timestamps", () => {
     expect(taskDayGroup(at(2026, 10, 28, 9, 5), now)).toBe("today");
     expect(taskDayGroup(at(2026, 10, 27, 23, 59), now)).toBe("yesterday");
     expect(taskDayGroup(at(2026, 10, 26, 8, 0), now)).toBe("week");
     expect(taskDayGroup(at(2026, 10, 25, 8, 0), now)).toBe("earlier");
     // 没有时间的任务排在最后，不会看起来像最新的。
     expect(taskDayGroup(null, now)).toBe("earlier");
-  });
-
-  it("keeps the row order inside a day and drops empty days", () => {
-    const rows = [
-      { id: "a", lastActiveAt: at(2026, 10, 28, 9, 5) },
-      { id: "b", lastActiveAt: at(2026, 10, 28, 8, 0) },
-      { id: "c", lastActiveAt: at(2026, 10, 20, 8, 0) }
-    ];
-    expect(groupSessionsByDay(rows, now)).toEqual([
-      { group: "today", sessions: [rows[0], rows[1]] },
-      { group: "earlier", sessions: [rows[2]] }
-    ]);
   });
 
   it("shows the hour today, 昨天 for yesterday, and the date before that", () => {
