@@ -14,8 +14,8 @@ describe("Windows packaged CLI installation", () => {
     const resourcesPath = "C:\\Program Files\\Memmy\\resources";
     const memoryCli = win32.join(resourcesPath, "cli", "memmy-memory.cmd");
     const memmyCli = win32.join(resourcesPath, "cli", "memmy.cmd");
-    const sessionCli = win32.join(resourcesPath, "cli", "memmy-session.cmd");
-    const packagedFiles = new Set([memoryCli, memmyCli, sessionCli]);
+    const projectCli = win32.join(resourcesPath, "cli", "memmy-project.cmd");
+    const packagedFiles = new Set([memoryCli, memmyCli, projectCli]);
     const ensureUserPath = vi.fn(async () => true);
 
     const result = await installPackagedWindowsCliTools(resourcesPath, {
@@ -35,7 +35,7 @@ describe("Windows packaged CLI installation", () => {
       installed: [
         { name: "memmy-memory", source: memoryCli, target: memoryCli },
         { name: "memmy", source: memmyCli, target: memmyCli },
-        { name: "memmy-session", source: sessionCli, target: sessionCli }
+        { name: "memmy-project", source: projectCli, target: projectCli }
       ],
       pathUpdated: true,
       profilePaths: [WINDOWS_USER_PATH_LOCATION]
@@ -56,13 +56,13 @@ describe("Windows packaged CLI installation", () => {
     expect(accessed).toEqual([
       "D:\\应用 安装\\记忆助手\\resources\\cli\\memmy-memory.cmd",
       "D:\\应用 安装\\记忆助手\\resources\\cli\\memmy.cmd",
-      "D:\\应用 安装\\记忆助手\\resources\\cli\\memmy-session.cmd"
+      "D:\\应用 安装\\记忆助手\\resources\\cli\\memmy-project.cmd"
     ]);
     expect(result.installed.map((entry) => entry.target)).toEqual(accessed);
     expect(result.pathUpdated).toBe(false);
   });
 
-  it.each(["memmy-memory.cmd", "memmy.cmd", "memmy-session.cmd"])(
+  it.each(["memmy-memory.cmd", "memmy.cmd", "memmy-project.cmd"])(
     "returns a clear error when %s is missing",
     async (missingName) => {
       const resourcesPath = "C:\\Memmy\\resources";

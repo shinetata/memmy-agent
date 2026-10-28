@@ -1144,11 +1144,11 @@ describe("desktop packaged runtime boundaries", () => {
     expect(mainSource).toContain("await installPackagedMacCliLaunchers()");
     expect(mainSource).toContain("renderMemmyCliLauncher");
     expect(mainSource).toContain('["memmy", join(cliDirectory, "memmy")]');
-    expect(mainSource).toContain('["memmy-session", join(cliDirectory, "memmy-session")]');
+    expect(mainSource).toContain('["memmy-project", join(cliDirectory, "memmy-project")]');
     expect(mainSource).toContain("bundledCliInstallDecision");
     expect(mainSource).not.toContain("await Promise.all([access(memoryCli), access(memmyCli), access(sessionCli)])");
-    expect(packageSource).toContain('create_cli_launcher "$CLI_BIN_DIR/memmy-session" "dist/cli/memmy-session.js"');
-    expect(windowsPackageSource).toContain('require_packaged_runtime_file "$DESKTOP_DIR/release/win-unpacked/resources/cli/memmy-session.cmd"');
+    expect(packageSource).toContain('create_cli_launcher "$CLI_BIN_DIR/memmy-project" "dist/cli/memmy-project.js"');
+    expect(windowsPackageSource).toContain('require_packaged_runtime_file "$DESKTOP_DIR/release/win-unpacked/resources/cli/memmy-project.cmd"');
     expect(mainSource).toContain("installSymlink(source, join(binDirectory, name))");
     expect(mainSource).toContain("installSystemBinSymlink(source, name)");
     expect(mainSource).not.toContain(['join(cliDirectory, "', 'memmy-agent', '")'].join(""));

@@ -530,12 +530,12 @@ export function createAgentSourceService(options: CreateAgentSourceServiceOption
         }
       }
       try {
-        const sessionSkills = await options.skillDistributionService.ensureSessionSkills?.() ?? [];
-        for (const sourceId of sessionSkills) {
+        const projectSkills = await options.skillDistributionService.ensureProjectSkills?.() ?? [];
+        for (const sourceId of projectSkills) {
           if (!refreshed.includes(sourceId)) refreshed.push(sourceId);
         }
       } catch {
-        // The session skill is retried on the next launch.
+        // The project skill is retried on the next launch.
       }
       return refreshed;
     }

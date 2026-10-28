@@ -6,9 +6,9 @@ import { createNodeHookCommand } from "../hook-command.js";
 import { isInstalledMemmyHookCurrent, memmyHookRevisionField } from "../hook-revision.js";
 import { readMemmyMemoryServiceConfig } from "../memmy-runtime-config.js";
 import {
-  removeMemmySessionSkillDirectory,
+  removeMemmyProjectSkillDirectory,
   removeMemmySkillDirectory,
-  replaceMemmySessionSkillDirectory,
+  replaceMemmyProjectSkillDirectory,
   replaceMemmySkillDirectory
 } from "../skill-directory.js";
 import { renderMemmyPluginSkillManifest } from "../templates/memmy-plugin.js";
@@ -67,7 +67,7 @@ export function createClaudeCodeSkillTarget(deps: CreateClaudeCodeSkillTargetDep
       const existing = removeLegacyMarkerBlock(await readTextFile(filePath));
       await writeFileAtomically(filePath, upsertMarkerBlock(existing, renderMemmySkillBootstrapManifest(manifest)));
       await replaceMemmySkillDirectory(root, manifest);
-      await replaceMemmySessionSkillDirectory(root);
+      await replaceMemmyProjectSkillDirectory(root);
     },
 
     async uninstall(_targetId) {
@@ -81,7 +81,7 @@ export function createClaudeCodeSkillTarget(deps: CreateClaudeCodeSkillTargetDep
       await writeFileAtomically(filePath, removeMarkerBlock(removeLegacyMarkerBlock(existing)));
       await removeLegacyAgentInstructions(root);
       await removeMemmySkillDirectory(root);
-      await removeMemmySessionSkillDirectory(root);
+      await removeMemmyProjectSkillDirectory(root);
     },
 
     async isInstalled(_targetId) {
@@ -141,7 +141,7 @@ export function createClaudeCodeSkillTarget(deps: CreateClaudeCodeSkillTargetDep
         upsertMarkerBlock(await readTextFile(filePath), renderMemmySkillBootstrapManifest(manifest))
       );
       await replaceMemmySkillDirectory(root, manifest);
-      await replaceMemmySessionSkillDirectory(root);
+      await replaceMemmyProjectSkillDirectory(root);
       await writeFileAtomically(
         hookConfigPath,
         `${JSON.stringify({ ...hookConfig, ...(await memmyHookRevisionField(CLAUDE_CODE_TARGET_ID, "claude-code")) }, null, 2)}\n`
@@ -164,7 +164,7 @@ export function createClaudeCodeSkillTarget(deps: CreateClaudeCodeSkillTargetDep
       await writeFileAtomically(filePath, removeMarkerBlock(removeLegacyMarkerBlock(await readTextFile(filePath))));
       await removeLegacyAgentInstructions(root);
       await removeMemmySkillDirectory(root);
-      await removeMemmySessionSkillDirectory(root);
+      await removeMemmyProjectSkillDirectory(root);
     }
   };
 }
@@ -283,36 +283,27 @@ async function upsertClaudeCodeHookSettings(filePath: string, hookScriptPath: st
   hooks.SessionEnd = claudeHookEntries(hooks.SessionEnd, hookScriptPath);
   config.hooks = hooks;
   const permissions = toMutableRecord(config.permissions);
-  permissions.allow = [...withoutMemmySessionRules(permissions.allow), ...MEMMY_SESSION_PERMISSION_RULES];
+  permissions.allow = [...withoutProjectCliRules(permissions.allow), ...PROJECT_CLI_PERMISSION_RULES];
   config.permissions = permissions;
   await writeFileAtomically(filePath, `${JSON.stringify(config, null, 2)}\n`);
 }
 
-/**
- * Shared project sessions are read through `memmy-session`, and the current task can be added to one project.
- * Allowing the commands keeps a pasted link, or adding the current task, from stopping on an approval prompt.
- */
-const MEMMY_SESSION_PERMISSION_RULES = [
-  "Bash(memmy-session read:*)",
-  "Bash(memmy-session search:*)",
-  "Bash(memmy-session projects:*)",
-  "Bash(memmy-session add:*)",
-  "Bash(~/.local/bin/memmy-session:*)",
-  "Bash(/Applications/Memmy.app/Contents/Resources/cli/memmy-session:*)",
-  "Bash(~/Applications/Memmy.app/Contents/Resources/cli/memmy-session:*)",
-  "Bash(%LOCALAPPDATA%\\Programs\\Memmy\\resources\\cli\\memmy-session.cmd:*)",
-  "Bash(%ProgramFiles%\\Memmy\\resources\\cli\\memmy-session.cmd:*)",
-  "Read(~/.memmy/projects/**)"
+/** Scope permissions to the operations the CLI currently supports. */
+const PROJECT_CLI_PATHS = [
+  "memmy-project",
+  "~/.local/bin/memmy-project",
+  "/Applications/Memmy.app/Contents/Resources/cli/memmy-project",
+  "~/Applications/Memmy.app/Contents/Resources/cli/memmy-project",
+  "%LOCALAPPDATA%\\Programs\\Memmy\\resources\\cli\\memmy-project.cmd",
+  "%ProgramFiles%\\Memmy\\resources\\cli\\memmy-project.cmd"
 ];
-/** Rules for the commands sessions were read through before `memmy-session`; a reinstall drops them. */
-const LEGACY_SESSION_PERMISSION_RULES = [
-  "Bash(memmy-memory sessions read:*)",
-  "Bash(memmy-memory sessions search:*)"
-];
+const PROJECT_CLI_PERMISSION_RULES = PROJECT_CLI_PATHS.flatMap((path) =>
+  ["list", "session read", "session search", "session add"].map((action) => `Bash(${path} ${action}:*)`)
+);
+const MANAGED_PROJECT_CLI_RULES = new Set(PROJECT_CLI_PERMISSION_RULES);
 
-function withoutMemmySessionRules(value: unknown): unknown[] {
-  const ours = new Set([...MEMMY_SESSION_PERMISSION_RULES, ...LEGACY_SESSION_PERMISSION_RULES]);
-  return Array.isArray(value) ? value.filter((rule) => !ours.has(rule as string)) : [];
+function withoutProjectCliRules(value: unknown): unknown[] {
+  return Array.isArray(value) ? value.filter((rule) => !MANAGED_PROJECT_CLI_RULES.has(rule as string)) : [];
 }
 
 async function removeClaudeCodeHookSettings(filePath: string): Promise<void> {
@@ -349,7 +340,7 @@ async function removeClaudeCodeHookSettings(filePath: string): Promise<void> {
 
   if (config.permissions !== undefined) {
     const permissions = toMutableRecord(config.permissions);
-    const allow = withoutMemmySessionRules(permissions.allow);
+    const allow = withoutProjectCliRules(permissions.allow);
     if (allow.length > 0) permissions.allow = allow;
     else delete permissions.allow;
     if (Object.keys(permissions).length > 0) config.permissions = permissions;

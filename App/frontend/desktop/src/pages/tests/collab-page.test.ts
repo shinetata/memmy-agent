@@ -3,11 +3,14 @@ import type { CollabLinks, LocalAgentSession } from "../../api/collab-client.js"
 import {
   agentHasLinks,
   formatSessionTime,
+  groupSessionsByDay,
   groupAgentSessions,
   groupCheckState,
   groupingKind,
   isSessionChecked,
   localSessionKey,
+  taskDayGroup,
+  taskStamp,
   toggleGroupLink,
   toggleSessionLink,
   visibleQuestion,
@@ -110,5 +113,42 @@ describe("collab page helpers", () => {
       "Briefly inform the user about the task result and perform any follow-up actions (if needed). If there's no follow-ups needed, don't explicitly say that.",
       "</user_query>"
     ].join("\n"))).toBe("");
+  });
+});
+
+describe("task list days", () => {
+  // 2026-10-28 是周三，本周从 10-26（周一）开始。
+  const now = new Date(2026, 9, 28, 15, 30, 0);
+
+  function at(year: number, month: number, day: number, hour = 10, minute = 0): string {
+    return new Date(year, month - 1, day, hour, minute, 0).toISOString();
+  }
+
+  it("puts each day in its own heading, this week starting on Monday", () => {
+    expect(taskDayGroup(at(2026, 10, 28, 9, 5), now)).toBe("today");
+    expect(taskDayGroup(at(2026, 10, 27, 23, 59), now)).toBe("yesterday");
+    expect(taskDayGroup(at(2026, 10, 26, 8, 0), now)).toBe("week");
+    expect(taskDayGroup(at(2026, 10, 25, 8, 0), now)).toBe("earlier");
+    // 没有时间的任务排在最后，不会看起来像最新的。
+    expect(taskDayGroup(null, now)).toBe("earlier");
+  });
+
+  it("keeps the row order inside a day and drops empty days", () => {
+    const rows = [
+      { id: "a", lastActiveAt: at(2026, 10, 28, 9, 5) },
+      { id: "b", lastActiveAt: at(2026, 10, 28, 8, 0) },
+      { id: "c", lastActiveAt: at(2026, 10, 20, 8, 0) }
+    ];
+    expect(groupSessionsByDay(rows, now)).toEqual([
+      { group: "today", sessions: [rows[0], rows[1]] },
+      { group: "earlier", sessions: [rows[2]] }
+    ]);
+  });
+
+  it("shows the hour today, 昨天 for yesterday, and the date before that", () => {
+    expect(taskStamp(at(2026, 10, 28, 9, 5), now)).toEqual({ kind: "time", text: "09:05" });
+    expect(taskStamp(at(2026, 10, 27, 9, 5), now)).toEqual({ kind: "yesterday" });
+    expect(taskStamp(at(2026, 10, 25, 9, 5), now)).toEqual({ kind: "date", month: 10, day: 25 });
+    expect(taskStamp(null, now)).toBeNull();
   });
 });

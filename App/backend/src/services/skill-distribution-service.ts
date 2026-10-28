@@ -3,10 +3,10 @@ import { createHash } from "node:crypto";
 import { readdir, readFile, stat } from "node:fs/promises";
 import { join, relative } from "node:path";
 import {
-  isMemmySessionSkillDirectoryCurrent,
+  isMemmyProjectSkillDirectoryCurrent,
   isMemmySkillDirectoryCurrent,
   readInstalledSkillKind,
-  replaceMemmySessionSkillDirectory,
+  replaceMemmyProjectSkillDirectory,
   replaceMemmySkillDirectory
 } from "../adapters/outbound/skill-writer/skill-directory.js";
 import { renderMemmyDefaultSkillManifest } from "../adapters/outbound/skill-writer/templates/memmy-default.js";
@@ -42,11 +42,11 @@ export interface SkillDistributionService {
    */
   refreshInstalledSkill(sourceId: string, mode?: "skill" | "plugin"): Promise<boolean>;
   /**
-   * Writes the `memmy-session` skill into every agent home that already exists. A new install has no
+   * Writes the `memmy-project` skill into every agent home that already exists. A new install has no
    * memory skill yet, and auto-inject is off unless the person turns it on, so this is what puts the
-   * session skill on disk after the app is installed.
+   * project skill on disk after the app is installed.
    */
-  ensureSessionSkills(): Promise<string[]>;
+  ensureProjectSkills(): Promise<string[]>;
 }
 
 /** Contract for create skill distribution service options. */
@@ -155,25 +155,25 @@ export function createSkillDistributionService(
         ? renderMemmyPluginSkillManifest(sourceId)
         : renderMemmyDefaultSkillManifest(sourceId);
       const memoryCurrent = await isMemmySkillDirectoryCurrent(root, manifest);
-      if (memoryCurrent && await isMemmySessionSkillDirectoryCurrent(root, sourceId)) return false;
+      if (memoryCurrent && await isMemmyProjectSkillDirectoryCurrent(root, sourceId)) return false;
 
       if (!memoryCurrent) {
         if (kind === "plugin") await target.installPlugin!(sourceId);
         // Skill-only agents get the skill directory alone: their instructions file must not gain memory guidance.
         else await replaceMemmySkillDirectory(root, manifest);
       }
-      // The session skill is installed with the memory skill; an agent connected before it existed gets it here.
-      if (!(await isMemmySessionSkillDirectoryCurrent(root, sourceId))) await replaceMemmySessionSkillDirectory(root, sourceId);
+      // The project skill is installed with the memory skill; an agent connected before it existed gets it here.
+      if (!(await isMemmyProjectSkillDirectoryCurrent(root, sourceId))) await replaceMemmyProjectSkillDirectory(root, sourceId);
       return true;
     },
 
-    async ensureSessionSkills() {
+    async ensureProjectSkills() {
       const written: string[] = [];
       for (const target of options.targetRegistry.list()) {
         const root = await target.resolveRootDirectory();
         if (!root || !(await directoryExists(root))) continue;
-        if (await isMemmySessionSkillDirectoryCurrent(root, target.targetId)) continue;
-        await replaceMemmySessionSkillDirectory(root, target.targetId);
+        if (await isMemmyProjectSkillDirectoryCurrent(root, target.targetId)) continue;
+        await replaceMemmyProjectSkillDirectory(root, target.targetId);
         written.push(target.targetId);
       }
       return written;

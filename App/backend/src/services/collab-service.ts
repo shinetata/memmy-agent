@@ -24,7 +24,7 @@ import {
   type SessionPick
 } from "./collab-add-session.js";
 import { ensureDirectory, uniqueProjectDirectory } from "./project-directory.js";
-import { MAX_PROJECT_INSTRUCTIONS_CHARS } from "@memmy/local-api-contracts";
+import { MAX_PROJECT_INSTRUCTIONS_CHARS, projectInstructionsKey } from "@memmy/local-api-contracts";
 import type { ProjectInstructionsService } from "./project-instructions-service.js";
 
 const CLOUD_TIMEOUT_MS = 20_000;
@@ -139,6 +139,21 @@ export interface CollabProject {
   localProjectId: string | null;
   /** 项目指令全文；成员只读。未设定时为空串。 */
   instructions: string;
+}
+
+/** 项目关联的一个知识库：只是引用，名字随知识库改名而变。 */
+export interface CollabKnowledgeBase {
+  id: string;
+  name: string;
+  /** 这个库是本机用户关联的：本人可以解除，别人的只有所有者与管理员能解除。 */
+  mine: boolean;
+}
+
+/** 项目配置里的知识库卡片：列表加一条「还能加几个」。 */
+export interface CollabKnowledgeView {
+  canManage: boolean;
+  maxBases: number;
+  bases: CollabKnowledgeBase[];
 }
 
 export interface CollabProjectSession {
@@ -387,6 +402,11 @@ export interface CollabService {
   /** Records which local Memmy project runs this online project's tasks. */
   bindLocalProject(projectId: string, localProjectId: string): Promise<{ ok: true }>;
   /**
+   * 某个工作目录属于哪个协作项目；不属于任何项目时返回 null。
+   * 知识库检索用它把会话所在目录翻成项目，再把项目关联的知识库并入检索。
+   */
+  cloudProjectForDirectory(directory: string): Promise<string | null>;
+  /**
    * The directory a project's tasks run in, created on demand; lets an older project gain a working project.
    * `name` names the managed folder after the project instead of its generated id.
    */
@@ -469,6 +489,10 @@ export interface CollabService {
    * passes it, so the copy lands where this computer's tasks read it.
    */
   updateInstructions(projectId: string, text: string, directory?: string): Promise<{ project: CollabProject }>;
+  /** 项目关联的知识库。关联只把这些库纳入本项目任务的检索，原文仍按知识库自己的共享设置。 */
+  knowledge(projectId: string): Promise<CollabKnowledgeView>;
+  addKnowledge(projectId: string, baseId: string): Promise<CollabKnowledgeView>;
+  removeKnowledge(projectId: string, baseId: string): Promise<CollabKnowledgeView>;
   approveRequest(projectId: string, userId: string): Promise<{ member: CollabMember }>;
   rejectRequest(projectId: string, userId: string): Promise<{ ok: true }>;
   setMemberRole(projectId: string, userId: string, role: Exclude<CollabRole, "owner">): Promise<{ member: CollabMember }>;
@@ -1248,6 +1272,26 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
       return { ok: true };
     },
 
+    /**
+     * 目录 → 协作项目：逐个读本机各项目的 links 文件，按工作目录匹配。
+     *
+     * <p>这里不用 {@code readAllLinks}：它只挑出「还欠云端东西」的项目（已绑定或已选会话），
+     * 而一个刚建好、什么都没同步的项目也应该能让它的知识库参与检索。目录数量是本机项目数量级，成本可忽略。</p>
+     */
+    async cloudProjectForDirectory(directory) {
+      const account = options.getAccount();
+      const key = projectInstructionsKey(directory);
+      if (!account || !key) return null;
+      const entries = await readdir(projectsDir, { withFileTypes: true }).catch(() => []);
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue;
+        const stored = parseStoredLinks(await readFile(join(projectsDir, entry.name, LINKS_FILE), "utf8").catch(() => ""));
+        if (!stored || stored.accountId !== account.accountId || !stored.workingDirectory) continue;
+        if (projectInstructionsKey(stored.workingDirectory) === key) return stored.projectId;
+      }
+      return null;
+    },
+
     listSessions,
 
     async candidateSessions(projectId, input = {}) {
@@ -1452,6 +1496,26 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
       const project = { ...toProject(record(data.project)), localProjectId: stored.localProjectId };
       await mirrorInstructions(projectId, project.instructions, directory ?? stored.workingDirectory);
       return { project };
+    },
+
+    async knowledge(projectId) {
+      return toKnowledge(await cloud(`/projects/${encodeURIComponent(projectId)}/knowledge`));
+    },
+
+    async addKnowledge(projectId, baseId) {
+      const data = await cloud(`/projects/${encodeURIComponent(projectId)}/knowledge`, {
+        method: "POST",
+        body: { baseId }
+      });
+      return toKnowledge(data);
+    },
+
+    async removeKnowledge(projectId, baseId) {
+      const data = await cloud(
+        `/projects/${encodeURIComponent(projectId)}/knowledge/${encodeURIComponent(baseId)}`,
+        { method: "DELETE" }
+      );
+      return toKnowledge(data);
     },
 
     async approveRequest(projectId, userId) {
@@ -2087,6 +2151,18 @@ function toMember(raw: unknown): CollabMember {
     role: toRole(member.role),
     mine: member.mine === true,
     joinedAt: nullableText(member.joinedAt)
+  };
+}
+
+function toKnowledge(raw: unknown): CollabKnowledgeView {
+  const view = record(raw);
+  return {
+    canManage: view.canManage === true,
+    maxBases: typeof view.maxBases === "number" ? view.maxBases : 10,
+    bases: list(view.bases).map((value) => {
+      const base = record(value);
+      return { id: text(base.id), name: text(base.name), mine: base.mine === true };
+    })
   };
 }
 

@@ -11,6 +11,9 @@ export interface RegisterCollabRoutesOptions {
 }
 
 const ProjectIdSchema = z.string().regex(/^[A-Za-z0-9-]{1,36}$/u, "项目 ID 无效");
+/** 知识库 id 是 UUID，和项目 id 同一套字符。 */
+const BaseIdSchema = ProjectIdSchema;
+const KnowledgeLinkSchema = z.object({ baseId: BaseIdSchema }).strict();
 const CreateProjectSchema = z.object({
   name: z.string().trim().min(1, "请填写项目名称").max(20, "项目名称不超过 20 个字"),
   /** The folder the person picked for the project's tasks; a managed folder is used when absent. */
@@ -203,6 +206,24 @@ export function registerCollabRoutes(app: FastifyInstance, options: RegisterColl
     return reply.send(await options.collab.setJoinMode(projectId, input.joinMode));
   }));
 
+  // 项目配置的知识库：关联对本项目全体成员开放，解除由云端判定（关联人自己或所有者、管理员）。
+  app.get<{ Params: { projectId: string } }>("/api/collab/projects/:projectId/knowledge", guard, withErrorEnvelope(async (request, reply) =>
+    reply.send(await options.collab.knowledge(ProjectIdSchema.parse((request.params as { projectId: string }).projectId)))));
+
+  app.post<{ Params: { projectId: string } }>("/api/collab/projects/:projectId/knowledge", guard, withErrorEnvelope(async (request, reply) => {
+    const projectId = ProjectIdSchema.parse((request.params as { projectId: string }).projectId);
+    const input = KnowledgeLinkSchema.parse(request.body ?? {});
+    return reply.send(await options.collab.addKnowledge(projectId, input.baseId));
+  }));
+
+  app.delete<{ Params: { projectId: string; baseId: string } }>("/api/collab/projects/:projectId/knowledge/:baseId", guard, withErrorEnvelope(async (request, reply) => {
+    const params = request.params as { projectId: string; baseId: string };
+    return reply.send(await options.collab.removeKnowledge(
+      ProjectIdSchema.parse(params.projectId),
+      BaseIdSchema.parse(params.baseId)
+    ));
+  }));
+
   app.get<{ Params: { projectId: string } }>("/api/collab/projects/:projectId/members", guard, withErrorEnvelope(async (request, reply) =>
     reply.send(await options.collab.listMembers(ProjectIdSchema.parse((request.params as { projectId: string }).projectId)))));
 
@@ -279,7 +300,7 @@ export function registerCollabRoutes(app: FastifyInstance, options: RegisterColl
     return reply.send(await options.collab.readSession(input.reference, input.view));
   }));
 
-  // One local task joins a project. The reply is the text `memmy-session add` prints, including what to run next.
+  // One local task joins a project. The reply is the text `memmy-project session add` prints, including what to run next.
   app.post("/api/collab/sessions/add", guard, withErrorEnvelope(async (request, reply) => {
     const input = AddSessionSchema.parse(request.body ?? {});
     return reply.send(await options.collab.addCurrentSession({

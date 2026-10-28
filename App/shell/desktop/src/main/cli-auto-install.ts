@@ -16,7 +16,7 @@ export function bundledCliInstallDecision(bundlePath: string): BundledCliInstall
 }
 
 /** Commands a packaged Mac app puts on the user's PATH. */
-export const PACKAGED_MAC_CLI_COMMANDS = ["memmy-memory", "memmy", "memmy-session"] as const;
+export const PACKAGED_MAC_CLI_COMMANDS = ["memmy-memory", "memmy", "memmy-project"] as const;
 
 /** Marker in the user-level launcher, so a later launch can replace its own script and nothing else. */
 export const MEMMY_CLI_LAUNCHER_MARKER = "# Memmy CLI launcher";

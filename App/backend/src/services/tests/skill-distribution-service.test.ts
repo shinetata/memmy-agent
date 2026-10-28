@@ -257,8 +257,8 @@ describe("skill distribution service", () => {
       const content = readFileSync(join(rootDirectory, "skills", "memmy-memory", "SKILL.md"), "utf8");
       expect(content).toContain("## Agent Loop");
       // Project sessions are a skill of their own, next to the memory skill.
-      expect(content).not.toContain("memmy-session");
-      expect(readFileSync(join(rootDirectory, "skills", "memmy-session", "SKILL.md"), "utf8")).toContain("name: memmy-session");
+      expect(content).not.toContain("memmy-project");
+      expect(readFileSync(join(rootDirectory, "skills", "memmy-project", "SKILL.md"), "utf8")).toContain("name: memmy-project");
     } finally {
       rmSync(rootDirectory, { recursive: true, force: true });
     }
@@ -277,9 +277,9 @@ describe("skill distribution service", () => {
         ])
       });
 
-      await expect(service.ensureSessionSkills()).resolves.toEqual(["cursor"]);
-      expect(readFileSync(join(present, "skills", "memmy-session", "SKILL.md"), "utf8")).toContain("name: memmy-session");
-      await expect(service.ensureSessionSkills()).resolves.toEqual([]);
+      await expect(service.ensureProjectSkills()).resolves.toEqual(["cursor"]);
+      expect(readFileSync(join(present, "skills", "memmy-project", "SKILL.md"), "utf8")).toContain("name: memmy-project");
+      await expect(service.ensureProjectSkills()).resolves.toEqual([]);
     } finally {
       rmSync(rootDirectory, { recursive: true, force: true });
     }
@@ -315,7 +315,7 @@ describe("skill distribution service", () => {
 
       // Connected before the session skill existed: only the session skill is added.
       await expect(service.refreshInstalledSkill("cursor", "skill")).resolves.toBe(true);
-      expect(readFileSync(join(rootDirectory, "skills", "memmy-session", "SKILL.md"), "utf8")).toContain("name: memmy-session");
+      expect(readFileSync(join(rootDirectory, "skills", "memmy-project", "SKILL.md"), "utf8")).toContain("name: memmy-project");
       await expect(service.refreshInstalledSkill("cursor", "skill")).resolves.toBe(false);
       expect(installed).toBe(0);
     } finally {

@@ -1079,7 +1079,7 @@ async function installBundledCliIfNeeded(): Promise<void> {
   const commands = [
     ["memmy-memory", join(cliDirectory, "memmy-memory")],
     ["memmy", join(cliDirectory, "memmy")],
-    ["memmy-session", join(cliDirectory, "memmy-session")]
+    ["memmy-project", join(cliDirectory, "memmy-project")]
   ] as const;
   const installed: string[] = [];
   const skipped: string[] = [];
@@ -1265,16 +1265,16 @@ function resolveCliToolEntries(): Array<{ name: string; source: string }> {
     const cliDirectory = join(process.resourcesPath, "cli");
     return [
       { name: "memmy-memory", source: join(cliDirectory, "memmy-memory") },
-      { name: "memmy-session", source: join(cliDirectory, "memmy-session") }
+      { name: "memmy-project", source: join(cliDirectory, "memmy-project") }
     ];
   }
 
   const rootDirectory = resolveDevelopmentRoot();
   const memoryCli = join(rootDirectory, "Memory", "dist", "src", "cli", "index.js");
-  const sessionCli = join(rootDirectory, "App", "backend", "dist", "src", "cli", "memmy-session.js");
+  const projectCli = join(rootDirectory, "App", "backend", "dist", "src", "cli", "memmy-project.js");
   return [
     { name: "memmy-memory", source: memoryCli },
-    { name: "memmy-session", source: sessionCli }
+    { name: "memmy-project", source: projectCli }
   ];
 }
 

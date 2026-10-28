@@ -2,7 +2,7 @@
 /**
  * The collaboration dialogs are wider than the shared modal default and must say so in a way the bundle order cannot
  * undo: main.tsx imports styles.css last, so its plain `.modal { width: min(440px, ...) }` lands after this module and
- * flattened all three dialogs to 440px. The rules therefore also carry `.modal`, which wins on specificity.
+ * flattened the dialogs to 440px. The rules therefore also carry `.modal`, which wins on specificity.
  */
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -27,8 +27,8 @@ describe("collab dialog widths", () => {
   });
 
   it("declares each dialog width on a .modal-prefixed rule and only there", () => {
+    // 读取视图不再是弹窗，改成右侧浮起的面板，所以这里只剩两个弹窗。
     const expected = {
-      readerModal: "width: min(760px, calc(100vw - 32px));",
       createModal: "width: min(540px, calc(100vw - 32px));",
       pickModal: "width: min(880px, calc(100vw - 32px));"
     };

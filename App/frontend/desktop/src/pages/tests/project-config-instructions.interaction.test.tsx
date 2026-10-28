@@ -14,6 +14,8 @@ import { CollabPage } from "../collab-page.js";
 
 const mocks = vi.hoisted(() => ({
   listProjects: vi.fn(),
+  // 项目配置会读关联的知识库；这一层不关心内容，给空列表即可。
+  knowledge: vi.fn(),
   listSessions: vi.fn(),
   getSyncProgress: vi.fn(),
   syncSessions: vi.fn(),
@@ -93,6 +95,7 @@ describe("project board configuration", () => {
     vi.clearAllMocks();
     resetCollabProjectsStore();
     mocks.listProjects.mockResolvedValue([]);
+    mocks.knowledge.mockResolvedValue({ bases: [], maxBases: 10, canManage: false });
     mocks.listSessions.mockResolvedValue({ project: CLOUD_PROJECT, sessions: [], total: 0 });
     mocks.getSyncProgress.mockResolvedValue({ running: false, total: 0, completed: 0, failed: 0 });
     mocks.syncSessions.mockResolvedValue({ uploaded: 0, removed: 0, failed: 0 });

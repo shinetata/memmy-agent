@@ -983,14 +983,14 @@ describe("collab service", () => {
       "设计评审 · 3 位成员 · 0 个任务",
       "",
       "请用户选择项目，确认后运行：",
-      "memmy-session add --project \"<完整名称>\""
+      "memmy-project session add --project \"<完整名称>\""
     ].join("\n"));
 
     const partial = await svc.addCurrentSession({ project: "开发", cwd: "/repo" });
     expect(partial.text).toBe([
       "没有名为「开发」的协作项目。",
       "是不是「Memmy 开发」？向用户确认后运行：",
-      "memmy-session add --project \"Memmy 开发\""
+      "memmy-project session add --project \"Memmy 开发\""
     ].join("\n"));
     expect(uploadedIds(calls)).toEqual([]);
     expect(await svc.getLinks("p-1")).toEqual({ groups: [], sessions: [] });
@@ -1037,7 +1037,7 @@ describe("collab service", () => {
       "当前目录只有一条任务：claude_code · 「会话 a1」 · 2026-10-22",
       "但这句原话不在其中，所以没有加入。",
       "若用户确认就是这一条，运行：",
-      "memmy-session add --project \"Memmy 开发\""
+      "memmy-project session add --project \"Memmy 开发\""
     ].join("\n"));
     expect(uploadedIds(calls)).toEqual([]);
   });

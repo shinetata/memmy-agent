@@ -611,3 +611,117 @@ async function close(server: ReturnType<typeof createServer>): Promise<void> {
 function readDirectory(directory: string): string[] {
   return readdirSync(directory);
 }
+
+describe("project knowledge in the resume hook", () => {
+  let tempDir = "";
+  let runtimeAsset = "";
+
+  beforeAll(async () => {
+    runtimeAsset = await loadMemmyWorkspaceBridgeRuntimeAsset();
+  });
+
+  afterEach(() => {
+    if (tempDir) {
+      rmSync(tempDir, { recursive: true, force: true });
+      tempDir = "";
+    }
+  });
+
+  it("adds the project's knowledge next to memory in the same turn", async () => {
+    tempDir = mkdtempSync(join(tmpdir(), "memmy-knowledge-hook-"));
+    const requests: Array<{ path: string; body: Record<string, any> }> = [];
+    const server = createServer(async (request, response) => {
+      const body = await requestBody(request);
+      requests.push({ path: request.url ?? "", body });
+      response.setHeader("content-type", "application/json");
+      if (request.url === "/api/v1/health") {
+        response.end(JSON.stringify({ features: { l3WorldModelProtocolVersions: [2] } }));
+      } else if (request.url === "/api/v1/sessions/open") {
+        response.end(JSON.stringify({ sessionId: "session-knowledge" }));
+      } else if (request.url === "/api/v1/turns/start") {
+        response.end(JSON.stringify({
+          sessionId: body.sessionId,
+          turnId: body.turnId,
+          injectedContext: { markdown: "历史记忆：上周改过分享接口" },
+        }));
+      } else if (request.url === "/api/knowledge/recall") {
+        response.end(JSON.stringify({
+          enabled: true,
+          evidence: [{ id: "source-1", title: "差旅制度", content: "住宿上限 500 元" }],
+        }));
+      } else {
+        response.end(JSON.stringify({ ok: true }));
+      }
+    });
+    await listen(server);
+    try {
+      const endpoint = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+      const script = installHookFixture(tempDir, "claude_code", "claude-code", endpoint, runtimeAsset);
+      writeFileSync(join(tempDir, "runtime.json"), JSON.stringify({ baseUrl: endpoint, localToken: "local-token" }));
+
+      const result = await runHook(script, {
+        hook_event_name: "UserPromptSubmit",
+        session_id: "knowledge-session",
+        prompt: "出差住宿标准是多少",
+        cwd: tempDir,
+      });
+
+      expect(result.stderr).toBe("");
+      const context = JSON.parse(result.stdout).hookSpecificOutput.additionalContext as string;
+      expect(context).toContain("memmy_memory_context");
+      expect(context).toContain("memmy_knowledge_context");
+      expect(context).toContain("住宿上限 500 元");
+      // 记忆在前，知识库在后：两者来源分开，模型能区分。
+      expect(context.indexOf("memmy_memory_context")).toBeLessThan(context.indexOf("memmy_knowledge_context"));
+      const recall = requests.find((request) => request.path === "/api/knowledge/recall");
+      expect(recall?.body).toEqual({ query: "出差住宿标准是多少", workspace: tempDir });
+    } finally {
+      await close(server);
+    }
+  }, 30000);
+
+  it("keeps the turn going when the knowledge lookup fails", async () => {
+    tempDir = mkdtempSync(join(tmpdir(), "memmy-knowledge-hook-fail-"));
+    const server = createServer(async (request, response) => {
+      if (request.url === "/api/v1/health") {
+        response.setHeader("content-type", "application/json");
+        response.end(JSON.stringify({ features: { l3WorldModelProtocolVersions: [2] } }));
+        return;
+      }
+      if (request.url === "/api/knowledge/recall") {
+        response.statusCode = 503;
+        response.end("{}");
+        return;
+      }
+      const body = await requestBody(request);
+      response.setHeader("content-type", "application/json");
+      if (request.url === "/api/v1/sessions/open") response.end(JSON.stringify({ sessionId: "session-knowledge" }));
+      else if (request.url === "/api/v1/turns/start") {
+        response.end(JSON.stringify({
+          sessionId: body.sessionId, turnId: body.turnId,
+          injectedContext: { markdown: "历史记忆：上周改过分享接口" },
+        }));
+      } else response.end(JSON.stringify({ ok: true }));
+    });
+    await listen(server);
+    try {
+      const endpoint = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+      const script = installHookFixture(tempDir, "claude_code", "claude-code", endpoint, runtimeAsset);
+      writeFileSync(join(tempDir, "runtime.json"), JSON.stringify({ baseUrl: endpoint, localToken: "local-token" }));
+
+      const result = await runHook(script, {
+        hook_event_name: "UserPromptSubmit",
+        session_id: "knowledge-session",
+        prompt: "出差住宿标准是多少",
+        cwd: tempDir,
+      });
+
+      expect(result.stderr).toBe("");
+      const context = JSON.parse(result.stdout).hookSpecificOutput.additionalContext as string;
+      expect(context).toContain("memmy_memory_context");
+      expect(context).not.toContain("memmy_knowledge_context");
+    } finally {
+      await close(server);
+    }
+  }, 30000);
+});

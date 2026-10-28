@@ -6,7 +6,7 @@ import {
   renderMemmyResumeSkillFile,
   renderMemmySkillDirectoryFiles
 } from "./templates/memmy-skill-directory.js";
-import { MEMMY_SESSION_SKILL_DIRECTORY_NAME, renderMemmySessionSkillFile } from "./templates/memmy-session-skill.js";
+import { MEMMY_PROJECT_SKILL_DIRECTORY_NAME, renderMemmyProjectSkillFile } from "./templates/memmy-project-skill.js";
 import type { SkillManifest } from "./types.js";
 
 export async function replaceMemmySkillDirectory(rootDirectory: string, manifest: SkillManifest): Promise<void> {
@@ -72,20 +72,20 @@ export async function removeMemmyResumeSkillDirectory(rootDirectory: string): Pr
   await rm(join(rootDirectory, "skills", MEMMY_RESUME_SKILL_DIRECTORY_NAME), { recursive: true, force: true });
 }
 
-/** Installs the `memmy-session` skill next to `memmy-memory`, as a skill of its own. */
-export async function replaceMemmySessionSkillDirectory(rootDirectory: string, source?: string): Promise<void> {
-  const targetPath = join(rootDirectory, "skills", MEMMY_SESSION_SKILL_DIRECTORY_NAME);
-  await replaceDirectory(targetPath, [{ relativePath: "SKILL.md", content: renderMemmySessionSkillFile(source) }]);
+/** Installs the `memmy-project` skill next to `memmy-memory`, as a skill of its own. */
+export async function replaceMemmyProjectSkillDirectory(rootDirectory: string, source?: string): Promise<void> {
+  const targetPath = join(rootDirectory, "skills", MEMMY_PROJECT_SKILL_DIRECTORY_NAME);
+  await replaceDirectory(targetPath, [{ relativePath: "SKILL.md", content: renderMemmyProjectSkillFile(source) }]);
 }
 
-export async function removeMemmySessionSkillDirectory(rootDirectory: string): Promise<void> {
-  await rm(join(rootDirectory, "skills", MEMMY_SESSION_SKILL_DIRECTORY_NAME), { recursive: true, force: true });
+export async function removeMemmyProjectSkillDirectory(rootDirectory: string): Promise<void> {
+  await rm(join(rootDirectory, "skills", MEMMY_PROJECT_SKILL_DIRECTORY_NAME), { recursive: true, force: true });
 }
 
-/** Whether the installed `memmy-session` skill matches this build; a missing one does not. */
-export async function isMemmySessionSkillDirectoryCurrent(rootDirectory: string, source?: string): Promise<boolean> {
-  const actual = await readFile(join(rootDirectory, "skills", MEMMY_SESSION_SKILL_DIRECTORY_NAME, "SKILL.md"), "utf8").catch(() => null);
-  return actual === renderMemmySessionSkillFile(source);
+/** Whether the installed `memmy-project` skill matches this build; a missing one does not. */
+export async function isMemmyProjectSkillDirectoryCurrent(rootDirectory: string, source?: string): Promise<boolean> {
+  const actual = await readFile(join(rootDirectory, "skills", MEMMY_PROJECT_SKILL_DIRECTORY_NAME, "SKILL.md"), "utf8").catch(() => null);
+  return actual === renderMemmyProjectSkillFile(source);
 }
 
 function temporarySiblingPath(path: string): string {

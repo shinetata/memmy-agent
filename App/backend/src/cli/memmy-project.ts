@@ -1,12 +1,13 @@
 #!/usr/bin/env node
 /**
- * `memmy-session`: lets an agent check which shared Memmy projects the person is in, find and read their sessions,
+ * `memmy-project`: lets an agent check which shared Memmy projects the person is in, find and read their sessions,
  * and add the current local task to one project. The desktop app holds the account and talks to the cloud, so
  * every command goes through its local API, found via ~/.memmy/runtime.json. Nothing here touches memory.
  *
  * Only Node built-ins are imported: the desktop build copies this one file next to its launcher.
  */
 import { readFile } from "node:fs/promises";
+import { realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -23,15 +24,15 @@ const NO_PROJECT = "你还没有加入任何 Memmy 协作项目，没有可检�
 const NO_SHARED_TASKS = "你加入的协作项目中还没有共享的任务，换关键词也找不到。成员在 Memmy 中开启协作、同步任务后才能找到。";
 const USAGE = [
   "Usage:",
-  "  memmy-session projects",
-  "  memmy-session search <keywords> [--member <name>] [--project <project name>] [--since 30d] [--limit <n>]",
-  "  memmy-session read <link|id|id#turn> [--turns <from>-<to> | --around <turn> | --find \"<sentence>\" | --all]",
-  "  memmy-session add [--project <project name>] [--hint \"<sentence>\"]",
+  "  memmy-project list",
+  "  memmy-project session search <keywords> [--member <name>] [--project <project name>] [--since 30d] [--limit <n>]",
+  "  memmy-project session read <link|id|id#turn> [--turns <from>-<to> | --around <turn> | --find \"<sentence>\" | --all]",
+  "  memmy-project session add [--project <project name>] [--hint \"<sentence>\"]",
   "",
   "Finds and reads sessions of your shared Memmy projects, and adds the current one to a project. Memmy must be running."
 ].join("\n");
 
-export interface MemmySessionDeps {
+export interface MemmyProjectDeps {
   fetch?: typeof fetch;
   runtimeConfigPath?: string;
   /** Working directory of the conversation. Tests pass one; otherwise the command uses its own. */
@@ -75,24 +76,24 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
   return { positionals, options };
 }
 
-/**
- * Runs `projects`, `read`, `search`, or `add` (the current task, into one project).
- */
-export async function runMemmySession(argv: readonly string[], deps: MemmySessionDeps = {}): Promise<string> {
+/** Runs project operations and the `session` command group. */
+export async function runMemmyProject(argv: readonly string[], deps: MemmyProjectDeps = {}): Promise<string> {
   const parsed = parseArgs(argv);
-  const [action, ...rest] = parsed.positionals;
-  if (!action || action === "help" || parsed.options.help) {
+  const [resource, action, ...rest] = parsed.positionals;
+  if (!resource || resource === "help" || parsed.options.help || (resource === "session" && (!action || action === "help"))) {
     return USAGE;
   }
-  if (action === "projects") {
+  if (resource === "list") {
+    if (action) throw new Error("list 不接受额外参数");
     const projects = await listProjects(deps);
     if (!projects) throw new Error("无法读取协作项目列表，请稍后重试。");
     return formatProjects(projects);
   }
+  if (resource !== "session") throw new Error(`未知命令：${resource}\n\n${USAGE}`);
   if (action === "read") {
     const raw = rest.join(" ").trim();
     if (!raw) {
-      throw new Error("read 需要 Memmy 任务链接或任务 ID");
+      throw new Error("session read 需要 Memmy 任务链接或任务 ID");
     }
     // 搜索结果的 `任务ID#轮次` 本身就是读取范围：和 --turns 等价，不用再猜轮次从几开始。
     const { reference, turn } = parseTurnCoordinate(raw);
@@ -107,7 +108,7 @@ export async function runMemmySession(argv: readonly string[], deps: MemmySessio
     return typeof result.text === "string" ? result.text : "";
   }
   if (action === "add") {
-    if (rest.length) throw new Error("add 用 --project 指定项目名称");
+    if (rest.length) throw new Error("session add 用 --project 指定项目名称");
     const project = optionString(parsed, "project")?.trim();
     const hint = optionString(parsed, "hint")?.trim();
     const running = runningConversation(deps.env ?? process.env);
@@ -133,7 +134,7 @@ export async function runMemmySession(argv: readonly string[], deps: MemmySessio
     }
     return sessions.map(formatSearchLine).join("\n");
   }
-  throw new Error(`未知命令：${action}\n\n${USAGE}`);
+  throw new Error(`未知命令：session ${action}\n\n${USAGE}`);
 }
 
 /**
@@ -154,7 +155,7 @@ export function runningConversation(env: NodeJS.ProcessEnv): { sourceId: string;
  * The projects the person is in, as the board lists them; a pending join request is not membership. Null when the
  * answer does not list projects, so a caller cannot mistake an unknown for none.
  */
-async function listProjects(deps: MemmySessionDeps): Promise<Record<string, unknown>[] | null> {
+async function listProjects(deps: MemmyProjectDeps): Promise<Record<string, unknown>[] | null> {
   const result = await localApi(deps, "GET", "/api/collab/projects");
   return Array.isArray(result.projects) ? result.projects.filter(isRecord) : null;
 }
@@ -170,7 +171,7 @@ function formatProjects(projects: readonly Record<string, unknown>[]): string {
  * Why a search found nothing. Only someone with shared tasks can fix it with other keywords; looking costs a second
  * request, made only on an empty result, and any failure there falls back to the keyword advice.
  */
-async function noMatchMessage(deps: MemmySessionDeps): Promise<string> {
+async function noMatchMessage(deps: MemmyProjectDeps): Promise<string> {
   const projects = await listProjects(deps).catch(() => null);
   if (!projects) return NO_MATCH;
   if (!projects.length) return NO_PROJECT;
@@ -265,7 +266,7 @@ export function parseTurnCoordinate(reference: string): { reference: string; tur
 }
 
 async function localApi(
-  deps: MemmySessionDeps,
+  deps: MemmyProjectDeps,
   method: "GET" | "POST",
   path: string,
   body?: unknown
@@ -340,13 +341,13 @@ function text(value: unknown): string {
 
 async function main(): Promise<void> {
   try {
-    process.stdout.write(`${await runMemmySession(process.argv.slice(2))}\n`);
+    process.stdout.write(`${await runMemmyProject(process.argv.slice(2))}\n`);
   } catch (error) {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
     process.exitCode = 1;
   }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(resolve(process.argv[1]))).href) {
   void main();
 }

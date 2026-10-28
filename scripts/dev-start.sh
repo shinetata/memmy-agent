@@ -7,7 +7,7 @@ MEMMY_AGENT_DIR="$ROOT_DIR/App/memmy-agent"
 DESKTOP_DIR="$ROOT_DIR/App/shell/desktop"
 ELECTRON_PACKAGE_DIR="$DESKTOP_DIR/node_modules/electron"
 MEMORY_CLI_ENTRY="$ROOT_DIR/Memory/dist/src/cli/index.js"
-SESSION_CLI_ENTRY="$ROOT_DIR/App/backend/dist/src/cli/memmy-session.js"
+PROJECT_CLI_ENTRY="$ROOT_DIR/App/backend/dist/src/cli/memmy-project.js"
 MEMMY_CONFIG_PATH="${MEMMY_CONFIG:-$HOME/.memmy/config.yaml}"
 MEMMY_WORKSPACE_IS_EXPLICIT=0
 if [[ -n "${MEMMY_WORKSPACE:-}" ]]; then
@@ -339,7 +339,7 @@ is_managed_user_cli_target() {
   case "$name" in
     memmy-memory) expected_suffix="Memory/dist/src/cli/index.js" ;;
     memmy) expected_suffix="App/memmy-agent/dist/main.js" ;;
-    memmy-session) expected_suffix="App/backend/dist/src/cli/memmy-session.js" ;;
+    memmy-project) expected_suffix="App/backend/dist/src/cli/memmy-project.js" ;;
     *) return 1 ;;
   esac
 
@@ -689,11 +689,11 @@ NODE
   "$(user_cli_path "memmy")" --version >/dev/null
   log "memmy command is ready in $MEMMY_BIN_DIR"
 
-  # memmy-session is built with the desktop backend, which the desktop dev build below compiles.
-  if [[ -f "$SESSION_CLI_ENTRY" ]]; then
-    install_user_cli_link "memmy-session" "$SESSION_CLI_ENTRY"
+  # The project CLI is built with the desktop backend.
+  if [[ -f "$PROJECT_CLI_ENTRY" ]]; then
+    install_user_cli_link "memmy-project" "$PROJECT_CLI_ENTRY"
   else
-    log "memmy-session is not built yet; the next dev-start links it"
+    log "memmy-project is not built yet; the next dev-start links it"
   fi
 
   log "refreshing non-interactive memmy-agent onboard state"

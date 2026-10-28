@@ -245,7 +245,7 @@ Usage: install-cli [--prefix <dir>]
 Installs symlinks for:
   memmy-memory
   memmy
-  memmy-session
+  memmy-project
 
 Default prefix:
   ~/.local/bin
@@ -281,7 +281,7 @@ fi
 mkdir -p "$PREFIX"
 ln -sf "$SCRIPT_DIR/memmy-memory" "$PREFIX/memmy-memory"
 ln -sf "$SCRIPT_DIR/memmy" "$PREFIX/memmy"
-ln -sf "$SCRIPT_DIR/memmy-session" "$PREFIX/memmy-session"
+ln -sf "$SCRIPT_DIR/memmy-project" "$PREFIX/memmy-project"
 
 add_local_bin_to_profile() {
   local profile_path="$1"
@@ -300,7 +300,7 @@ cat <<MESSAGE
 Memmy CLI installed:
   $PREFIX/memmy-memory -> $SCRIPT_DIR/memmy-memory
   $PREFIX/memmy        -> $SCRIPT_DIR/memmy
-  $PREFIX/memmy-session -> $SCRIPT_DIR/memmy-session
+  $PREFIX/memmy-project -> $SCRIPT_DIR/memmy-project
 MESSAGE
 
 case ":$PATH:" in
@@ -1160,7 +1160,7 @@ node_modules/.bin/electron-rebuild \
 package_step_start "Create CLI launchers"
 create_cli_launcher "$CLI_BIN_DIR/memmy-memory" "dist/src/cli/index.js" resource
 create_cli_launcher "$CLI_BIN_DIR/memmy" "dist/runtime/memmy-agent/dist/main.js"
-create_cli_launcher "$CLI_BIN_DIR/memmy-session" "dist/cli/memmy-session.js"
+create_cli_launcher "$CLI_BIN_DIR/memmy-project" "dist/cli/memmy-project.js"
 create_cli_installer "$CLI_BIN_DIR/install-cli"
 create_dmg_cli_installer_command "$DMG_HELPER_DIR/Install CLI.command"
 package_step_start "Prune and verify macOS runtime artifacts"

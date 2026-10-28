@@ -6,9 +6,9 @@ import { basename, dirname, join } from "node:path";
 import { resolveOpencodeConfigDirectory } from "../../agent-paths.js";
 import { readMemmyMemoryServiceConfig } from "../memmy-runtime-config.js";
 import {
-  removeMemmySessionSkillDirectory,
+  removeMemmyProjectSkillDirectory,
   removeMemmySkillDirectory,
-  replaceMemmySessionSkillDirectory,
+  replaceMemmyProjectSkillDirectory,
   replaceMemmySkillDirectory
 } from "../skill-directory.js";
 import { renderMemmyOpencodePlugin, renderMemmyOpencodeResumeCommand } from "../templates/memmy-opencode-plugin.js";
@@ -59,7 +59,7 @@ export function createOpencodeSkillTarget(deps: CreateOpencodeSkillTargetDeps = 
       const existing = removeCliMarkerBlock(await readTextFile(filePath));
       await writeFileAtomically(filePath, upsertMarkerBlock(existing, renderMemmySkillBootstrapManifest(manifest)));
       await replaceMemmySkillDirectory(rootDirectory, manifest);
-      await replaceMemmySessionSkillDirectory(rootDirectory);
+      await replaceMemmyProjectSkillDirectory(rootDirectory);
     },
 
     async uninstall(_targetId) {
@@ -74,7 +74,7 @@ export function createOpencodeSkillTarget(deps: CreateOpencodeSkillTargetDeps = 
         await writeFileAtomically(filePath, removeMarkerBlock(existing));
       }
       await removeMemmySkillDirectory(root);
-      await removeMemmySessionSkillDirectory(root);
+      await removeMemmyProjectSkillDirectory(root);
     },
 
     async isInstalled(_targetId) {
@@ -122,7 +122,7 @@ export function createOpencodeSkillTarget(deps: CreateOpencodeSkillTargetDeps = 
         )
       );
       await replaceMemmySkillDirectory(rootDirectory, manifest);
-      await replaceMemmySessionSkillDirectory(rootDirectory);
+      await replaceMemmyProjectSkillDirectory(rootDirectory);
       // Publish the revision only after every managed file was installed.
       await writeFileAtomically(configPath, `${JSON.stringify({ ...config,
         plugin_revision: pluginRevision(assets), plugin_integrity: assetRevision(assets)
@@ -145,7 +145,7 @@ export function createOpencodeSkillTarget(deps: CreateOpencodeSkillTargetDeps = 
         await writeFileAtomically(filePath, removeMarkerBlock(existing));
       }
       await removeMemmySkillDirectory(root);
-      await removeMemmySessionSkillDirectory(root);
+      await removeMemmyProjectSkillDirectory(root);
     }
   };
 }

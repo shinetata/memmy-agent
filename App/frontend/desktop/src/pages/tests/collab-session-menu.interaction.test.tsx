@@ -14,6 +14,8 @@ import { CollabPage } from "../collab-page.js";
 
 const mocks = vi.hoisted(() => ({
   listProjects: vi.fn(),
+  // 项目配置会读关联的知识库；这一层不关心内容，给空列表即可。
+  knowledge: vi.fn(),
   listSessions: vi.fn(),
   readSessionDetail: vi.fn(),
   removeSession: vi.fn(),
@@ -94,6 +96,7 @@ describe("collab session row menu", () => {
       configurable: true
     });
     mocks.listProjects.mockResolvedValue([project]);
+    mocks.knowledge.mockResolvedValue({ bases: [], maxBases: 10, canManage: false });
     mocks.listSessions.mockResolvedValue({ project, sessions: [session], total: 1 });
     mocks.getSyncProgress.mockResolvedValue({ running: false, total: 0, completed: 0, failed: 0 });
     mocks.syncSessions.mockResolvedValue({ uploaded: 0, removed: 0, failed: 0 });
@@ -153,8 +156,8 @@ describe("collab session row menu", () => {
     expect(mocks.writeText).toHaveBeenCalledWith(session.shareText);
     expect(document.body.textContent).toContain("链接已复制");
     expect(mocks.readSessionDetail).not.toHaveBeenCalled();
-    // The reader is the wide modal; nothing over the board may be open after copying.
-    expect(document.querySelector(".modal")).toBeNull();
+    // 复制不该把读取面板一起打开：面板是浮在看板上的那块，而不是弹窗。
+    expect(document.querySelector("[data-collab-reader]")).toBeNull();
     expect(menuItem("复制链接")).toBeUndefined();
   });
 
@@ -198,7 +201,7 @@ describe("collab session row menu", () => {
       turns: [
         {
           question: "帮我看下部署 *原样*",
-          reply: "可以部署。\n\n- 已带上 `memmy-session`\n- 见 [部署说明](/tmp/deploy.md)",
+          reply: "可以部署。\n\n- 已带上 `memmy-project`\n- 见 [部署说明](/tmp/deploy.md)",
           steps: ["Bash", "Edit"],
           startedAt: "2026-10-26T15:11:00.000Z"
         },
@@ -229,9 +232,9 @@ describe("collab session row menu", () => {
     expect(users[0]?.textContent).toContain("帮我看下部署 *原样*");
     expect(users[0]?.querySelector("em")).toBeNull();
     expect(agents[0]?.textContent).toContain("Claude Code");
-    expect(agents[0]?.querySelector("code")?.textContent).toBe("memmy-session");
+    expect(agents[0]?.querySelector("code")?.textContent).toBe("memmy-project");
     expect([...agents[0]!.querySelectorAll("li")].map((item) => item.textContent)).toEqual([
-      "已带上 memmy-session",
+      "已带上 memmy-project",
       "见 部署说明"
     ]);
     expect(agents[0]?.querySelector("a")).toBeNull();

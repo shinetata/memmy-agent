@@ -64,7 +64,13 @@ export function createLocalApiServer(options: CreateLocalApiServerOptions): Fast
   const authenticateRuntimeToken = createRuntimeTokenPreHandler(options.permissionManager);
 
   if (options.knowledge) {
-    registerKnowledgeRoutes(app, { ...options.knowledge, authenticate: authenticateRuntimeToken });
+    registerKnowledgeRoutes(app, {
+      ...options.knowledge,
+      authenticate: authenticateRuntimeToken,
+      // 会话目录属于某个协作项目时，项目关联的知识库与该成员自己的库一起检索。
+      projectForWorkspace: async (workspace) =>
+        (await options.collab?.cloudProjectForDirectory(workspace)) ?? null,
+    });
   }
 
   app.addHook("onRequest", async (request, reply) => {

@@ -122,44 +122,40 @@ describe("claude code skill target", () => {
   it("allows the session commands once and removes only its own rules", async () => {
     const { rootDirectory, memmyConfigPath } = createFixture();
     const target = createClaudeCodeSkillTarget({ rootDirectory, memmyConfigPath });
-    // An earlier install allowed the commands sessions were read through before `memmy-session`.
     writeFileSync(join(rootDirectory, "settings.json"), JSON.stringify({
-      permissions: { allow: ["Bash(npm test:*)", "Bash(memmy-memory sessions read:*)"], deny: ["Bash(rm:*)"] }
+      permissions: { allow: ["Bash(npm test:*)"], deny: ["Bash(rm:*)"] }
     }));
     const readSettings = () => JSON.parse(readFileSync(join(rootDirectory, "settings.json"), "utf8")) as { permissions?: { allow?: string[]; deny?: string[] } };
 
     await target.installPlugin?.("claude_code");
     await target.installPlugin?.("claude_code");
 
-    expect(readSettings().permissions).toEqual({
-      allow: [
-        "Bash(npm test:*)",
-        "Bash(memmy-session read:*)",
-        "Bash(memmy-session search:*)",
-        "Bash(memmy-session projects:*)",
-        "Bash(memmy-session add:*)",
-        "Bash(~/.local/bin/memmy-session:*)",
-        "Bash(/Applications/Memmy.app/Contents/Resources/cli/memmy-session:*)",
-        "Bash(~/Applications/Memmy.app/Contents/Resources/cli/memmy-session:*)",
-        "Bash(%LOCALAPPDATA%\\Programs\\Memmy\\resources\\cli\\memmy-session.cmd:*)",
-        "Bash(%ProgramFiles%\\Memmy\\resources\\cli\\memmy-session.cmd:*)",
-        "Read(~/.memmy/projects/**)"
-      ],
-      deny: ["Bash(rm:*)"]
-    });
-    const sessionSkillFile = readFileSync(join(rootDirectory, "skills", "memmy-session", "SKILL.md"), "utf8");
-    expect(sessionSkillFile).toContain("name: memmy-session");
+    const permissions = readSettings().permissions;
+    expect(permissions?.allow).toEqual(expect.arrayContaining([
+      "Bash(npm test:*)",
+      "Bash(memmy-project list:*)",
+      "Bash(memmy-project session read:*)",
+      "Bash(memmy-project session search:*)",
+      "Bash(memmy-project session add:*)",
+      "Bash(~/.local/bin/memmy-project session read:*)"
+    ]));
+    expect(new Set(permissions?.allow).size).toBe(permissions?.allow?.length);
+    expect(permissions?.allow).not.toContain("Bash(~/.local/bin/memmy-project:*)");
+    expect(permissions?.allow?.join("\n")).not.toContain("memmy-session");
+    expect(permissions?.deny).toEqual(["Bash(rm:*)"]);
+    const sessionSkillFile = readFileSync(join(rootDirectory, "skills", "memmy-project", "SKILL.md"), "utf8");
+    expect(sessionSkillFile).toContain("name: memmy-project");
     expect(sessionSkillFile).toContain("## 把当前任务加入项目");
-    expect(sessionSkillFile).toContain("memmy-session add --project");
-    expect(sessionSkillFile).toContain("不要运行不带路径的 `memmy-session`");
-    expect(sessionSkillFile).toContain("%LOCALAPPDATA%\\Programs\\Memmy\\resources\\cli\\memmy-session.cmd");
-    expect(sessionSkillFile).toContain("/Applications/Memmy.app/Contents/Resources/cli/memmy-session");
+    expect(sessionSkillFile).toContain("memmy-project session add --project");
+    expect(sessionSkillFile).toContain("不要运行不带路径的 `memmy-project`");
+    expect(sessionSkillFile).toContain("%LOCALAPPDATA%\\Programs\\Memmy\\resources\\cli\\memmy-project.cmd");
+    expect(sessionSkillFile).toContain("/Applications/Memmy.app/Contents/Resources/cli/memmy-project");
     expect(sessionSkillFile).not.toContain("escalated permissions");
 
     await target.uninstallPlugin?.("claude_code");
 
     expect(readSettings().permissions).toEqual({ allow: ["Bash(npm test:*)"], deny: ["Bash(rm:*)"] });
-    expect(existsSync(join(rootDirectory, "skills", "memmy-session"))).toBe(false);
+    expect(existsSync(join(rootDirectory, "skills", "memmy-project"))).toBe(false);
   });
 
   it("marks a hook without a stored revision as outdated and refreshes it in place", async () => {

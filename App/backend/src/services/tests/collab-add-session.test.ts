@@ -47,8 +47,8 @@ describe("adding the current task", () => {
 
   it("quotes the next command so a name with spaces and quotes can be copied", () => {
     expect(addCommand({ project: "Memmy 开发", hint: "给分享接口加上限流" }))
-      .toBe("memmy-session add --project \"Memmy 开发\" --hint \"给分享接口加上限流\"");
-    expect(addCommand({ project: "A \"B\"" })).toBe("memmy-session add --project \"A \\\"B\\\"\"");
-    expect(addCommand({ projectPlaceholder: true })).toBe("memmy-session add --project \"<完整名称>\"");
+      .toBe("memmy-project session add --project \"Memmy 开发\" --hint \"给分享接口加上限流\"");
+    expect(addCommand({ project: "A \"B\"" })).toBe("memmy-project session add --project \"A \\\"B\\\"\"");
+    expect(addCommand({ projectPlaceholder: true })).toBe("memmy-project session add --project \"<完整名称>\"");
   });
 });

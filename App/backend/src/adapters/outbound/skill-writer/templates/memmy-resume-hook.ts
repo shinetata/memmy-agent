@@ -24,6 +24,7 @@ import {
   notifyRuntimeBoundary,
   openRuntimeSession,
   readProjectInstructions,
+  recallProjectKnowledge,
   startRuntimeTurn
 } from "./memmy-workspace-bridge.mjs";
 
@@ -96,7 +97,8 @@ async function main() {
   if (!isResumeCommand(prompt)) {
     try {
       const started = await startCapturedTurn(payload, prompt);
-      writeTurnStartOutput(started);
+      // 知识库与记忆同一轮注入：这一轮的提问就是检索问题，工作目录决定要用哪个项目的知识库。
+      writeTurnStartOutput(started, await projectKnowledgeContext(payload, prompt));
     } catch (error) {
       reportCaptureFailure("start_failed", error, payload);
       writeAllowOutput();
@@ -730,7 +732,23 @@ function writeStopOutput() {
   }));
 }
 
-function writeTurnStartOutput(started) {
+/**
+ * 项目关联的知识库：钩子只把工作目录与这一轮的提问交给本机后端，由它判断属于哪个项目、关联了哪些库。
+ * 未关联、后端没起、检索失败都返回空串，不影响这一轮。
+ */
+async function projectKnowledgeContext(payload, prompt) {
+  try {
+    return await recallProjectKnowledge({
+      configUrl: CONFIG_URL,
+      query: sanitizeCaptureText(prompt),
+      workspace: workspacePath(payload) || null
+    });
+  } catch {
+    return "";
+  }
+}
+
+function writeTurnStartOutput(started, knowledge) {
   if (MODE === "cursor") {
     writeAllowOutput();
     return;
@@ -738,17 +756,23 @@ function writeTurnStartOutput(started) {
   const injected = started && started.injectedContext && typeof started.injectedContext === "object"
     ? normalizeText(started.injectedContext.markdown)
     : normalizeText(started && started.injectedContext);
-  if (!injected) {
+  const sections = [];
+  if (injected) {
+    sections.push([
+      '<memmy_memory_context source="turn_start">',
+      "The following is historical memory context. Use it as supporting context, not as a new user request.",
+      "",
+      injected,
+      "</memmy_memory_context>"
+    ].join("\n"));
+  }
+  // 知识库是项目关联的资料，和记忆分开放，模型据此区分来源。
+  if (normalizeText(knowledge)) sections.push(normalizeText(knowledge));
+  if (!sections.length) {
     writeAllowOutput();
     return;
   }
-  writeResumeContextOutput([
-    '<memmy_memory_context source="turn_start">',
-    "The following is historical memory context. Use it as supporting context, not as a new user request.",
-    "",
-    injected,
-    "</memmy_memory_context>"
-  ].join("\n"));
+  writeResumeContextOutput(sections.join("\n\n"));
 }
 
 function writeResultOutput(message) {

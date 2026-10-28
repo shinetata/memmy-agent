@@ -3,10 +3,10 @@ import { join } from "node:path";
 import { resolveWorkbuddyHomeDirectory } from "../../agent-paths.js";
 import {
   removeMemmyResumeSkillDirectory,
-  removeMemmySessionSkillDirectory,
+  removeMemmyProjectSkillDirectory,
   removeMemmySkillDirectory,
   replaceMemmyResumeSkillDirectory,
-  replaceMemmySessionSkillDirectory,
+  replaceMemmyProjectSkillDirectory,
   replaceMemmySkillDirectory
 } from "../skill-directory.js";
 import type { SkillTarget } from "../types.js";
@@ -35,7 +35,7 @@ export function createWorkbuddySkillTarget(deps: CreateWorkbuddySkillTargetDeps 
         throw new Error("WorkBuddy is not installed or its directory is unavailable");
       }
       await replaceMemmySkillDirectory(root, manifest);
-      await replaceMemmySessionSkillDirectory(root);
+      await replaceMemmyProjectSkillDirectory(root);
       await replaceMemmyResumeSkillDirectory(root, WORKBUDDY_TARGET_ID);
     },
 
@@ -44,7 +44,7 @@ export function createWorkbuddySkillTarget(deps: CreateWorkbuddySkillTargetDeps 
       if (root) {
         await removeMemmyResumeSkillDirectory(root);
         await removeMemmySkillDirectory(root);
-        await removeMemmySessionSkillDirectory(root);
+        await removeMemmyProjectSkillDirectory(root);
       }
     },
 

@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { runMemmySession } from "../memmy-session.js";
+import { runMemmyProject } from "../memmy-project.js";
 
 const roots: string[] = [];
 afterEach(() => {
@@ -10,18 +10,29 @@ afterEach(() => {
 });
 
 function runtimeFile(contents: unknown): string {
-  const root = mkdtempSync(join(tmpdir(), "memmy-session-cli-"));
+  const root = mkdtempSync(join(tmpdir(), "memmy-project-cli-"));
   roots.push(root);
   const path = join(root, "runtime.json");
   writeFileSync(path, JSON.stringify(contents));
   return path;
 }
 
-function run(argv: string[], deps: Parameters<typeof runMemmySession>[1]) {
-  return runMemmySession(argv, deps);
+function run(argv: string[], deps: Parameters<typeof runMemmyProject>[1]) {
+  return runMemmyProject(argv, deps);
 }
 
-describe("memmy-session", () => {
+describe("memmy-project", () => {
+  it("shows the canonical command groups and rejects ungrouped session operations", async () => {
+    for (const args of [[], ["help"], ["--help"], ["session"], ["session", "--help"], ["session", "help"]]) {
+      const output = await run(args, {});
+      expect(output).toContain("memmy-project list");
+      expect(output).toContain("memmy-project session search");
+      expect(output).not.toContain("memmy-session");
+    }
+    for (const args of [["search", "关键词"], ["projects"], ["session", "delete", "abc"]]) {
+      await expect(run(args, {})).rejects.toThrow(/未知命令/u);
+    }
+  });
   it("reads a pasted link through the desktop's local API and prints the reference text", async () => {
     const calls: Array<{ url: string; headers: Record<string, string>; body: unknown }> = [];
     const fetcher = (async (input: string | URL, init?: RequestInit) => {
@@ -30,7 +41,7 @@ describe("memmy-session", () => {
     }) as typeof fetch;
     const runtimeConfigPath = runtimeFile({ baseUrl: "http://127.0.0.1:62315", localToken: "local-token" });
 
-    const output = await run(["read", "https://memmy.example/s/abc-123"], { fetch: fetcher, runtimeConfigPath });
+    const output = await run(["session", "read", "https://memmy.example/s/abc-123"], { fetch: fetcher, runtimeConfigPath });
 
     expect(output).toBe("已引用用户C 的会话「重复分享返回 409」。\n完整记录：/tmp/s.md");
     expect(calls[0]).toEqual({
@@ -49,12 +60,12 @@ describe("memmy-session", () => {
     }) as typeof fetch;
     const runtimeConfigPath = runtimeFile({ baseUrl: "http://127.0.0.1:62315", localToken: "t" });
 
-    expect(await run(["search", "重复分享", "--member", "用户C", "--limit", "3"], { fetch: fetcher, runtimeConfigPath }))
+    expect(await run(["session", "search", "重复分享", "--member", "用户C", "--limit", "3"], { fetch: fetcher, runtimeConfigPath }))
       .toBe("s-409  重复分享返回 409  Memmy 开发 · 用户C");
     const url = new URL(lastUrl);
     expect(url.pathname).toBe("/api/collab/sessions/search");
     expect(Object.fromEntries(url.searchParams)).toEqual({ q: "重复分享", member: "用户C", limit: "3" });
-    expect(await run(["search", "nothing"], { fetch: fetcher, runtimeConfigPath })).toMatch(/^没有匹配的任务。/u);
+    expect(await run(["session", "search", "nothing"], { fetch: fetcher, runtimeConfigPath })).toMatch(/^没有匹配的任务。/u);
   });
 
   it("lists the projects the person is in, and says when there is nothing to search", async () => {
@@ -70,15 +81,15 @@ describe("memmy-session", () => {
       { id: "p1", name: "Memmy 开发", memberCount: 5, sessionCount: 32 },
       { id: "p2", name: "设计评审", memberCount: 3, sessionCount: 0 }
     ];
-    expect(await run(["projects"], { fetch: fetcher, runtimeConfigPath }))
+    expect(await run(["list"], { fetch: fetcher, runtimeConfigPath }))
       .toBe("已加入 2 个协作项目：\nMemmy 开发 · 5 位成员 · 32 个任务\n设计评审 · 3 位成员 · 0 个任务");
     expect(new URL(lastUrl).pathname).toBe("/api/collab/projects");
 
     projects = [{ id: "p2", name: "设计评审", memberCount: 3, sessionCount: 0 }];
-    expect(await run(["projects"], { fetch: fetcher, runtimeConfigPath })).toMatch(/还没有共享的任务，换关键词也找不到/u);
+    expect(await run(["list"], { fetch: fetcher, runtimeConfigPath })).toMatch(/还没有共享的任务，换关键词也找不到/u);
 
     projects = [];
-    expect(await run(["projects"], { fetch: fetcher, runtimeConfigPath })).toMatch(/^你还没有加入任何 Memmy 协作项目/u);
+    expect(await run(["list"], { fetch: fetcher, runtimeConfigPath })).toMatch(/^你还没有加入任何 Memmy 协作项目/u);
   });
 
   it("tells an empty search apart: no project, no shared task, or other keywords to try", async () => {
@@ -93,7 +104,7 @@ describe("memmy-session", () => {
       return new Response(JSON.stringify({ sessions: [] }), { status: 200 });
     }) as typeof fetch;
     const runtimeConfigPath = runtimeFile({ baseUrl: "http://127.0.0.1:62315", localToken: "t" });
-    const search = () => run(["search", "分享 弹窗"], { fetch: fetcher, runtimeConfigPath });
+    const search = () => run(["session", "search", "分享 弹窗"], { fetch: fetcher, runtimeConfigPath });
 
     expect(await search()).toMatch(/^你还没有加入任何 Memmy 协作项目/u);
     projects = [{ id: "p1", name: "Memmy 开发", memberCount: 2, sessionCount: 0 }];
@@ -122,7 +133,7 @@ describe("memmy-session", () => {
     }) as typeof fetch;
     const runtimeConfigPath = runtimeFile({ baseUrl: "http://127.0.0.1:62315", localToken: "t" });
 
-    expect(await run(["search", "项目", "记忆", "--since", "30d"], { fetch: fetcher, runtimeConfigPath }))
+    expect(await run(["session", "search", "项目", "记忆", "--since", "30d"], { fetch: fetcher, runtimeConfigPath }))
       .toBe("a  Memmy项目协作记忆方案  Markdown事项验证、测试 · 用户C");
     expect(Object.fromEntries(new URL(lastUrl).searchParams)).toEqual({ q: "项目 记忆", since: "30d" });
   });
@@ -135,30 +146,30 @@ describe("memmy-session", () => {
     }) as typeof fetch;
     const runtimeConfigPath = runtimeFile({ baseUrl: "http://127.0.0.1:62315", localToken: "t" });
 
-    await run(["read", "abc", "--around", "12"], { fetch: fetcher, runtimeConfigPath });
-    await run(["read", "abc", "--turns", "8-3"], { fetch: fetcher, runtimeConfigPath });
-    await run(["read", "abc", "--find", "云端先校验版本"], { fetch: fetcher, runtimeConfigPath });
-    await run(["read", "abc", "--all"], { fetch: fetcher, runtimeConfigPath });
+    await run(["session", "read", "abc", "--around", "12"], { fetch: fetcher, runtimeConfigPath });
+    await run(["session", "read", "abc", "--turns", "8-3"], { fetch: fetcher, runtimeConfigPath });
+    await run(["session", "read", "abc", "--find", "云端先校验版本"], { fetch: fetcher, runtimeConfigPath });
+    await run(["session", "read", "abc", "--all"], { fetch: fetcher, runtimeConfigPath });
     expect(bodies.map((body) => (body as { view: unknown }).view)).toEqual([
       { around: 12 },
       { turns: { from: 3, to: 8 } },
       { find: "云端先校验版本" },
       { all: true }
     ]);
-    await expect(run(["read", "abc", "--around", "2", "--all"], { fetch: fetcher, runtimeConfigPath })).rejects.toThrow(/只能指定一种读取范围/u);
-    await expect(run(["read", "abc", "--turns", "a-b"], { fetch: fetcher, runtimeConfigPath })).rejects.toThrow(/--turns/u);
-    await expect(run(["read", "abc", "--around", "0"], { fetch: fetcher, runtimeConfigPath })).rejects.toThrow(/--around/u);
+    await expect(run(["session", "read", "abc", "--around", "2", "--all"], { fetch: fetcher, runtimeConfigPath })).rejects.toThrow(/只能指定一种读取范围/u);
+    await expect(run(["session", "read", "abc", "--turns", "a-b"], { fetch: fetcher, runtimeConfigPath })).rejects.toThrow(/--turns/u);
+    await expect(run(["session", "read", "abc", "--around", "0"], { fetch: fetcher, runtimeConfigPath })).rejects.toThrow(/--around/u);
   });
 
   it("tells the agent to open Memmy when the desktop app is not running, and relays API errors", async () => {
     const missing = join(tmpdir(), "memmy-no-such-runtime.json");
-    await expect(run(["read", "abc"], { runtimeConfigPath: missing })).rejects.toThrow("无法连接 Memmy，请打开 Memmy 后重试。");
+    await expect(run(["session", "read", "abc"], { runtimeConfigPath: missing })).rejects.toThrow("无法连接 Memmy，请打开 Memmy 后重试。");
     const denied = (async () => new Response(JSON.stringify({ error: { code: "not_found", message: "项目或会话不存在，或你不是该项目的成员" } }), { status: 404 })) as typeof fetch;
     const runtimeConfigPath = runtimeFile({ baseUrl: "http://127.0.0.1:62315", localToken: "t" });
-    await expect(run(["read", "abc"], { fetch: denied, runtimeConfigPath })).rejects.toThrow("项目或会话不存在，或你不是该项目的成员");
-    await expect(run(["read"], { runtimeConfigPath })).rejects.toThrow(/需要 Memmy 任务链接/u);
+    await expect(run(["session", "read", "abc"], { fetch: denied, runtimeConfigPath })).rejects.toThrow("项目或会话不存在，或你不是该项目的成员");
+    await expect(run(["session", "read"], { runtimeConfigPath })).rejects.toThrow(/需要 Memmy 任务链接/u);
     expect(await run([], { runtimeConfigPath })).toMatch(/^Usage:/u);
-    await expect(run(["list"], { runtimeConfigPath })).rejects.toThrow(/未知命令：list/u);
+    await expect(run(["unknown"], { runtimeConfigPath })).rejects.toThrow(/未知命令：unknown/u);
   });
 
   it("tells a sandboxed agent to rerun outside the sandbox, and only a refused connection to open Memmy", async () => {
@@ -167,8 +178,8 @@ describe("memmy-session", () => {
     }) as typeof fetch;
     const runtimeConfigPath = runtimeFile({ baseUrl: "http://127.0.0.1:62315", localToken: "t" });
 
-    await expect(run(["search", "连接器"], { fetch: failing("EPERM"), runtimeConfigPath })).rejects.toThrow(/沙箱外权限重新运行/u);
-    await expect(run(["search", "连接器"], { fetch: failing("ECONNREFUSED"), runtimeConfigPath }))
+    await expect(run(["session", "search", "连接器"], { fetch: failing("EPERM"), runtimeConfigPath })).rejects.toThrow(/沙箱外权限重新运行/u);
+    await expect(run(["session", "search", "连接器"], { fetch: failing("ECONNREFUSED"), runtimeConfigPath }))
       .rejects.toThrow("无法连接 Memmy，请打开 Memmy 后重试。");
   });
 
@@ -180,22 +191,22 @@ describe("memmy-session", () => {
     const runtimeConfigPath = runtimeFile({ baseUrl: "http://127.0.0.1:62315", localToken: "t" });
 
     const output = await run(
-      ["add", "--project", "Memmy 开发", "--hint", "给分享接口加上限流"],
+      ["session", "add", "--project", "Memmy 开发", "--hint", "给分享接口加上限流"],
       { fetch: fetcher, runtimeConfigPath, cwd: "/repo", env: {} }
     );
 
     expect(body).toEqual({ cwd: "/repo", project: "Memmy 开发", hint: "给分享接口加上限流" });
     expect(output).toContain("只加入这一条，没有关联整个工作区。");
 
-    await run(["add", "--project", "Memmy 开发"], {
+    await run(["session", "add", "--project", "Memmy 开发"], {
       fetch: fetcher,
       runtimeConfigPath,
       cwd: "/repo",
       env: { CURSOR_CONVERSATION_ID: "composer-current" }
     });
     expect(body).toEqual({ cwd: "/repo", project: "Memmy 开发", sourceId: "cursor", conversationId: "composer-current" });
-    await expect(run(["add", "Memmy 开发"], { runtimeConfigPath })).rejects.toThrow(/--project/);
-    expect(await run(["help"], { runtimeConfigPath })).toContain("memmy-session add");
+    await expect(run(["session", "add", "Memmy 开发"], { runtimeConfigPath })).rejects.toThrow(/--project/);
+    expect(await run(["help"], { runtimeConfigPath })).toContain("memmy-project session add");
   });
 
   it("puts the turn number into a found result and quotes the match under it", async () => {
@@ -212,7 +223,7 @@ describe("memmy-session", () => {
     }), { status: 200 })) as typeof fetch;
     const runtimeConfigPath = runtimeFile({ baseUrl: "http://127.0.0.1:62315", localToken: "t" });
 
-    expect(await run(["search", "重复分享 409"], { fetch: fetcher, runtimeConfigPath })).toBe([
+    expect(await run(["session", "search", "重复分享 409"], { fetch: fetcher, runtimeConfigPath })).toBe([
       "a1b2c3#12  重复分享返回 409  Memmy 开发 · 用户C",
       "    …重复分享时返回 409，账号不存在返回 404…",
       "    #15 …返回 409 时提示已分享过…"
@@ -225,7 +236,7 @@ describe("memmy-session", () => {
     }), { status: 200 })) as typeof fetch;
     const runtimeConfigPath = runtimeFile({ baseUrl: "http://127.0.0.1:62315", localToken: "t" });
 
-    expect(await run(["search", "重复分享"], { fetch: fetcher, runtimeConfigPath })).toBe("s-409  重复分享返回 409  Memmy 开发 · 用户C");
+    expect(await run(["session", "search", "重复分享"], { fetch: fetcher, runtimeConfigPath })).toBe("s-409  重复分享返回 409  Memmy 开发 · 用户C");
   });
 
   it("reads the turn named after the id without any range flag", async () => {
@@ -236,15 +247,15 @@ describe("memmy-session", () => {
     }) as typeof fetch;
     const runtimeConfigPath = runtimeFile({ baseUrl: "http://127.0.0.1:62315", localToken: "t" });
 
-    expect(await run(["read", "a1b2c3#12"], { fetch: fetcher, runtimeConfigPath })).toBe("以下为第 12 轮。");
+    expect(await run(["session", "read", "a1b2c3#12"], { fetch: fetcher, runtimeConfigPath })).toBe("以下为第 12 轮。");
     expect(body).toEqual({ reference: "a1b2c3", view: { turns: { from: 12, to: 12 } } });
 
     // 链接也可以直接带上轮次。
-    await run(["read", "https://memmy.example/s/abc-123#7"], { fetch: fetcher, runtimeConfigPath });
+    await run(["session", "read", "https://memmy.example/s/abc-123#7"], { fetch: fetcher, runtimeConfigPath });
     expect(body).toEqual({ reference: "https://memmy.example/s/abc-123", view: { turns: { from: 7, to: 7 } } });
 
     // 坐标本身就是范围，再给一个范围只会让两处说法打架。
-    await expect(run(["read", "a1b2c3#12", "--turns", "3-8"], { fetch: fetcher, runtimeConfigPath }))
+    await expect(run(["session", "read", "a1b2c3#12", "--turns", "3-8"], { fetch: fetcher, runtimeConfigPath }))
       .rejects.toThrow(/不要再加 --turns/u);
   });
 });

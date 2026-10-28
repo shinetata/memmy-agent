@@ -20,6 +20,17 @@ const ProjectSchema = z.object({
   instructions: z.string().nullish().transform((value) => value ?? "")
 });
 
+/** 项目配置里的知识库：只有引用，名字与「是不是本人关联的」由云端给。 */
+const KnowledgeViewSchema = z.object({
+  canManage: z.boolean().nullish().transform((value) => value ?? false),
+  maxBases: z.number().nullish().transform((value) => value ?? 10),
+  bases: z.array(z.object({
+    id: z.string(),
+    name: z.string(),
+    mine: z.boolean().nullish().transform((value) => value ?? false)
+  })).nullish().transform((value) => value ?? [])
+});
+
 const ProjectSessionSchema = z.object({
   id: z.string(),
   projectId: z.string(),
@@ -182,6 +193,7 @@ export type CollabMembers = z.infer<typeof MembersResponseSchema>;
 export type CollabInvite = z.infer<typeof InviteSchema>;
 export type CollabInvitePreview = z.infer<typeof InvitePreviewSchema>;
 export type CollabJoinResult = z.infer<typeof JoinResultSchema>;
+export type CollabKnowledgeView = z.infer<typeof KnowledgeViewSchema>;
 
 export interface CollabClient {
   listProjects(): Promise<{ projects: CollabProject[]; applications?: CollabApplication[] }>;
@@ -234,6 +246,12 @@ export interface CollabClient {
   syncSessions(options?: { tasksOnly?: boolean; projectId?: string }): Promise<CollabSyncResult>;
   /** Who is in the project; owners and admins also get the join mode's pending requests. */
   listMembers(projectId: string): Promise<CollabMembers>;
+  /** 项目关联的知识库：只读列表，附「能不能管理」。 */
+  knowledge(projectId: string): Promise<CollabKnowledgeView>;
+  /** 关联一个知识库；云端只接受调用者本来就能访问的库。 */
+  addKnowledge(projectId: string, baseId: string): Promise<CollabKnowledgeView>;
+  /** 解除关联；云端判定权限（关联人自己或所有者、管理员）。 */
+  removeKnowledge(projectId: string, baseId: string): Promise<CollabKnowledgeView>;
   /** The person's own invite link to the project. */
   createInvite(projectId: string): Promise<CollabInvite>;
   setJoinMode(projectId: string, joinMode: CollabJoinMode): Promise<CollabJoinMode>;
@@ -436,6 +454,32 @@ export function createHttpCollabClient(config: RuntimeConfig): CollabClient {
 
     async listMembers(projectId) {
       return requestJson({ config, path: `/api/collab/projects/${encodeURIComponent(projectId)}/members`, schema: MembersResponseSchema });
+    },
+
+    async knowledge(projectId) {
+      return requestJson({
+        config,
+        path: `/api/collab/projects/${encodeURIComponent(projectId)}/knowledge`,
+        schema: KnowledgeViewSchema
+      });
+    },
+
+    async addKnowledge(projectId, baseId) {
+      return requestJson({
+        config,
+        path: `/api/collab/projects/${encodeURIComponent(projectId)}/knowledge`,
+        schema: KnowledgeViewSchema,
+        body: { baseId }
+      });
+    },
+
+    async removeKnowledge(projectId, baseId) {
+      return requestJson({
+        config,
+        path: `/api/collab/projects/${encodeURIComponent(projectId)}/knowledge/${encodeURIComponent(baseId)}`,
+        schema: KnowledgeViewSchema,
+        init: { method: "DELETE" }
+      });
     },
 
     async createInvite(projectId) {

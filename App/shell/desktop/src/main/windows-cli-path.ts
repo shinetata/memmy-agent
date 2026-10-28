@@ -53,7 +53,7 @@ export const installPackagedWindowsCliTools = async (
   const entries = [
     { name: "memmy-memory", source: win32.join(binDirectory, "memmy-memory.cmd") },
     { name: "memmy", source: win32.join(binDirectory, "memmy.cmd") },
-    { name: "memmy-session", source: win32.join(binDirectory, "memmy-session.cmd") }
+    { name: "memmy-project", source: win32.join(binDirectory, "memmy-project.cmd") }
   ];
 
   for (const entry of entries) {

@@ -1,5 +1,5 @@
 /**
- * Decides which collaboration project and which local task `memmy-session add` is about, and the words the command
+ * Decides which collaboration project and which local task `memmy-project session add` is about, and the words the command
  * prints. Adding never links a whole workspace: the caller saves one session link, and only after the project name
  * matches exactly. Anything short of that is a next command for the agent to confirm with the person.
  */
@@ -33,7 +33,7 @@ export type SessionPick =
   | { kind: "many"; sessions: readonly AddableSession[]; reason: "need-hint" | "ambiguous" | "miss" };
 
 const NO_PROJECTS = "你还没有加入任何 Memmy 协作项目，无法把当前任务加进去。请先在 Memmy 中新建或加入协作项目。";
-const NO_DIRECTORY = "无法确定当前目录，没有加入。请在这个对话的工作目录重新运行 memmy-session add，不要先 cd 到别处。";
+const NO_DIRECTORY = "无法确定当前目录，没有加入。请在这个对话的工作目录重新运行 memmy-project session add，不要先 cd 到别处。";
 
 /** Sessions whose directory is the command's working directory, or contains it, newest first. */
 export function pickAddCandidates<T extends AddableSession>(sessions: readonly T[], cwd: string): T[] {
@@ -204,7 +204,7 @@ export function formatAlready(session: AddableSession, projectName: string, viaG
 
 /** The next command, with values quoted so a name that contains spaces survives a copy. */
 export function addCommand(options: { project?: string; hint?: string; projectPlaceholder?: boolean }): string {
-  const parts = ["memmy-session add"];
+  const parts = ["memmy-project session add"];
   if (options.projectPlaceholder) parts.push("--project \"<完整名称>\"");
   else if (options.project?.trim()) parts.push(`--project ${shellArg(options.project)}`);
   if (options.hint?.trim()) parts.push(`--hint ${shellArg(options.hint)}`);
