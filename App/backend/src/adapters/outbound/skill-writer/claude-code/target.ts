@@ -298,7 +298,7 @@ const PROJECT_CLI_PATHS = [
   "%ProgramFiles%\\Memmy\\resources\\cli\\memmy-project.cmd"
 ];
 const PROJECT_CLI_PERMISSION_RULES = PROJECT_CLI_PATHS.flatMap((path) =>
-  ["list", "session read", "session search", "session add"].map((action) => `Bash(${path} ${action}:*)`)
+  ["list", "knowledge search", "session read", "session search", "session add"].map((action) => `Bash(${path} ${action}:*)`)
 );
 const MANAGED_PROJECT_CLI_RULES = new Set(PROJECT_CLI_PERMISSION_RULES);
 

@@ -934,6 +934,19 @@ describe("collab service", () => {
     await expect(service(fetcher, { localSessions: null }).listLocalSessions({})).rejects.toMatchObject({ message: "无法读取本机任务，请重启 Memmy 后重试。" });
   });
 
+  it("resolves a session's linked projects without relying on a project working directory", async () => {
+    const local = [localSession("codex", "c1", "/other-workspace", "2026-10-22T04:00:00.000Z"),
+      localSession("codex", "c2", "/other-workspace", "2026-10-22T03:00:00.000Z")];
+    const { fetcher } = addFetch(local);
+    const svc = service(fetcher);
+    await svc.saveLinks("p-1", { groups: [{ sourceId: "codex", groupId: "/other-workspace", excluded: ["c2"] }], sessions: [] });
+    expect((await svc.projectsForAgentSession("codex", "c1")).map((p) => p.id)).toEqual(["p-1"]);
+    expect(await svc.projectsForAgentSession("codex", "c2")).toEqual([]);
+    await svc.saveLinks("p-1", { groups: [], sessions: [{ sourceId: "codex", conversationId: "c2" }] });
+    expect((await svc.projectsForAgentSession("codex", "c2")).map((p) => p.id)).toEqual(["p-1"]);
+    expect(await svc.projectsForAgentSession("codex", "c1")).toEqual([]);
+  });
+
   it("adds the current task alone, and keeps tasks already linked", async () => {
     const local = [
       localSession("claude_code", "a1", "/repo", "2026-10-22T05:00:00.000Z"),

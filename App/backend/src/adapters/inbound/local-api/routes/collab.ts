@@ -2,12 +2,13 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { MAX_PROJECT_INSTRUCTIONS_CHARS } from "@memmy/local-api-contracts";
-import { sinceWindowMs, type CollabService } from "../../../../services/collab-service.js";
+import { CollabError, sinceWindowMs, type CollabService } from "../../../../services/collab-service.js";
 import { withErrorEnvelope } from "../../../../services/error-envelope.js";
 
 export interface RegisterCollabRoutesOptions {
   collab: CollabService;
   authenticateRuntimeToken: (request: FastifyRequest, reply: FastifyReply) => Promise<unknown>;
+  recallProjectKnowledge?: (query: string, projectId: string) => Promise<{ enabled: boolean; evidence: unknown[]; projectOnly?: boolean }>;
 }
 
 const ProjectIdSchema = z.string().regex(/^[A-Za-z0-9-]{1,36}$/u, "项目 ID 无效");
@@ -83,6 +84,12 @@ const AddSessionSchema = z.object({
   sourceId: SourceIdSchema.optional(),
   conversationId: ConversationIdSchema.optional()
 }).strict();
+const SearchKnowledgeSchema = z.object({
+  query: z.string().trim().min(1).max(8000),
+  project: z.string().trim().min(1).max(100).optional(),
+  sourceId: SourceIdSchema.optional(),
+  conversationId: ConversationIdSchema.optional()
+}).strict().refine((value) => Boolean(value.sourceId) === Boolean(value.conversationId), "会话身份不完整");
 const RenameProjectSchema = z.object({
   name: z.string().trim().min(1, "请填写项目名称").max(20, "项目名称不超过 20 个字")
 }).strict();
@@ -300,6 +307,21 @@ export function registerCollabRoutes(app: FastifyInstance, options: RegisterColl
     return reply.send(await options.collab.readSession(input.reference, input.view));
   }));
 
+  app.post("/api/collab/knowledge/search", guard, withErrorEnvelope(async (request, reply) => {
+    const input = SearchKnowledgeSchema.parse(request.body ?? {});
+    if (!options.recallProjectKnowledge) throw new CollabError("internal", "知识库服务未就绪");
+    if (!input.project && !input.sourceId) throw new CollabError("invalid_argument", "无法识别当前会话，请用 --project 指定项目名称");
+    const projects = input.sourceId && input.conversationId
+      ? await options.collab.projectsForAgentSession(input.sourceId, input.conversationId)
+      : (await options.collab.listProjects()).projects;
+    const matches = input.project ? projects.filter((project) => project.name === input.project) : projects;
+    if (!matches.length) throw new CollabError("not_found", missingProjectMessage(input.project, Boolean(input.sourceId)));
+    if (matches.length > 1) throw new CollabError("conflict", `当前会话关联多个项目，请用 --project 指定：${matches.map((project) => project.name).join("、")}`);
+    const project = matches[0]!;
+    const result = await options.recallProjectKnowledge(input.query, project.id);
+    return reply.send({ project: { id: project.id, name: project.name }, ...result });
+  }));
+
   // One local task joins a project. The reply is the text `memmy-project session add` prints, including what to run next.
   app.post("/api/collab/sessions/add", guard, withErrorEnvelope(async (request, reply) => {
     const input = AddSessionSchema.parse(request.body ?? {});
@@ -311,4 +333,11 @@ export function registerCollabRoutes(app: FastifyInstance, options: RegisterColl
       ...(input.conversationId === undefined ? {} : { conversationId: input.conversationId })
     }));
   }));
+}
+
+/** Why a knowledge search found no project: no project was named, or the named one is not linked to this session. */
+function missingProjectMessage(project: string | undefined, sessionKnown: boolean): string {
+  if (!sessionKnown) return "没有该项目，或你不是项目成员";
+  if (project) return `当前会话未关联项目「${project}」`;
+  return "当前会话没有关联任何协作项目，检索不到项目知识库；可以先用 memmy-project session add 把当前任务加入项目，或用 --project 指定项目。";
 }

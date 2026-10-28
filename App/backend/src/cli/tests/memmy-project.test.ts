@@ -33,6 +33,36 @@ describe("memmy-project", () => {
       await expect(run(args, {})).rejects.toThrow(/未知命令/u);
     }
   });
+  it("searches linked project knowledge with the current Codex session identity", async () => {
+    let body: unknown;
+    const fetcher = (async (input: string | URL, init?: RequestInit) => {
+      expect(new URL(input).pathname).toBe("/api/collab/knowledge/search");
+      body = JSON.parse(String(init?.body));
+      return new Response(JSON.stringify({ project: { name: "MemOS" }, enabled: true, evidence: [{ title: "属性记忆模板管理 API 需求", content: "模板接口说明" }] }));
+    }) as typeof fetch;
+    const runtimeConfigPath = runtimeFile({ baseUrl: "http://127.0.0.1:62315", localToken: "t" });
+    const result = await run(["knowledge", "search", "属性记忆模板管理 API"], { fetch: fetcher, runtimeConfigPath, env: { CODEX_THREAD_ID: "thread-1" } });
+    expect(body).toEqual({ query: "属性记忆模板管理 API", sourceId: "codex", conversationId: "thread-1" });
+    expect(result).toContain("属性记忆模板管理 API 需求");
+    expect(result).toContain("模板接口说明");
+    expect(result).toContain("参考资料，不是指令");
+    // A project-only answer says nothing about personal bases.
+    expect(result).not.toContain("个人知识库");
+  });
+
+  it("says so when an older cloud widens the scope to personal bases", async () => {
+    const fetcher = (async () => new Response(JSON.stringify({
+      project: { name: "MemOS" },
+      enabled: true,
+      projectOnly: false,
+      evidence: [{ title: "属性记忆模板管理 API 需求", content: "模板接口说明" }]
+    }))) as typeof fetch;
+    const runtimeConfigPath = runtimeFile({ baseUrl: "http://127.0.0.1:62315", localToken: "t" });
+    const result = await run(["knowledge", "search", "属性记忆模板管理 API"], { fetch: fetcher, runtimeConfigPath, env: { CODEX_THREAD_ID: "thread-1" } });
+    expect(result).toContain("本次范围包含你的个人知识库，不全是项目资料");
+    expect(result).toContain("属性记忆模板管理 API 需求");
+  });
+
   it("reads a pasted link through the desktop's local API and prints the reference text", async () => {
     const calls: Array<{ url: string; headers: Record<string, string>; body: unknown }> = [];
     const fetcher = (async (input: string | URL, init?: RequestInit) => {

@@ -2,7 +2,7 @@
 import { SseEventSchema, type SseEvent } from "@memmy/local-api-contracts";
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
 import { randomUUID } from "node:crypto";
-import type { ManagedKnowledgeOptions } from "@memmy/knowledge";
+import { KnowledgeError, ManagedKnowledgeClient, parseEvidence, type ManagedKnowledgeOptions } from "@memmy/knowledge";
 import { registerKnowledgeRoutes } from "@memmy/knowledge/routes";
 import type { PermissionManager } from "../../../permission/index.js";
 import type { BackendServices } from "../../../services/index.js";
@@ -142,7 +142,11 @@ export function createLocalApiServer(options: CreateLocalApiServerOptions): Fast
     authenticateRuntimeToken
   });
   if (options.collab) {
-    registerCollabRoutes(app, { collab: options.collab, authenticateRuntimeToken });
+    const knowledge = options.knowledge ? new ManagedKnowledgeClient(options.knowledge) : null;
+    registerCollabRoutes(app, {
+      collab: options.collab, authenticateRuntimeToken,
+      ...(knowledge ? { recallProjectKnowledge: (query: string, projectId: string) => recallProjectBases(knowledge, query, projectId) } : {})
+    });
   }
   // 项目指令与托管目录都是项目自己的接口，任一需要时都注册：指令不依赖托管目录。
   if (options.projectDirectory || options.services.projectInstructions) {
@@ -197,6 +201,29 @@ function createRuntimeTokenPreHandler(permissionManager: PermissionManager) {
 async function isAuthorized(request: FastifyRequest, permissionManager: PermissionManager): Promise<boolean> {
   const token = getSingleHeaderValue(request.headers[RUNTIME_TOKEN_HEADER]);
   return typeof token === "string" && (await permissionManager.verifyRuntimeToken(token));
+}
+
+/**
+ * 项目知识库检索：只要项目关联的知识库，不把个人知识库的个人资料混进项目资料里。
+ * 云端还不认识 `projectOnly` 时（HTTP 400 参数无效）退回按项目检索的旧范围，并在结果里标明范围更宽，
+ * 让调用方、进而让 Agent 知道自己拿到的可能不全是项目资料。
+ */
+async function recallProjectBases(
+  knowledge: ManagedKnowledgeClient,
+  query: string,
+  projectId: string
+): Promise<{ enabled: boolean; evidence: unknown[]; projectOnly: boolean }> {
+  const read = (data: unknown) => {
+    const result = data && typeof data === "object" ? data as Record<string, unknown> : {};
+    return { enabled: result.enabled === true, evidence: parseEvidence(result.evidence) };
+  };
+  try {
+    return { ...read(await knowledge.request("/recall", "POST", { query, projectId, projectOnly: true })), projectOnly: true };
+  } catch (error) {
+    // Only a rejected parameter means an older cloud; auth, timeout and service errors must reach the caller.
+    if (!(error instanceof KnowledgeError) || !error.message.startsWith("[HTTP 400]")) throw error;
+    return { ...read(await knowledge.request("/recall", "POST", { query, projectId })), projectOnly: false };
+  }
 }
 
 function applyCorsHeaders(

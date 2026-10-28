@@ -406,6 +406,8 @@ export interface CollabService {
    * 知识库检索用它把会话所在目录翻成项目，再把项目关联的知识库并入检索。
    */
   cloudProjectForDirectory(directory: string): Promise<string | null>;
+  /** Projects explicitly linked to this agent session or its linked group. */
+  projectsForAgentSession(sourceId: string, conversationId: string): Promise<CollabProject[]>;
   /**
    * The directory a project's tasks run in, created on demand; lets an older project gain a working project.
    * `name` names the managed folder after the project instead of its generated id.
@@ -1290,6 +1292,20 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
         if (projectInstructionsKey(stored.workingDirectory) === key) return stored.projectId;
       }
       return null;
+    },
+
+    async projectsForAgentSession(sourceId, conversationId) {
+      const account = requireAccount();
+      const projects = list((await cloud("/projects")).projects).map(toProject);
+      const records = await Promise.all(projects.map(async (project) => ({ project, links: await readLinks(project.id, account.accountId) })));
+      const key = sessionKey({ sourceId, conversationId });
+      // Prefer the current group for group links; uploaded records can resolve a session not in the local scan.
+      const needsGroup = records.some(({ links }) => links.groups.some((group) => group.sourceId === sourceId));
+      const session = needsGroup ? await sessionByIdentity(sourceId, conversationId) : null;
+      return records.filter(({ links }) => {
+        const groupId = session?.group?.id ?? links.synced[key]?.groupId ?? null;
+        return linkedSessionKeys(links, [{ sourceId, conversationId, groupId }]).has(key);
+      }).map(({ project }) => project);
     },
 
     listSessions,
