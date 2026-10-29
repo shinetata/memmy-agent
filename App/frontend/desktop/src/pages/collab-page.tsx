@@ -145,9 +145,10 @@ export function isSessionChecked(links: CollabLinks, session: LocalAgentSession)
   return links.sessions.some((link) => localSessionKey(link) === localSessionKey(session));
 }
 
-/** Checked when the whole group is linked, mixed when only some of its sessions are. */
+/** A linked whole group with exclusions is mixed; independent session selections are mixed too. */
 export function groupCheckState(links: CollabLinks, sourceId: string, view: SessionGroupView): "checked" | "mixed" | "unchecked" {
-  if (findGroupLink(links, sourceId, view.group.id)) return "checked";
+  const group = findGroupLink(links, sourceId, view.group.id);
+  if (group) return group.excluded.length ? "mixed" : "checked";
   return view.sessions.some((session) => isSessionChecked(links, session)) ? "mixed" : "unchecked";
 }
 
@@ -155,7 +156,12 @@ export function groupCheckState(links: CollabLinks, sourceId: string, view: Sess
 export function toggleGroupLink(links: CollabLinks, sourceId: string, view: SessionGroupView): CollabLinks {
   const inGroup = new Set(view.sessions.map(localSessionKey));
   const sessions = links.sessions.filter((link) => !inGroup.has(localSessionKey(link)));
-  if (findGroupLink(links, sourceId, view.group.id)) {
+  const group = findGroupLink(links, sourceId, view.group.id);
+  if (group?.excluded.length) {
+    // A mixed checkbox selects the entire group on click, just like a partially selected group of sessions.
+    return { groups: links.groups.map((link) => link === group ? { ...link, excluded: [] } : link), sessions };
+  }
+  if (group) {
     return { groups: links.groups.filter((link) => !(link.sourceId === sourceId && link.groupId === view.group.id)), sessions };
   }
   return { groups: [...links.groups, { sourceId, groupId: view.group.id, excluded: [] }], sessions };
@@ -178,6 +184,16 @@ export function toggleSessionLink(links: CollabLinks, session: LocalAgentSession
       ? links.sessions.filter((link) => localSessionKey(link) !== key)
       : [...links.sessions, { sourceId: session.sourceId, conversationId: session.conversationId }]
   };
+}
+
+function linksEqual(left: CollabLinks, right: CollabLinks): boolean {
+  const canonical = (links: CollabLinks) => JSON.stringify({
+    groups: links.groups.map(({ sourceId, groupId, excluded }) => [sourceId, groupId, [...excluded].sort()] as const)
+      .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b))),
+    sessions: links.sessions.map(({ sourceId, conversationId }) => [sourceId, conversationId] as const)
+      .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)))
+  });
+  return canonical(left) === canonical(right);
 }
 
 export function agentHasLinks(links: CollabLinks, sourceId: string): boolean {
@@ -1997,7 +2013,7 @@ function withoutCursorTaskFollowup(text: string): string {
 }
 
 /** 新建项目: an online project (default) or a local one, per the prototype. */
-function AssociateSessionsModal(props: {
+export function AssociateSessionsModal(props: {
   open: boolean;
   collab: CollabClient;
   project: CollabProject;
@@ -2013,11 +2029,13 @@ function AssociateSessionsModal(props: {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [confirmUnlinkGroup, setConfirmUnlinkGroup] = useState(false);
   const { collab, open, project } = props;
 
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
+    setConfirmUnlinkGroup(false);
     setSessions(null);
     setSaved(EMPTY_LINKS);
     setLinks(EMPTY_LINKS);
@@ -2055,7 +2073,7 @@ function AssociateSessionsModal(props: {
   const activeAgent = agents.find((agent) => agent.sourceId === agentId) ?? agents.find((agent) => agentHasLinks(links, agent.sourceId)) ?? agents[0] ?? null;
   const kind = activeAgent ? groupingKind(activeAgent.sourceId) : "directory";
   const view = activeAgent ? groupAgentSessions(sessions ?? [], activeAgent.sourceId, query) : { groups: [], ungrouped: [] };
-  const changed = JSON.stringify(links) !== JSON.stringify(saved);
+  const changed = !linksEqual(links, saved);
   /** 当前勾选会关联的任务数，用于在提交前提示云端只保留最近 20 个。 */
   const selectedCount = useMemo(
     () => (sessions ?? []).filter((session) => isSessionChecked(links, session)).length,
@@ -2077,11 +2095,20 @@ function AssociateSessionsModal(props: {
     setError(null);
     try {
       await props.onLinked(await collab.saveLinks(project.id, links));
-    } catch (cause) {
-      setError(messageOf(cause));
+    } catch {
+      // A multi-task unlink can have succeeded in part; keep the selection so the person can retry.
+      setError(t("collab.pick.saveFailedRetry"));
     } finally {
       setBusy(false);
     }
+  }
+
+  function requestSave() {
+    if (!changed || busy) return;
+    // Only removing a previously saved whole group needs confirmation; exclusions of individual sessions do not.
+    const removedGroup = saved.groups.some((group) => !findGroupLink(links, group.sourceId, group.groupId));
+    if (removedGroup) setConfirmUnlinkGroup(true);
+    else void confirm();
   }
 
   function sessionRow(session: LocalAgentSession, nested: boolean) {
@@ -2097,11 +2124,12 @@ function AssociateSessionsModal(props: {
   }
 
   return (
+    <>
     <Modal
       open={props.open}
       title={t("collab.pick.title")}
       subtitle={t("collab.pick.subtitle", { project: project.name })}
-      onClose={busy ? undefined : props.onClose}
+      onClose={busy || confirmUnlinkGroup ? undefined : props.onClose}
       closeLabel={t("common.close")}
       closeContent={<X size={16} aria-hidden="true" />}
       className={styles.pickModal}
@@ -2115,8 +2143,8 @@ function AssociateSessionsModal(props: {
           ) : <span />}
           <span className={styles.footerButtons}>
             <Button variant="ghost" disabled={busy} onClick={props.onClose}>{t("collab.cancel")}</Button>
-            <Button variant="primary" disabled={!changed || busy} onClick={() => void confirm()}>
-              {busy ? t("collab.pick.saving") : t("collab.pick.start")}
+            <Button variant="primary" disabled={!changed || busy} onClick={requestSave}>
+              {busy ? t("collab.pick.saving") : t("collab.pick.save")}
             </Button>
           </span>
         </>
@@ -2180,13 +2208,18 @@ function AssociateSessionsModal(props: {
                           ref={(element) => {
                             if (element) element.indeterminate = state === "mixed";
                           }}
-                          onChange={() => setLinks((current) => toggleGroupLink(current, activeAgent!.sourceId, item))}
+                          onChange={() => setLinks((current) => {
+                            // Search narrows visible rows, not the scope of the whole-group operation.
+                            const complete = groupAgentSessions(sessions ?? [], activeAgent!.sourceId, "").groups
+                              .find((group) => group.group.id === item.group.id) ?? item;
+                            return toggleGroupLink(current, activeAgent!.sourceId, complete);
+                          })}
                         />
                         <button type="button" className={styles.groupToggle} aria-expanded={isOpen} title={item.group.path ?? item.group.label} onClick={() => toggleExpanded(item.group.id)}>
                           <span className={styles.groupIcon}><GroupIcon size={15} aria-hidden="true" /></span>
                           <span className={styles.groupText}>
                             <span className={styles.groupName}>{item.group.label}</span>
-                            {state === "checked" ? <span className={styles.groupHint}>{t("collab.pick.wholeGroup")}</span> : null}
+                            {findGroupLink(links, activeAgent!.sourceId, item.group.id) ? <span className={styles.groupHint}>{t("collab.pick.wholeGroup")}</span> : null}
                           </span>
                           {isOpen ? <ChevronDown size={15} aria-hidden="true" /> : <ChevronRight size={15} aria-hidden="true" />}
                         </button>
@@ -2203,6 +2236,21 @@ function AssociateSessionsModal(props: {
         </section>
       </div>
     </Modal>
+    <ConfirmDialog
+      open={props.open && confirmUnlinkGroup}
+      title={t("collab.pick.unlinkGroupTitle")}
+      message={t("collab.pick.unlinkGroupMessage")}
+      cancelLabel={t("collab.cancel")}
+      confirmLabel={t("collab.pick.unlinkGroupConfirm")}
+      confirmVariant="danger"
+      icon={null}
+      onCancel={() => setConfirmUnlinkGroup(false)}
+      onConfirm={() => {
+        setConfirmUnlinkGroup(false);
+        void confirm();
+      }}
+    />
+    </>
   );
 }
 

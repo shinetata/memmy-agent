@@ -68,10 +68,12 @@ describe("collab page helpers", () => {
     links = toggleSessionLink(links, sessions[1]!);
     expect(isSessionChecked(links, sessions[1]!)).toBe(false);
     expect(isSessionChecked(links, sessions[0]!)).toBe(true);
-    expect(groupCheckState(links, "claude_code", view)).toBe("checked");
+    expect(groupCheckState(links, "claude_code", view)).toBe("mixed");
     expect(agentHasLinks(links, "claude_code")).toBe(true);
     expect(agentHasLinks(links, "codex")).toBe(false);
 
+    links = toggleGroupLink(links, "claude_code", view);
+    expect(groupCheckState(links, "claude_code", view)).toBe("checked");
     links = toggleGroupLink(links, "claude_code", view);
     expect(links).toEqual(none);
   });

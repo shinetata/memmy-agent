@@ -364,6 +364,109 @@ describe("collab service", () => {
     expect(await svc.getLinks("p-1")).toEqual({ groups: [], sessions: [] });
   });
 
+  it("retries only the failed unlink after a partial cloud deletion", async () => {
+    const local = [
+      localSession("claude_code", "a1", "/repo", "2026-10-22T01:00:00.000Z"),
+      localSession("claude_code", "a2", "/repo", "2026-10-22T01:00:00.000Z")
+    ];
+    let failA2 = true;
+    const { fetcher, calls } = fakeFetch({
+      "POST /api/v1/agent-sessions/available": () => ({ sessions: local, refreshing: false }),
+      "POST /api/v1/agent-sessions/read": (call: Call) => ({
+        session: { title: `会话 ${(call.body as { conversationId: string }).conversationId}`, updatedAt: "2026-10-22T01:00:00.000Z", turns: [] }
+      }),
+      "PUT /api/collab/projects/p-1/sessions": (call: Call) => ({
+        code: 0, data: { sessions: [{ id: `id-${(call.body as { sessions: Array<{ sourceSessionId: string }> }).sessions[0]!.sourceSessionId}` }] }
+      }),
+      "DELETE /api/collab/projects/p-1/sessions/id-a1": () => ({ code: 0, data: null }),
+      "DELETE /api/collab/projects/p-1/sessions/id-a2": () => failA2
+        ? new Response(JSON.stringify({ code: 500, message: "temporary" }), { status: 500 })
+        : ({ code: 0, data: null })
+    });
+    const svc = service(fetcher);
+    const group = { sourceId: "claude_code", groupId: "/repo", excluded: [] };
+    await svc.saveLinks("p-1", { groups: [group], sessions: [] });
+    await waitForUploads(svc, "p-1");
+
+    await expect(svc.saveLinks("p-1", { groups: [], sessions: [] })).rejects.toThrow();
+    expect(calls.filter((call) => call.method === "DELETE").map((call) => new URL(call.url).pathname))
+      .toEqual(["/api/collab/projects/p-1/sessions/id-a1", "/api/collab/projects/p-1/sessions/id-a2"]);
+
+    failA2 = false;
+    await expect(svc.saveLinks("p-1", { groups: [], sessions: [] })).resolves.toMatchObject({ removed: 1 });
+    expect(calls.filter((call) => call.method === "DELETE").map((call) => new URL(call.url).pathname))
+      .toEqual([
+        "/api/collab/projects/p-1/sessions/id-a1",
+        "/api/collab/projects/p-1/sessions/id-a2",
+        "/api/collab/projects/p-1/sessions/id-a2"
+      ]);
+  });
+
+  it("treats a stale local link as gone only after a forbidden delete is disproved by a complete listing", async () => {
+    const { fetcher } = fakeFetch({
+      "DELETE /api/collab/projects/p-1/sessions/stale": () => new Response(JSON.stringify({ code: 403 }), { status: 403 }),
+      "GET /api/collab/projects/p-1/sessions": () => ({ code: 0, data: {
+        project: { id: "p-1", sessionCount: 0 }, sessions: []
+      } })
+    });
+    const svc = service(fetcher);
+    await expect(svc.removeSession("p-1", "stale")).resolves.toEqual({ ok: true });
+  });
+
+
+  it("skips the cloud delete for records the cloud already dropped, reading the listing once", async () => {
+    const local = [
+      localSession("claude_code", "a1", "/repo", "2026-10-22T01:00:00.000Z"),
+      localSession("claude_code", "a2", "/repo", "2026-10-22T01:00:00.000Z")
+    ];
+    const { fetcher, calls } = fakeFetch({
+      "POST /api/v1/agent-sessions/available": () => ({ sessions: local, refreshing: false }),
+      "POST /api/v1/agent-sessions/read": (call: Call) => ({
+        session: { title: `会话 ${(call.body as { conversationId: string }).conversationId}`, updatedAt: "2026-10-22T01:00:00.000Z", turns: [] }
+      }),
+      "PUT /api/collab/projects/p-1/sessions": (call: Call) => ({
+        code: 0, data: { sessions: [{ id: `id-${(call.body as { sessions: Array<{ sourceSessionId: string }> }).sessions[0]!.sourceSessionId}` }] }
+      }),
+      // The quota replaced both sessions, so the project reports nothing left to delete.
+      "GET /api/collab/projects/p-1/sessions": () => ({ code: 0, data: { project: { id: "p-1", sessionCount: 0 }, sessions: [] } })
+    });
+    const svc = service(fetcher);
+    await svc.saveLinks("p-1", { groups: [{ sourceId: "claude_code", groupId: "/repo", excluded: [] }], sessions: [] });
+    await waitForUploads(svc, "p-1");
+    calls.length = 0;
+
+    expect(await svc.saveLinks("p-1", { groups: [], sessions: [] })).toMatchObject({ removed: 2 });
+    // No pointless DELETE per stale record, and the listing was read only once.
+    expect(calls.filter((call) => call.method === "DELETE")).toEqual([]);
+    expect(calls.filter((call) => call.method === "GET")).toHaveLength(1);
+    // The stored records are gone, so a second save has nothing left to remove.
+    expect(await svc.saveLinks("p-1", { groups: [], sessions: [] })).toMatchObject({ removed: 0 });
+  });
+
+  it("does not conceal real permission, incomplete lists, lost membership, or network errors", async () => {
+    for (const listing of [
+      { project: { id: "p-1", sessionCount: 1 }, sessions: [{ id: "other" }] },
+      { project: { id: "p-1", sessionCount: 2 }, sessions: [{ id: "other" }] }
+    ]) {
+      const { fetcher } = fakeFetch({
+        "DELETE /api/collab/projects/p-1/sessions/other": () => new Response("{}", { status: 403 }),
+        "GET /api/collab/projects/p-1/sessions": () => ({ code: 0, data: listing })
+      });
+      await expect(service(fetcher).removeSession("p-1", "other")).rejects.toMatchObject({ code: "forbidden" });
+    }
+    for (const status of [403, 404]) {
+      const { fetcher } = fakeFetch({
+        "DELETE /api/collab/projects/p-1/sessions/other": () => new Response("{}", { status }),
+        "GET /api/collab/projects/p-1/sessions": () => new Response("{}", { status: 404 })
+      });
+      await expect(service(fetcher).removeSession("p-1", "other")).rejects.toMatchObject({ code: "not_found" });
+    }
+    const { fetcher } = fakeFetch({
+      "DELETE /api/collab/projects/p-1/sessions/other": () => new Response("{}", { status: 503 })
+    });
+    await expect(service(fetcher).removeSession("p-1", "other")).rejects.toMatchObject({ code: "memory_layer_unavailable" });
+  });
+
   it("uploads only the most recent 20 sessions of what the person associated", async () => {
     // 云端每人每项目只保留 20 个：更早的任务不上传，省掉传完再被删的往返。
     const start = Date.UTC(2026, 9, 22, 10, 0, 0);
@@ -577,6 +680,7 @@ describe("collab service", () => {
         const upload = (call.body as { sessions: Array<{ sourceSessionId: string }> }).sessions[0]!;
         return { code: 0, data: { sessions: [{ id: `id-${upload.sourceSessionId}` }] } };
       },
+      "DELETE /api/collab/projects/p-9/sessions/id-task-a": () => ({ code: 0, data: null }),
       "DELETE /api/collab/projects/p-9/sessions/id-task-b": () => ({ code: 0, data: null })
     });
     const svc = service(fetcher, { projectsDir: join(root, "projects"), agentSessionsDir: agentSessions });
@@ -1170,7 +1274,8 @@ function addFetch(local: LocalAgentSession[], questions: Record<string, string> 
       const upload = (call.body as { sessions: Array<{ sourceSessionId: string }> }).sessions[0]!;
       return { code: 0, data: { sessions: [{ id: `id-${upload.sourceSessionId}` }] } };
     },
-    "DELETE /api/collab/projects/p-1/sessions/id-a1": () => ({ code: 0, data: null })
+    "DELETE /api/collab/projects/p-1/sessions/id-a1": () => ({ code: 0, data: null }),
+    "DELETE /api/collab/projects/p-1/sessions/id-c1": () => ({ code: 0, data: null })
   });
 }
 

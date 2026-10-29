@@ -967,12 +967,61 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
     return text(record(list(data.sessions)[0]).id);
   }
 
-  async function deleteCloudSession(projectId: string, cloudSessionId: string): Promise<void> {
+  /**
+   * The project's cloud sessions, read once per save. `complete` means the list holds every session the project
+   * reports, so an id that is missing from it really is gone rather than on a later page.
+   */
+  interface CloudSessionListing {
+    ids: Set<string>;
+    complete: boolean;
+  }
+
+  async function readCloudSessionListing(projectId: string): Promise<CloudSessionListing | null> {
+    const data = await cloud(`/projects/${encodeURIComponent(projectId)}/sessions`);
+    const project = record(data.project);
+    if (text(project.id) !== projectId || !Array.isArray(data.sessions)) return null;
+    const listed = data.sessions.map((item) => text(record(item).id));
+    if (listed.some((id) => !id)) return null;
+    const ids = new Set(listed);
+    const complete = typeof project.sessionCount === "number"
+      && project.sessionCount === listed.length && ids.size === listed.length;
+    return { ids, complete };
+  }
+
+  /** One read per save, so a batch of stale local records does not ask the cloud again for each one. */
+  function createListingReader(projectId: string): () => Promise<CloudSessionListing | null> {
+    let pending: Promise<CloudSessionListing | null> | null = null;
+    return () => {
+      pending ??= readCloudSessionListing(projectId).catch(() => null);
+      return pending;
+    };
+  }
+
+  /**
+   * Removes one cloud session. A local record the cloud already dropped (quota eviction, an earlier save) is
+   * skipped instead of sent as a delete that the cloud answers with a refusal. Older clouds report a missing
+   * session as 403, so only a complete listing can prove it is gone; a real permission refusal keeps its error.
+   */
+  async function deleteCloudSession(
+    projectId: string,
+    cloudSessionId: string,
+    listing?: () => Promise<CloudSessionListing | null>
+  ): Promise<void> {
+    if (listing) {
+      const known = await listing();
+      if (known?.complete && !known.ids.has(cloudSessionId)) return;
+    }
     try {
       await cloud(`/projects/${encodeURIComponent(projectId)}/sessions/${encodeURIComponent(cloudSessionId)}`, { method: "DELETE" });
     } catch (error) {
-      // Already gone from the project: nothing left to remove.
-      if (!(error instanceof CollabError && error.code === "not_found")) throw error;
+      if (!(error instanceof CollabError && (error.code === "forbidden" || error.code === "not_found"))) throw error;
+      // Read again rather than reuse the cached list: the refusal may follow another delete in this batch.
+      const current = await readCloudSessionListing(projectId).catch((cause: unknown) => {
+        // Losing the project or the membership explains the refusal better than the delete's own message.
+        if (cause instanceof CollabError && (cause.code === "not_found" || cause.code === "unauthorized")) throw cause;
+        return null;
+      });
+      if (!current?.complete || current.ids.has(cloudSessionId)) throw error;
     }
   }
 
@@ -1375,12 +1424,22 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
         // Both sides are judged on the same candidates, so only what the person changed is removed.
         const before = linkedSessionKeys(stored, candidates);
         const after = linkedSessionKeys(links, candidates);
+        const listing = createListingReader(projectId);
         let removed = 0;
         for (const key of before) {
           const synced = stored.synced[key];
           if (after.has(key) || !synced) continue;
-          await deleteCloudSession(projectId, synced.cloudSessionId);
+          await deleteCloudSession(projectId, synced.cloudSessionId, listing);
           delete stored.synced[key];
+          const { sourceId, conversationId } = parseSessionKey(key);
+          const candidate = candidates.find((item) => sessionKey(item) === key);
+          stored.sessions = stored.sessions.filter((link) => sessionKey(link) !== key);
+          for (const group of stored.groups) {
+            if (group.sourceId === sourceId && (group.groupId === synced.groupId || group.groupId === candidate?.groupId)
+              && !group.excluded.includes(conversationId)) group.excluded.push(conversationId);
+          }
+          // Persist each confirmed deletion and exclusion to prevent background sync recreating it.
+          await writeLinks(stored);
           removed += 1;
         }
         stored.groups = links.groups;
@@ -1434,23 +1493,26 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
         const keep = new Set(included);
         const onDisk = new Set(tasks.map((task) => task.conversationId));
         // Exclusions for sessions that are gone stay as they were; the ones here follow this selection.
-        stored.removedSessions = [
+        const nextRemovedSessions = [
           ...stored.removedSessions.filter((conversationId) => !onDisk.has(conversationId)),
           ...tasks.filter((task) => !keep.has(task.conversationId)).map((task) => task.conversationId)
         ];
 
         let removed = 0;
+        const listing = createListingReader(projectId);
         for (const task of tasks) {
           if (keep.has(task.conversationId)) continue;
           const key = sessionKey(task);
           const synced = stored.synced[key];
           if (!synced) continue;
-          // Members must stop seeing a session the person unchecked.
-          await deleteCloudSession(projectId, synced.cloudSessionId);
+          await deleteCloudSession(projectId, synced.cloudSessionId, listing);
           delete stored.synced[key];
+          if (!stored.removedSessions.includes(task.conversationId)) stored.removedSessions.push(task.conversationId);
+          await writeLinks(stored);
           removed += 1;
         }
 
+        stored.removedSessions = nextRemovedSessions;
         // Saved before any upload, so closing the board or the app never loses the choice.
         const pending = sessionsToUpload(stored, tasks);
         await writeLinks(stored);
@@ -1658,7 +1720,7 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
     },
 
     async removeSession(projectId, sessionId) {
-      await cloud(`/projects/${encodeURIComponent(projectId)}/sessions/${encodeURIComponent(sessionId)}`, { method: "DELETE" });
+      await deleteCloudSession(projectId, sessionId);
       const account = options.getAccount();
       if (account) {
         // Otherwise the next sync would upload it again: drop the session link, or exclude it from its group.
