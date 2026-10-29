@@ -9,7 +9,7 @@ import type { ProjectInstructionsService } from "../../../../services/project-in
 export interface RegisterProjectRoutesOptions {
   /** 按名称创建项目时用的托管目录；未提供时只注册项目指令接口。 */
   projectDirectory?: ProjectDirectoryService;
-  /** 项目指令：本地项目在项目配置中编辑，协作项目由云端同步到这里。 */
+  /** 本机项目的项目指令：只属于这台电脑上的文件夹，协作项目有自己的一套接口。 */
   projectInstructions?: ProjectInstructionsService;
   authenticateRuntimeToken: (request: FastifyRequest, reply: FastifyReply) => Promise<unknown>;
 }

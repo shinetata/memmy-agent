@@ -24,6 +24,7 @@ import {
 import { createPermissionManager } from "./permission/index.js";
 import { createLocalApiServer } from "./adapters/inbound/local-api/server.js";
 import { createBackendServices, type BootstrapScenario } from "./services/index.js";
+import { migrateLegacyCollabInstructions } from "./services/collab-instructions-service.js";
 import { createCollabCloudRequest, createCollabService } from "./services/collab-service.js";
 import { createLocalSessionReader } from "./adapters/outbound/agent-source/session-reference/local-session-reader.js";
 import { createBuiltinAgentSourceRegistry } from "./services/builtin-agent-source-registry.js";
@@ -161,6 +162,20 @@ export async function createLocalBackend(options: CreateLocalBackendOptions): Pr
     const localToken = await permissionManager.getRuntimeToken();
     const composioMcpToken = `mmt_${randomBytes(32).toString("base64url")}`;
     await removeLegacyKnowledgeCredentials(memmyConfigPath);
+    // 老版本把协作项目的云端指令镜像在本机项目指令文件里。搬到协作侧自己的文件后从老文件删掉，
+    // 否则同一段指令会被两个钩子各注入一次。
+    const legacyInstructions = await services.projectInstructions.snapshot();
+    const legacyCloudEntries = Object.entries(legacyInstructions.projects)
+      .filter(([, entry]) => entry.origin === "cloud" && Boolean(entry.cloudProjectId))
+      .map(([directory, entry]) => ({ directory, text: entry.text, cloudProjectId: entry.cloudProjectId }));
+    if (legacyCloudEntries.length) {
+      const moved = await migrateLegacyCollabInstructions({
+        collabInstructions: services.collabInstructions,
+        legacyEntries: legacyCloudEntries,
+        forgetLegacy: (directory) => services.projectInstructions.forget(directory)
+      });
+      if (moved) console.log(`Moved ${moved} cloud project instruction(s) out of the local project instructions file`);
+    }
     // Knowledge bases and online projects both act as the signed-in Memmy account.
     const getCloudAccount = () => {
       const account = appStateStore.repositories.accountSession;
@@ -180,8 +195,8 @@ export async function createLocalBackend(options: CreateLocalBackendOptions): Pr
       // The backend reads this machine's agent sessions itself, so association works without the Memory service.
       localSessions: createLocalSessionReader({ registry: createBuiltinAgentSourceRegistry() }),
       ...(process.env.MEMMY_SESSION_LINK_BASE_URL?.trim() ? { linkBaseUrl: process.env.MEMMY_SESSION_LINK_BASE_URL.trim() } : {}),
-      // 协作项目的指令以云端为准，读到或保存时同步到本机，项目里的任务按它注入。
-      projectInstructions: services.projectInstructions
+      // 协作项目的指令存在协作侧自己的文件里，与本机项目的项目指令互不影响。
+      collabInstructions: services.collabInstructions
     });
     // Groups associated with an online project pick up new sessions, and associated sessions their new turns.
     collabSyncTimer = setInterval(() => {

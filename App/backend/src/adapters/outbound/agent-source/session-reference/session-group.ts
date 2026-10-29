@@ -20,7 +20,7 @@ export interface LocalSessionGroup {
 /** Decides each session's group for one agent; built once per scan. */
 export type SessionGrouper = (session: { workspacePath: string | null; conversationId: string }) => LocalSessionGroup | null;
 
-interface CodexProject {
+export interface CodexProject {
   id: string;
   name: string;
   roots: string[];
@@ -162,7 +162,7 @@ function readCursorWorkspacePath(storagePath: string): string | null {
 }
 
 /** Reads Codex projects from the newest state database, read-only; null when there is none. */
-function readCodexProjects(codexHome: string): CodexProject[] | null {
+export function readCodexProjects(codexHome: string): CodexProject[] | null {
   let db: DatabaseSync | null = null;
   try {
     const file = readdirSync(codexHome)
@@ -187,5 +187,25 @@ function readCodexProjects(codexHome: string): CodexProject[] | null {
     return null;
   } finally {
     db?.close();
+  }
+}
+
+/**
+ * The folders a multi-root Cursor workspace covers. Paths inside a .code-workspace file are usually relative to
+ * the file, so they are resolved here; a file that cannot be read covers nothing.
+ */
+export function readWorkspaceRoots(workspaceFile: string): string[] {
+  try {
+    const parsed = JSON.parse(readFileSync(workspaceFile, "utf8")) as { folders?: Array<{ path?: unknown }> };
+    const roots: string[] = [];
+    for (const folder of parsed.folders ?? []) {
+      const value = typeof folder?.path === "string" ? folder.path : null;
+      if (!value) continue;
+      const resolved = value.startsWith("/") || /^[A-Za-z]:[\\/]/u.test(value) ? value : join(dirname(workspaceFile), value);
+      roots.push(resolved.replace(/\/+$/u, ""));
+    }
+    return roots;
+  } catch {
+    return [];
   }
 }

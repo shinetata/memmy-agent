@@ -24,8 +24,9 @@ import {
   type SessionPick
 } from "./collab-add-session.js";
 import { ensureDirectory, uniqueProjectDirectory } from "./project-directory.js";
-import { MAX_PROJECT_INSTRUCTIONS_CHARS, projectInstructionsKey } from "@memmy/local-api-contracts";
-import type { ProjectInstructionsService } from "./project-instructions-service.js";
+import { MAX_COLLAB_INSTRUCTIONS_CHARS, collabInstructionsDirectoryKey, type CollabInstructionScope } from "@memmy/local-api-contracts";
+import { instructionScopesFrom } from "./collab-instruction-scopes.js";
+import type { CollabInstructionsService } from "./collab-instructions-service.js";
 
 const CLOUD_TIMEOUT_MS = 20_000;
 /** A delete slower than this is worth a log line: the cloud call and the links write are the only things in it. */
@@ -118,11 +119,15 @@ export interface CollabServiceOptions {
   agentSessionsDir?: string;
   fetcher?: typeof fetch;
   now?: () => Date;
+  /** Codex 的状态库目录，用来把关联的 Codex 项目换算成它覆盖的根；默认 ~/.codex。 */
+  codexHome?: string;
   /**
-   * 项目指令的本机存储。协作项目的指令以云端为准，读到或保存时同步一份到本机，
-   * 项目里的任务（Memmy 任务与其他 Agent 的任务）据此注入；未提供时只做云端读写。
+   * 协作项目指令的本机缓存。云端项目是权威，这里只保存一份供注入读取的副本：
+   * 项目里的 Memmy 任务与其他 Agent 的任务据此注入；未提供时只做云端读写。
+   *
+   * <p>它不读也不写本机项目的项目指令文件：那套按文件夹归属，与协作项目没有关系。</p>
    */
-  projectInstructions?: ProjectInstructionsService;
+  collabInstructions?: CollabInstructionsService;
 }
 
 export interface CollabProject {
@@ -1026,32 +1031,56 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
    * A failed copy must not fail the cloud call that carried the text: the board still shows it, and the next read
    * of the project list tries again.
    */
-  async function mirrorInstructions(projectId: string, instructions: string, directory: string | null | undefined): Promise<void> {
-    if (!options.projectInstructions || !directory) return;
+  /**
+   * Keeps a copy of a project's cloud instructions with the scopes they cover.
+   * A failed copy must not fail the cloud call that carried the text: the board still shows it, and the next read
+   * of the project list tries again.
+   */
+  async function rememberInstructions(
+    projectId: string,
+    instructions: string,
+    scopes: readonly CollabInstructionScope[]
+  ): Promise<void> {
+    if (!options.collabInstructions) return;
+    // 还没有可生效的范围时等下一次同步；云端删除指令（空文本）不需要范围，照旧清掉。
+    if (!scopes.length && instructions.trim()) return;
     try {
-      await options.projectInstructions.mirrorCloud(directory, instructions, projectId);
+      await options.collabInstructions.remember({ projectId, scopes, text: instructions });
     } catch (error) {
-      console.warn(`Project instructions not mirrored for ${projectId}: ${error instanceof Error ? error.message : String(error)}`);
+      console.warn(`Project instructions not cached for ${projectId}: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
-  /** 云端项目被删除或停止共享后，它的指令留在本机项目上继续生效。 */
-  async function demoteInstructions(directory: string | null | undefined): Promise<void> {
-    if (!options.projectInstructions || !directory) return;
+  /**
+   * What this project's instructions cover: Memmy's own folder, every associated Agent unit (Claude Code folders,
+   * Cursor workspaces, Codex projects), and any session associated on its own.
+   */
+  function instructionScopes(stored: StoredLinks): CollabInstructionScope[] {
+    return instructionScopesFrom(stored, options.codexHome ? { codexHome: options.codexHome } : {});
+  }
+
+  /** 关联变了就换范围：新关联的 Agent 分组立即带上已有指令，取消关联的不再带。 */
+  async function updateInstructionScopes(projectId: string, stored: StoredLinks): Promise<void> {
+    if (!options.collabInstructions) return;
+    const scopes = instructionScopes(stored);
+    if (!scopes.length) return;
     try {
-      await options.projectInstructions.demoteToLocal(directory);
+      await options.collabInstructions.updateScopes(projectId, scopes);
     } catch (error) {
-      console.warn(`Project instructions not kept after unsharing: ${error instanceof Error ? error.message : String(error)}`);
+      console.warn(`Project instruction scopes not updated for ${projectId}: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
-  /** Leaving someone else's project ends the instructions this computer copied from it. */
-  async function forgetInstructions(directory: string | null | undefined): Promise<void> {
-    if (!options.projectInstructions || !directory) return;
+  /**
+   * Leaving or deleting a project drops the copy: the instructions belong to the cloud project, so there is
+   * nothing left here to keep. Keeping them as local instructions would tie the two stores together again.
+   */
+  async function forgetInstructions(projectId: string): Promise<void> {
+    if (!options.collabInstructions) return;
     try {
-      await options.projectInstructions.forget(directory);
+      await options.collabInstructions.forget(projectId);
     } catch (error) {
-      console.warn(`Project instructions not cleared: ${error instanceof Error ? error.message : String(error)}`);
+      console.warn(`Project instructions not cleared for ${projectId}: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
@@ -1075,7 +1104,7 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
       }
       try {
         await releaseBinding(stored.projectId, stored.accountId, "leave");
-        await forgetInstructions(stored.workingDirectory);
+        await forgetInstructions(stored.projectId);
         await rm(join(projectsDir, safeSegment(stored.projectId), "sessions"), { recursive: true, force: true });
       } catch (error) {
         console.warn(`Project links not cleared after leaving ${stored.projectId}: ${error instanceof Error ? error.message : String(error)}`);
@@ -1233,7 +1262,7 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
       const bound = await Promise.all(projects.map(async (project) => {
         const stored = await readLinks(project.id, account.accountId);
         // The list is read at every launch, so this is where members pick up instructions the owner changed.
-        await mirrorInstructions(project.id, project.instructions, stored.workingDirectory);
+        await rememberInstructions(project.id, project.instructions, instructionScopes(stored));
         return { ...project, localProjectId: stored.localProjectId };
       }));
       // 旧云端没有这份列表时不填字段，桌面端就保留本机刚记下的申请，避免一次刷新把「申请中」冲掉。
@@ -1282,14 +1311,14 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
      */
     async cloudProjectForDirectory(directory) {
       const account = options.getAccount();
-      const key = projectInstructionsKey(directory);
+      const key = collabInstructionsDirectoryKey(directory);
       if (!account || !key) return null;
       const entries = await readdir(projectsDir, { withFileTypes: true }).catch(() => []);
       for (const entry of entries) {
         if (!entry.isDirectory()) continue;
         const stored = parseStoredLinks(await readFile(join(projectsDir, entry.name, LINKS_FILE), "utf8").catch(() => ""));
         if (!stored || stored.accountId !== account.accountId || !stored.workingDirectory) continue;
-        if (projectInstructionsKey(stored.workingDirectory) === key) return stored.projectId;
+        if (collabInstructionsDirectoryKey(stored.workingDirectory) === key) return stored.projectId;
       }
       return null;
     },
@@ -1356,6 +1385,8 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
         }
         stored.groups = links.groups;
         stored.sessions = links.sessions;
+        // 关联的 Agent 分组变了，已有指令的生效范围跟着走。
+        await updateInstructionScopes(projectId, stored);
 
         // The selection is saved before any upload, so closing the board or the app never loses it.
         const pending = sessionsToUpload(stored, [...local, ...tasks]);
@@ -1436,13 +1467,12 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
     async deleteProject(projectId) {
       const account = requireAccount();
       const startedAt = now().getTime();
-      const before = await readLinks(projectId, account.accountId);
       await cloud(`/projects/${encodeURIComponent(projectId)}`, { method: "DELETE" });
       const cloudDoneAt = now().getTime();
       syncProgress.delete(projectId);
       await releaseBinding(projectId, account.accountId, "delete");
-      // 指令是所有者写的：云端项目没了，这条指令仍属于本机项目，转为本机指令而不是丢掉。
-      await demoteInstructions(before.workingDirectory);
+      // 指令属于云端项目，项目没了就跟着消失：不降级成本机指令，那会把两套存储重新绑在一起。
+      await forgetInstructions(projectId);
       const finishedAt = now().getTime();
       if (finishedAt - startedAt > SLOW_DELETE_MS) {
         console.warn(`Deleting project ${projectId} took ${finishedAt - startedAt}ms (cloud ${cloudDoneAt - startedAt}ms, links ${finishedAt - cloudDoneAt}ms)`);
@@ -1452,11 +1482,10 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
 
     async leaveProject(projectId) {
       const account = requireAccount();
-      const before = await readLinks(projectId, account.accountId);
       await cloud(`/projects/${encodeURIComponent(projectId)}/leave`, { method: "POST", body: {} });
       syncProgress.delete(projectId);
       await releaseBinding(projectId, account.accountId, "leave");
-      await forgetInstructions(before.workingDirectory);
+      await forgetInstructions(projectId);
       // 协作任务不在本机缓存正文，读取只现查云端；旧版本留下的缓存目录在这里一并清掉。
       await rm(join(projectsDir, safeSegment(projectId), "sessions"), { recursive: true, force: true });
       return { ok: true };
@@ -1503,14 +1532,14 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
 
     async updateInstructions(projectId, text, directory) {
       const instructions = text.trim();
-      if ([...instructions].length > MAX_PROJECT_INSTRUCTIONS_CHARS) {
-        throw new CollabError("invalid_argument", `项目指令不超过 ${MAX_PROJECT_INSTRUCTIONS_CHARS} 字`);
+      if ([...instructions].length > MAX_COLLAB_INSTRUCTIONS_CHARS) {
+        throw new CollabError("invalid_argument", `项目指令不超过 ${MAX_COLLAB_INSTRUCTIONS_CHARS} 字`);
       }
       const data = await cloud(`/projects/${encodeURIComponent(projectId)}`, { method: "PATCH", body: { instructions } });
       const account = requireAccount();
       const stored = await readLinks(projectId, account.accountId);
       const project = { ...toProject(record(data.project)), localProjectId: stored.localProjectId };
-      await mirrorInstructions(projectId, project.instructions, directory ?? stored.workingDirectory);
+      await rememberInstructions(projectId, project.instructions, instructionScopes(stored));
       return { project };
     },
 

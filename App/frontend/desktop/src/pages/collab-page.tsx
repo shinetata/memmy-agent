@@ -282,7 +282,7 @@ export function CollabPage() {
   /** 用户手动收起或展开后，不再随宽度自动开关。换项目时清掉。 */
   const configTouchedRef = useRef(false);
   const pageRef = useRef<HTMLDivElement>(null);
-  /** 项目指令：本机项目与协作项目共用同一份，协作项目以云端为准。 */
+  /** 看板当前展示的项目指令：本机项目读本机文件，协作项目用云端列表里的内容。 */
   const [instructions, setInstructions] = useState<ProjectInstructions>(EMPTY_PROJECT_INSTRUCTIONS);
   const [instructionsOpen, setInstructionsOpen] = useState(false);
   /** 项目关联的知识库：只影响本项目的检索，成员都能关联，解除限本人添加或所有者、管理员。 */
@@ -372,49 +372,52 @@ export function CollabPage() {
 
   /**
    * 项目指令由所有者与管理员维护；仅在本机的项目没有其他成员，本机的人就是所有者。
-   * 指令读取失败时按云端列表里的内容显示，只影响展示，注入仍以本机已同步的为准。
+   * 协作项目的指令以云端为准，注入由协作侧自己的钩子完成，看板只负责展示与保存。
    */
   const canEditInstructions = !shared || shared.role === "owner" || shared.role === "admin";
   const instructionsDirectory = project?.rootPath ?? null;
   const runtimeConfig = clients?.runtimeConfig ?? null;
-  /** 云端列表里的指令：本机还没同步到时先按它显示。 */
+  /** 云端列表里的指令：协作项目的权威内容。 */
   const sharedInstructions = shared?.instructions ?? "";
   const runtimeBaseUrl = runtimeConfig?.baseUrl ?? null;
 
-  // 项目一打开就读一次指令；协作项目的指令在读取项目列表时已同步到本机，读不到时退回云端列表里的内容。
-  // 依赖都是基本类型：客户端对象每次渲染可能都是新的，用它做依赖会反复触发读接口。
+  // 协作项目不读本机项目指令：那是另一套按文件夹归属的存储，读它会拿到别人的指令或本机旧镜像。
+  // 本机项目照旧读本机文件。依赖都是基本类型，客户端对象每次渲染可能都是新的。
   useEffect(() => {
+    if (sharedId) {
+      setInstructions({ ...EMPTY_PROJECT_INSTRUCTIONS, text: sharedInstructions, cloudProjectId: sharedId });
+      return;
+    }
     if (!instructionsDirectory || !runtimeBaseUrl || !runtimeConfig) {
-      setInstructions({ ...EMPTY_PROJECT_INSTRUCTIONS, text: sharedInstructions });
+      setInstructions(EMPTY_PROJECT_INSTRUCTIONS);
       return;
     }
     let cancelled = false;
     void readProjectInstructions(runtimeConfig, instructionsDirectory)
       .then((view) => {
-        if (cancelled) return;
-        setInstructions(view.text ? view : { ...view, text: sharedInstructions });
+        if (!cancelled) setInstructions(view);
       })
       .catch(() => {
-        if (!cancelled) setInstructions({ ...EMPTY_PROJECT_INSTRUCTIONS, text: sharedInstructions });
+        if (!cancelled) setInstructions(EMPTY_PROJECT_INSTRUCTIONS);
       });
     return () => {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- runtimeConfig 的身份每渲染都可能变化，改看它的地址
-  }, [instructionsDirectory, runtimeBaseUrl, shared?.id, sharedInstructions]);
+  }, [instructionsDirectory, runtimeBaseUrl, sharedId, sharedInstructions]);
 
   /**
-   * 保存指令：协作项目写云端（权限也在云端判定），再由后端同步回本机；仅在本机的项目直接写本机。
-   * 保存后对此后开始的任务生效。
+   * 保存指令：协作项目写云端（权限也在云端判定），后端把内容缓存到协作侧自己的文件；
+   * 仅在本机的项目直接写本机文件。保存后对此后开始的任务生效。
    */
   async function saveInstructions(text: string): Promise<void> {
-    if (!instructionsDirectory) return;
     if (sharedId && collab) {
-      const updated = await collab.setInstructions(sharedId, text, instructionsDirectory);
+      const updated = await collab.setInstructions(sharedId, text);
       replaceCollabProject(updated);
-      setInstructions({ ...instructions, text: updated.instructions, origin: "cloud", cloudProjectId: updated.id });
+      setInstructions({ ...EMPTY_PROJECT_INSTRUCTIONS, text: updated.instructions, cloudProjectId: updated.id });
       return;
     }
+    if (!instructionsDirectory) return;
     if (!runtimeConfig?.baseUrl) throw new Error(t("collab.instructions.saveFailed"));
     const saved = await saveProjectInstructions(runtimeConfig, instructionsDirectory, text);
     setInstructions(saved);
@@ -934,8 +937,7 @@ export function CollabPage() {
                         {sessions.map((session) => {
                           // Members see this person's nickname in their own Memmy, so the avatar keeps the nickname.
                           const name = session.memberName || (session.mine ? t("collab.session.you") : "");
-                          // 本人的任务写「你」，与侧栏和原型一致；他人仍写昵称。
-                          const who = session.mine ? t("collab.session.you") : name;
+                          // 本人的任务也写昵称：自己看到的与成员看到的一致，只有昵称缺失时才退回「你」。
                           const menuOpen = openMenuId === session.id;
                           return (
                             <li
@@ -973,7 +975,7 @@ export function CollabPage() {
                                 {session.lastQuestion ? <span className={styles.rowSummary}>{session.lastQuestion}</span> : null}
                               </div>
                               <span className={styles.meta}>
-                                {[who, stampLabel(taskStamp(session.lastActiveAt), t)].filter(Boolean).join(" · ")}
+                                {[name, stampLabel(taskStamp(session.lastActiveAt), t)].filter(Boolean).join(" · ")}
                               </span>
                               {selecting ? null : (
                               <button

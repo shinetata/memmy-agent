@@ -23,7 +23,7 @@ import {
   resolveOpencodeDatabasePath
 } from "../../agent-paths.js";
 import { join } from "node:path";
-import { lstat, readFile, realpath, stat } from "node:fs/promises";
+import { lstat, readdir, readFile, realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, parse, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -37,8 +37,11 @@ export function opencodeToolJsonSchema(args: Record<string, z.ZodType>): Record<
   return z.toJSONSchema(z.object(args));
 }
 import {
+  COLLAB_INSTRUCTIONS_FILE_NAME,
   PROJECT_INSTRUCTIONS_FILE_NAME,
+  collabInstructionsFor,
   normalizeWorkspaceUri,
+  parseCollabInstructionsFile,
   parseProjectInstructionsFile,
   projectInstructionsAt,
   renderL3WorldModelContext,
@@ -101,9 +104,12 @@ export async function readRuntimeConfig(configUrl: URL, pinnedOwner = false): Pr
   };
 }
 
-export async function openRuntimeSession(input: OpenRuntimeSessionInput): Promise<RuntimeSession | null> {
+export async function openRuntimeSession(
+  input: OpenRuntimeSessionInput,
+  options: { timeoutMs?: number } = {},
+): Promise<RuntimeSession | null> {
   const config = await readRuntimeConfig(input.configUrl, input.pinnedOwner === true);
-  const client = new RuntimeHttpClient(config);
+  const client = new RuntimeHttpClient(config, options.timeoutMs);
   const health = await client.get("/api/v1/health").catch(() => null);
   if (!health && input.pinnedOwner === true) return null;
   const features = objectValue(objectValue(health).features);
@@ -197,6 +203,52 @@ export async function readProjectInstructions(input: {
 }
 
 /**
+ * The collab project instructions for a session's working directory.
+ *
+ * <p>This is a separate file from the local project instructions on purpose: a collab project's rules belong to the
+ * cloud project, while a local project's rules belong to a folder on this computer. Keeping them apart means one
+ * store changing never rewrites the other, and a session never receives the same text twice.</p>
+ */
+export async function readCollabProjectInstructions(input: {
+  configUrl: URL;
+  /** The agent this hook runs inside: claude_code / cursor / codex, matching how sessions were associated. */
+  sourceId?: string | null;
+  directory?: string | null;
+  /** The host agent's own conversation id, so a session associated on its own can match. */
+  conversationId?: string | null;
+}): Promise<{ projectId: string; text: string } | null> {
+  const sourceId = input.sourceId?.trim();
+  if (!sourceId) return null;
+  const directory = input.directory?.trim() ?? "";
+  const conversationId = input.conversationId?.trim() ?? "";
+  if (!directory && !conversationId) return null;
+  const snapshot = objectValue(await readJson(input.configUrl).catch(() => null));
+  const configPath = text(snapshot.memmy_config_path) || resolve(homedir(), ".memmy", "config.yaml");
+  const raw = await readFile(join(dirname(configPath), COLLAB_INSTRUCTIONS_FILE_NAME), "utf8").catch(() => "");
+  if (!raw.trim()) return null;
+  // Codex organizes sessions by its own projects, whose roots may nest. Naming the project here keeps one
+  // project's instructions out of a nested project that belongs to someone else.
+  const codexProjectId = sourceId === "codex" && directory
+    ? await codexProjectIdFor(directory, text(snapshot.codex_home) || join(homedir(), ".codex"))
+    : null;
+  try {
+    const file = parseCollabInstructionsFile(JSON.parse(raw));
+    const hit = collabInstructionsFor(file, {
+      sourceId,
+      directory,
+      conversationId,
+      ...(codexProjectId ? { groupId: codexProjectId, unitIsExact: true } : {}),
+    });
+    if (!hit) return null;
+    const value = hit.entry.text.trim();
+    return value ? { projectId: hit.projectId, text: value } : null;
+  } catch {
+    // A hook must never break the host agent's turn because a file elsewhere is unreadable.
+    return null;
+  }
+}
+
+/**
  * 项目关联的知识库：与记忆同一轮、同一时机，只读注入。
  *
  * <p>钩子只把工作目录和这一轮的问题交给本机后端，由它判断目录属于哪个协作项目、项目关联了哪些知识库。
@@ -269,9 +321,12 @@ export function renderProjectKnowledge(result: Record<string, any>): string {
   ].join("\n");
 }
 
-export async function loadRuntimeL3(session: RuntimeSession): Promise<LoadedRuntimeSession> {
+export async function loadRuntimeL3(
+  session: RuntimeSession,
+  options: { timeoutMs?: number } = {},
+): Promise<LoadedRuntimeSession> {
   if (session.protocol !== "v2") return { ...session, additionalContext: "", renderedContext: "", memoryVersion: null };
-  const client = new RuntimeHttpClient(session.config);
+  const client = new RuntimeHttpClient(session.config, options.timeoutMs);
   const envelope = runtimeEnvelope(session.source, session.sessionKey, session.config.userId, session.projectId, session.adapterId, session.profileId);
   const result = objectValue(await client.get(
     `/api/v1/l3-world-model/sessions/${encodeURIComponent(session.sessionId)}/context`,
@@ -630,7 +685,8 @@ async function resolveDeepseekHarnessSessionFile(input: {
 }
 
 class RuntimeHttpClient {
-  constructor(private readonly config: RuntimeConfig) {}
+  /** timeoutMs 决定这次请求最多等多久：会话启动路径给短预算，后台上报仍用默认值。 */
+  constructor(private readonly config: RuntimeConfig, private readonly timeoutMs = 45_000) {}
 
   async get(path: string, transport: { query?: Record<string, string>; headers?: Record<string, string> } = {}): Promise<unknown> {
     const url = new URL(path, `${this.config.endpoint.replace(/\/+$/u, "")}/`);
@@ -653,7 +709,7 @@ class RuntimeHttpClient {
     if (this.config.token) headers.set("authorization", `Bearer ${this.config.token}`);
     let response: Response;
     try {
-      response = await fetch(url, { ...init, headers, signal: AbortSignal.timeout(45_000) });
+      response = await fetch(url, { ...init, headers, signal: AbortSignal.timeout(this.timeoutMs) });
     } catch (error) {
       throw new Error(`Memmy request to ${url} failed: ${formatErrorWithCause(error)}`, { cause: error });
     }
@@ -768,5 +824,49 @@ async function readJson(url: URL): Promise<unknown> {
     return JSON.parse(content);
   } catch {
     return {};
+  }
+}
+
+/**
+ * The Codex project a directory belongs to, read from Codex's own state database.
+ *
+ * <p>Codex projects can have several roots and those roots can nest, so the longest matching root wins — the same
+ * rule Codex uses when it shows a session under a project. Null when Codex has no state database or nothing matches,
+ * in which case the caller falls back to comparing directories.</p>
+ */
+async function codexProjectIdFor(directory: string, codexHome: string): Promise<string | null> {
+  const target = directory.replace(/[/\\]+$/u, "");
+  if (!target) return null;
+  let names: string[];
+  try {
+    names = await readdir(codexHome);
+  } catch {
+    return null;
+  }
+  const state = names
+    .map((name) => ({ name, version: Number(/^state_(\d+)\.sqlite$/u.exec(name)?.[1] ?? Number.NaN) }))
+    .filter((entry) => Number.isFinite(entry.version))
+    .sort((left, right) => right.version - left.version)[0];
+  if (!state) return null;
+  let db: NodeSqliteDatabase | null = null;
+  try {
+    const { DatabaseSync } = await loadNodeSqlite();
+    db = new DatabaseSync(join(codexHome, state.name), { readOnly: true }) as unknown as NodeSqliteDatabase;
+    const rows = db.prepare(
+      "SELECT p.id AS id, r.path AS path FROM projects p JOIN project_roots r ON r.project_id = p.id"
+    ).all() as Array<{ id: string; path: string }>;
+    let best: { id: string; length: number } | null = null;
+    for (const row of rows) {
+      const root = String(row.path ?? "").replace(/[/\\]+$/u, "");
+      if (!root) continue;
+      if (target !== root && !target.startsWith(`${root}/`)) continue;
+      if (!best || root.length > best.length) best = { id: String(row.id), length: root.length };
+    }
+    return best?.id ?? null;
+  } catch {
+    // A missing or unreadable state database must never break the host agent's turn.
+    return null;
+  } finally {
+    db?.close();
   }
 }

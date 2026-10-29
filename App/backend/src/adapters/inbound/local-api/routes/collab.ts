@@ -1,7 +1,7 @@
 /** Online project routes: projects, associated sessions, and references from other agents. */
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
-import { MAX_PROJECT_INSTRUCTIONS_CHARS } from "@memmy/local-api-contracts";
+import { MAX_COLLAB_INSTRUCTIONS_CHARS } from "@memmy/local-api-contracts";
 import { CollabError, sinceWindowMs, type CollabService } from "../../../../services/collab-service.js";
 import { withErrorEnvelope } from "../../../../services/error-envelope.js";
 
@@ -94,8 +94,8 @@ const RenameProjectSchema = z.object({
   name: z.string().trim().min(1, "请填写项目名称").max(20, "项目名称不超过 20 个字")
 }).strict();
 const InstructionsSchema = z.object({
-  instructions: z.string().max(MAX_PROJECT_INSTRUCTIONS_CHARS * 4),
-  /** 看板带来的本机项目目录，指令同步到它，项目里的任务才能读到。 */
+  instructions: z.string().max(MAX_COLLAB_INSTRUCTIONS_CHARS * 4),
+  /** 看板带来的本机项目目录，仅用于记下“这个目录属于哪个协作项目”，不是指令的键。 */
   directory: z.string().trim().min(1).max(4_096)
     .refine((value) => value.startsWith("/") || /^[A-Za-z]:[\\/]/u.test(value), "项目目录需为绝对路径")
     .optional()
@@ -204,7 +204,7 @@ export function registerCollabRoutes(app: FastifyInstance, options: RegisterColl
       const input = RenameProjectSchema.parse(body);
       return reply.send(await options.collab.renameProject(projectId, input.name));
     }
-    // 项目指令由所有者与管理员编辑（云端判定权限），保存后同步到本机，项目里的任务随即按新指令执行。
+    // 项目指令由所有者与管理员编辑（云端判定权限），后端把内容缓存到协作侧自己的文件，项目里的任务随即按新指令执行。
     if (typeof (body as { instructions?: unknown }).instructions === "string") {
       const input = InstructionsSchema.parse(body);
       return reply.send(await options.collab.updateInstructions(projectId, input.instructions, input.directory));

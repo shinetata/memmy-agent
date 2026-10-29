@@ -1,10 +1,10 @@
 /**
- * 项目指令的本机存储：一份文件，供 Memmy 任务、其他 Agent 的钩子与看板读取。
+ * 本机项目的项目指令：「这台电脑上的这个文件夹」的规矩，存一份文件。
  *
- * <p>指令的维护方随项目而变：本地项目由本机在项目配置中编辑，协作项目由项目所有者或管理员在云端编辑。
- * 无论哪种，注入只看这一份文件，所以 Memmy 任务与其他 Agent 不必知道项目是否共享、也不必联网。</p>
+ * <p>它只管本机项目。协作项目有自己的文件与自己的注入路径（见 {@code collab-instructions-service}），
+ * 两边不读写对方的文件：同一段文本不会注入两次，一方的保存也不会改写另一方的内容。</p>
  *
- * <p>文件格式与读取规则见 {@code @memmy/local-api-contracts} 的 project-instructions：键是项目任务所在目录。
+ * <p>文件格式与读取规则见 {@code @memmy/local-api-contracts} 的 project-instructions：键是项目所在的文件夹。
  * 写入只发生在这里（桌面端后端），读方是只读的另外两个进程。</p>
  */
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
@@ -43,16 +43,8 @@ export interface ProjectInstructionsService {
   /** 本机项目在项目配置中保存的指令。空文本表示清除。 */
   saveLocal(directory: string, text: string): Promise<ProjectInstructionsView>;
   /**
-   * 把协作项目的云端指令同步到本机：成员的任务读的就是它。
-   * 云端没有指令时清掉本机镜像，避免成员继续按已经删掉的指令执行。
+   * 删掉某个目录的条目。用于迁移：老版本曾把协作项目的指令镜像在这里，搬走后要把镜像清掉。
    */
-  mirrorCloud(directory: string, text: string, cloudProjectId: string): Promise<ProjectInstructionsView>;
-  /**
-   * 停止共享或删除云端项目：云端不再有这份指令，但这条指令是所有者自己写的，
-   * 转为本机指令继续生效，不至于静默消失。
-   */
-  demoteToLocal(directory: string): Promise<ProjectInstructionsView>;
-  /** 退出别人的项目：那份指令属于项目所有者，本机不再保留。 */
   forget(directory: string): Promise<void>;
   /** 测试与排障用：文件里的全部条目。 */
   snapshot(): Promise<ProjectInstructionsFile>;
@@ -123,13 +115,8 @@ export function createProjectInstructionsService(options: ProjectInstructionsSer
     };
   }
 
-  /** 写一条指令；文本为空时删除该目录，文件里不留空条目。 */
-  async function write(
-    directory: string,
-    text: string,
-    origin: ProjectInstructionsOrigin,
-    cloudProjectId: string | null
-  ): Promise<ProjectInstructionsView> {
+  /** 写一条本机指令；文本为空时删除该目录，文件里不留空条目。 */
+  async function write(directory: string, text: string): Promise<ProjectInstructionsView> {
     const key = projectInstructionsKey(directory);
     if (!key) throw new Error("项目目录无效");
     const value = text.trim();
@@ -146,14 +133,13 @@ export function createProjectInstructionsService(options: ProjectInstructionsSer
         }
         return EMPTY_PROJECT_INSTRUCTIONS;
       }
-      if (existing && existing.text === value && existing.origin === origin
-        && existing.cloudProjectId === cloudProjectId) {
+      if (existing && existing.text === value && existing.origin === "local" && existing.cloudProjectId === null) {
         return view(existing);
       }
       const entry: ProjectInstructionsEntry = {
         text: value,
-        origin,
-        cloudProjectId,
+        origin: "local",
+        cloudProjectId: null,
         updatedAt: now().toISOString()
       };
       file.projects[key] = entry;
@@ -170,21 +156,7 @@ export function createProjectInstructionsService(options: ProjectInstructionsSer
     },
 
     saveLocal(directory, text) {
-      // 本机编辑后这份指令不再代表云端内容，云端 ID 一并清掉。
-      return write(directory, text, "local", null);
-    },
-
-    mirrorCloud(directory, text, cloudProjectId) {
-      return write(directory, text, "cloud", cloudProjectId);
-    },
-
-    async demoteToLocal(directory) {
-      const key = projectInstructionsKey(directory);
-      if (!key) return EMPTY_PROJECT_INSTRUCTIONS;
-      const entry = (await load()).projects[key] ?? null;
-      if (!entry) return EMPTY_PROJECT_INSTRUCTIONS;
-      if (entry.origin === "local") return view(entry);
-      return write(directory, entry.text, "local", null);
+      return write(directory, text);
     },
 
     async forget(directory) {

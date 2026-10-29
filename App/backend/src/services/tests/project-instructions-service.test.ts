@@ -1,4 +1,4 @@
-/** 项目指令的本机存储：本地编辑、云端同步、清空与降级为本机指令。 */
+/** 本机项目的项目指令：按文件夹存、清空即删除。协作项目走自己的存储，不在这里。 */
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -63,25 +63,6 @@ describe("ProjectInstructionsService", () => {
 
     await expect(service.saveLocal(DIRECTORY, "字".repeat(MAX_PROJECT_INSTRUCTIONS_CHARS + 1)))
       .rejects.toThrow(`不超过 ${MAX_PROJECT_INSTRUCTIONS_CHARS} 字`);
-  });
-
-  it("mirrors a shared project's instructions and clears them when the cloud has none", async () => {
-    await service.saveLocal(DIRECTORY, "本机的旧指令");
-    await expect(service.mirrorCloud(DIRECTORY, "项目全体成员在本项目中的任务遵循以下指令。", "cloud-1"))
-      .resolves.toMatchObject({ text: "项目全体成员在本项目中的任务遵循以下指令。", origin: "cloud", cloudProjectId: "cloud-1" });
-
-    // 所有者清空指令后，成员不该继续按已经删掉的内容执行。
-    await expect(service.mirrorCloud(DIRECTORY, "", "cloud-1")).resolves.toMatchObject({ text: "", origin: null });
-    expect((await service.snapshot()).projects).toEqual({});
-  });
-
-  it("keeps a deleted cloud project's instructions for the local project, and drops them when leaving", async () => {
-    await service.mirrorCloud(DIRECTORY, "云端维护的指令", "cloud-1");
-    await expect(service.demoteToLocal(DIRECTORY)).resolves.toMatchObject({ text: "云端维护的指令", origin: "local", cloudProjectId: null });
-
-    await service.mirrorCloud(DIRECTORY, "别人的项目指令", "cloud-2");
-    await service.forget(DIRECTORY);
-    await expect(service.read(DIRECTORY)).resolves.toMatchObject({ text: "", origin: null });
   });
 
   it("serializes concurrent saves so the last one wins instead of merging halves", async () => {

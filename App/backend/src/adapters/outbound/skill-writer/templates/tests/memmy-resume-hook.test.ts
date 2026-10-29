@@ -393,8 +393,8 @@ describe("memmy resume hook stop capture", () => {
         projects: {
           [tempDir]: {
             text: "前端代码遵循《前端代码规范》，新增文案同步补充中英文。",
-            origin: "cloud",
-            cloudProjectId: "p-1",
+            origin: "local",
+            cloudProjectId: null,
             updatedAt: "2026-10-24T12:00:00.000Z",
           },
         },
@@ -421,6 +421,144 @@ describe("memmy resume hook stop capture", () => {
       expect(compacted.status).toBe(0);
       const compactContext = (JSON.parse(compacted.stdout) as Record<string, any>).hookSpecificOutput?.additionalContext;
       expect(compactContext).toContain("前端代码遵循《前端代码规范》");
+    } finally {
+      await close(server);
+    }
+  }, 30000);
+
+  it("injects the collab project instructions as their own section, after the local project ones", async () => {
+    tempDir = mkdtempSync(join(tmpdir(), "memmy-collab-instructions-hook-"));
+    const server = createServer(async (request: IncomingMessage, response: ServerResponse) => {
+      await requestBody(request);
+      response.setHeader("content-type", "application/json");
+      if (request.url === "/api/v1/health") {
+        response.end(JSON.stringify({ features: { l3WorldModelProtocolVersions: [2] } }));
+        return;
+      }
+      if (request.url === "/api/v1/sessions/open") {
+        response.end(JSON.stringify({ sessionId: "memory-session", projectId: `ws_${"b".repeat(64)}` }));
+        return;
+      }
+      if (request.url?.startsWith("/api/v1/l3-world-model/sessions/memory-session/context?")) {
+        response.end(JSON.stringify({ sessionId: "memory-session", memoryVersion: 3, renderedContext: "", sourceMemoryIds: [] }));
+        return;
+      }
+      if (request.url?.startsWith("/api/v1/sessions/memory-session/l3-world-model-trace-head?")) {
+        response.end(JSON.stringify({ throughL1MemoryId: "l1-last", traceSeq: 9 }));
+        return;
+      }
+      if (request.url === "/api/v1/sessions/memory-session/l3-world-model-boundary") {
+        response.end(JSON.stringify({ batches: [] }));
+        return;
+      }
+      response.statusCode = 404;
+      response.end(JSON.stringify({ error: { message: "not found" } }));
+    });
+    await listen(server);
+    try {
+      const port = (server.address() as { port: number }).port;
+      const hookScriptPath = installHookFixture(tempDir, "claude_code", "claude-code", `http://127.0.0.1:${port}`, runtimeAsset);
+      // 两套存储各一份文件：本机项目指令按文件夹，协作项目指令按云端项目 id。
+      writeFileSync(join(tempDir, "project-instructions.json"), JSON.stringify({
+        version: 1,
+        projects: {
+          [tempDir]: {
+            text: "本机约定：提交信息用英文。",
+            origin: "local",
+            cloudProjectId: null,
+            updatedAt: "2026-10-28T12:00:00.000Z",
+          },
+        },
+      }));
+      writeFileSync(join(tempDir, "collab-project-instructions.json"), JSON.stringify({
+        version: 1,
+        projects: {
+          "p-1": {
+            // 关联的是 Claude Code 的这个目录：钩子在自己身上就该命中。
+            scopes: [{ sourceId: "claude_code", groupId: tempDir, roots: [tempDir] }],
+            text: "团队约定：先看 PRD，再改代码。",
+            updatedAt: "2026-10-28T12:00:00.000Z",
+          },
+        },
+      }));
+
+      const started = await runHook(hookScriptPath, {
+        hook_event_name: "SessionStart",
+        session_id: "host-session",
+        source: "startup",
+        cwd: tempDir,
+      });
+      expect(started.status).toBe(0);
+      const context = (JSON.parse(started.stdout) as Record<string, any>).hookSpecificOutput?.additionalContext;
+      expect(context).toContain('<project_instructions source="memmy">');
+      expect(context).toContain("本机约定：提交信息用英文。");
+      expect(context).toContain('<collab_project_instructions project="p-1">');
+      expect(context).toContain("团队约定：先看 PRD，再改代码。");
+      expect(context).toContain("</collab_project_instructions>");
+      // 两段都在，本机约定在前，团队约定在其后。
+      expect(context.indexOf("本机约定")).toBeLessThan(context.indexOf("团队约定"));
+    } finally {
+      await close(server);
+    }
+  }, 30000);
+
+  it("leaves out instructions that only cover another agent's units", async () => {
+    tempDir = mkdtempSync(join(tmpdir(), "memmy-collab-instructions-other-agent-"));
+    const server = createServer(async (request: IncomingMessage, response: ServerResponse) => {
+      await requestBody(request);
+      response.setHeader("content-type", "application/json");
+      if (request.url === "/api/v1/health") {
+        response.end(JSON.stringify({ features: { l3WorldModelProtocolVersions: [2] } }));
+        return;
+      }
+      if (request.url === "/api/v1/sessions/open") {
+        response.end(JSON.stringify({ sessionId: "memory-session", projectId: `ws_${"b".repeat(64)}` }));
+        return;
+      }
+      if (request.url?.startsWith("/api/v1/l3-world-model/sessions/memory-session/context?")) {
+        response.end(JSON.stringify({ sessionId: "memory-session", memoryVersion: 3, renderedContext: "", sourceMemoryIds: [] }));
+        return;
+      }
+      if (request.url?.startsWith("/api/v1/sessions/memory-session/l3-world-model-trace-head?")) {
+        response.end(JSON.stringify({ throughL1MemoryId: "l1-last", traceSeq: 9 }));
+        return;
+      }
+      if (request.url === "/api/v1/sessions/memory-session/l3-world-model-boundary") {
+        response.end(JSON.stringify({ batches: [] }));
+        return;
+      }
+      response.statusCode = 404;
+      response.end(JSON.stringify({ error: { message: "not found" } }));
+    });
+    await listen(server);
+    try {
+      const port = (server.address() as { port: number }).port;
+      const hookScriptPath = installHookFixture(tempDir, "claude_code", "claude-code", `http://127.0.0.1:${port}`, runtimeAsset);
+      // 这个项目的指令只关联了 Cursor 的 workspace 与 Codex 的项目，Claude Code 的会话不该拿到。
+      writeFileSync(join(tempDir, "collab-project-instructions.json"), JSON.stringify({
+        version: 1,
+        projects: {
+          "p-1": {
+            scopes: [
+              { sourceId: "cursor", groupId: join(tempDir, "MemOS.code-workspace"), roots: [tempDir] },
+              { sourceId: "codex", groupId: "project-1", roots: [tempDir] },
+            ],
+            text: "只属于其他 Agent 的团队约定",
+            updatedAt: "2026-10-28T12:00:00.000Z",
+          },
+        },
+      }));
+
+      const started = await runHook(hookScriptPath, {
+        hook_event_name: "SessionStart",
+        session_id: "host-session",
+        source: "startup",
+        cwd: tempDir,
+      });
+      expect(started.status).toBe(0);
+      const context = (JSON.parse(started.stdout) as Record<string, any>).hookSpecificOutput?.additionalContext ?? "";
+      expect(context).not.toContain("collab_project_instructions");
+      expect(context).not.toContain("只属于其他 Agent 的团队约定");
     } finally {
       await close(server);
     }

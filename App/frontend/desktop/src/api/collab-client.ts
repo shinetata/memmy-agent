@@ -206,10 +206,10 @@ export interface CollabClient {
   /** Renames the project for every member; only the owner may do it, and the cloud enforces that. */
   renameProject(projectId: string, name: string): Promise<CollabProject>;
   /**
-   * Saves the project instructions (owners and admins). `directory` is the local project's folder, so the copy the
-   * tasks read lands where they look for it.
+   * Saves the project instructions (owners and admins). The cloud is the source of truth; the backend caches the
+   * text for its own store and the tasks read it from there.
    */
-  setInstructions(projectId: string, text: string, directory?: string): Promise<CollabProject>;
+  setInstructions(projectId: string, text: string): Promise<CollabProject>;
   /**
    * The folder this project's tasks run in, created on demand for a project that predates binding or was just
    * joined. `name` names the managed folder after the project, since that folder is what a task page shows.
@@ -311,12 +311,12 @@ export function createHttpCollabClient(config: RuntimeConfig): CollabClient {
       return result.project;
     },
 
-    async setInstructions(projectId, text, directory) {
+    async setInstructions(projectId, text) {
       const result = await requestJson({
         config,
         path: `/api/collab/projects/${encodeURIComponent(projectId)}`,
         schema: z.object({ project: ProjectSchema }),
-        body: { instructions: text, ...(directory ? { directory } : {}) },
+        body: { instructions: text },
         init: { method: "PATCH" }
       });
       return result.project;

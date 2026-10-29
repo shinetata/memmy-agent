@@ -29,6 +29,7 @@ export * from "./browser-use-site-policy.js";
 export * from "./browser-cdp-readonly.js";
 export * from "./browser-cdp-write.js";
 export * from "./project-instructions.js";
+export * from "./collab-instructions.js";
 
 export const MANAGED_AGENT_DISCOVERY_PENDING_DATA_PATH = "memmy-agent://history-discovery-pending";
 

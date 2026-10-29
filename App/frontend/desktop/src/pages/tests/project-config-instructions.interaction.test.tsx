@@ -207,8 +207,9 @@ describe("project board configuration", () => {
     await act(async () => byText("保存").click());
     await flush();
 
-    // 协作项目的指令以云端为准：带上本机目录，让后端把云端内容同步到一起。
-    expect(mocks.setInstructions).toHaveBeenCalledWith(CLOUD_PROJECT.id, "对外文案使用书面语。", PROJECT.rootPath);
+    // 协作项目的指令以云端为准，看板不再去读本机项目指令（那是另一套存储）。
+    expect(mocks.setInstructions).toHaveBeenCalledWith(CLOUD_PROJECT.id, "对外文案使用书面语。");
+    // 保存不落本机项目指令文件。
     expect(instructionMocks.saveProjectInstructions).not.toHaveBeenCalled();
     expect(document.body.textContent).toContain("对外文案使用书面语。");
   });
