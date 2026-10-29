@@ -804,47 +804,39 @@ export function CollabPage() {
                         ))}
                       </div>
                       <span className={styles.grow} />
-                      <label className={styles.searchBox}>
-                        <Search size={14} aria-hidden="true" className={styles.searchIcon} />
-                        <input
-                          value={searchDraft}
-                          placeholder={t("collab.sessions.searchPlaceholder")}
-                          aria-label={t("collab.sessions.searchPlaceholder")}
-                          onChange={(event) => {
-                            const next = event.target.value;
-                            setSearchDraft(next);
-                            // Clearing shows everything again at once; typing waits for a pause.
-                            if (!next.trim()) setQuery("");
-                          }}
-                          onKeyDown={(event) => {
-                            // 回车确认输入法候选词时不要发起搜索，否则搜的是半成品拼音。
-                            if (event.key === "Enter" && !isComposingKeyboardEvent(event)) setQuery(searchDraft.trim());
-                            if (event.key === "Escape") {
-                              setSearchDraft("");
-                              setQuery("");
-                            }
-                          }}
-                        />
-                        {searchDraft && searchDraft !== query ? (
-                          <button type="button" className={styles.searchGo} onClick={() => setQuery(searchDraft.trim())}>
-                            {t("collab.sessions.searchGo")}
-                          </button>
-                        ) : null}
-                      </label>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        className={styles.iconAction}
-                        aria-label={t("collab.sessions.refresh")}
-                        title={t("collab.sessions.refresh")}
-                        disabled={refreshing}
-                        onClick={() => void refreshBoard()}
-                      >
-                        <RefreshCw size={14} aria-hidden="true" />
-                        <span className={styles.actionLabel}>{t("collab.sessions.refresh")}</span>
-                      </Button>
+                      {/* 搜索属于浏览，选择态收起来；已经带着查询时保留，否则列表被筛住却看不到原因 */}
+                      {selecting && !query ? null : (
+                        <label className={styles.searchBox}>
+                          <Search size={14} aria-hidden="true" className={styles.searchIcon} />
+                          <input
+                            value={searchDraft}
+                            placeholder={t("collab.sessions.searchPlaceholder")}
+                            aria-label={t("collab.sessions.searchPlaceholder")}
+                            onChange={(event) => {
+                              const next = event.target.value;
+                              setSearchDraft(next);
+                              // Clearing shows everything again at once; typing waits for a pause.
+                              if (!next.trim()) setQuery("");
+                            }}
+                            onKeyDown={(event) => {
+                              // 回车确认输入法候选词时不要发起搜索，否则搜的是半成品拼音。
+                              if (event.key === "Enter" && !isComposingKeyboardEvent(event)) setQuery(searchDraft.trim());
+                              if (event.key === "Escape") {
+                                setSearchDraft("");
+                                setQuery("");
+                              }
+                            }}
+                          />
+                          {searchDraft && searchDraft !== query ? (
+                            <button type="button" className={styles.searchGo} onClick={() => setQuery(searchDraft.trim())}>
+                              {t("collab.sessions.searchGo")}
+                            </button>
+                          ) : null}
+                        </label>
+                      )}
                       {selecting ? (
-                        <>
+                        /* 选择态只留这一组，整组不换行：否则最后一个「删除」会被挤到下一行单挂 */
+                        <span className={styles.selectActions}>
                           <span className={styles.selectCount}>
                             {t("collab.sessions.selectedCount", { count: String(selected.size) })}
                           </span>
@@ -865,9 +857,22 @@ export function CollabPage() {
                             <Trash2 size={14} aria-hidden="true" />
                             {bulkDeleting ? t("collab.sessions.deleting") : t("collab.session.delete")}
                           </Button>
-                        </>
+                        </span>
                       ) : (
                         <>
+                          {/* 刷新属于浏览列表，选择态用不上，放在常态这一支 */}
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className={styles.iconAction}
+                            aria-label={t("collab.sessions.refresh")}
+                            title={t("collab.sessions.refresh")}
+                            disabled={refreshing}
+                            onClick={() => void refreshBoard()}
+                          >
+                            <RefreshCw size={14} aria-hidden="true" />
+                            <span className={styles.actionLabel}>{t("collab.sessions.refresh")}</span>
+                          </Button>
                           {/* 多选只对本人任务生效：没有本人的任务时不显示入口 */}
                           {(sessions ?? []).some((session) => session.mine) ? (
                             <Button

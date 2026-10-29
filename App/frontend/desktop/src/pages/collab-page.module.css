@@ -270,6 +270,15 @@
   white-space: nowrap;
 }
 
+/* 选择态的操作组：整组不换行也不压缩，否则最后一个「删除」会被挤到下一行单挂 */
+.selectActions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+
 .row:only-child {
   border-radius: 13px;
 }
