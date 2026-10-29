@@ -397,8 +397,24 @@ export interface CollabApplication {
   createdAt: string | null;
 }
 
+/**
+ * 已经审完的加入申请。云端把审核结果写回申请行；桌面端读到后给一次明确结果，
+ * 而不是让侧栏的「申请中」默默消失。
+ */
+export interface CollabApplicationDecision {
+  projectId: string;
+  projectName: string;
+  status: "approved" | "rejected";
+  decidedAt: string | null;
+}
+
 export interface CollabService {
-  listProjects(): Promise<{ projects: CollabProject[]; applications?: CollabApplication[] }>;
+  listProjects(): Promise<{
+    projects: CollabProject[];
+    applications?: CollabApplication[];
+    /** 旧云端没有这一列：字段缺省表示读不到结果，桌面端就不提示。 */
+    decisions?: CollabApplicationDecision[];
+  }>;
   /**
    * Creates the cloud project and prepares the directory its tasks run in: the person's chosen folder, or a
    * managed folder when none was chosen, so a task always has a working directory.
@@ -1316,7 +1332,14 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
       }));
       // 旧云端没有这份列表时不填字段，桌面端就保留本机刚记下的申请，避免一次刷新把「申请中」冲掉。
       if (!Array.isArray(data.applications)) return { projects: bound };
-      return { projects: bound, applications: list(data.applications).map(toApplication) };
+      const decisions = Array.isArray(data.decisions)
+        ? list(data.decisions).map(toDecision).filter((decision): decision is CollabApplicationDecision => decision !== null)
+        : undefined;
+      return {
+        projects: bound,
+        applications: list(data.applications).map(toApplication),
+        ...(decisions ? { decisions } : {})
+      };
     },
 
     async createProject(name, directory) {
@@ -2220,6 +2243,19 @@ function toApplication(raw: unknown): CollabApplication {
     projectId: text(application.projectId),
     projectName: text(application.projectName),
     createdAt: nullableText(application.createdAt)
+  };
+}
+
+/** 只认「已通过 / 未通过」两种结果；云端还没升级时这里拿到的是空，不会被当成结果。 */
+function toDecision(raw: unknown): CollabApplicationDecision | null {
+  const decision = record(raw);
+  const status = text(decision.status);
+  if (status !== "approved" && status !== "rejected") return null;
+  return {
+    projectId: text(decision.projectId),
+    projectName: text(decision.projectName),
+    status,
+    decidedAt: nullableText(decision.decidedAt)
   };
 }
 

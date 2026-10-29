@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 import { renderToString } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { AppProviders } from "../../app/providers.js";
+import { addPendingApplication, resetCollabProjectsStore } from "../../app/collab-projects-store.js";
 import type { UpdateCoordinatorValue } from "../../app/update-coordinator.js";
 import type { MemmyAgentProject } from "../../api/memmy-agent-client.js";
 import { I18nProvider } from "../../i18n/i18n-provider.js";
@@ -12,7 +13,7 @@ import { appActions } from "../../state/app-actions.js";
 import { appReducer, createInitialAppState } from "../../state/app-reducer.js";
 import type { AgentTaskView } from "../../state/agent-chat-slice.js";
 import { mockBootstrap } from "./fixtures/bootstrap.js";
-import { AppFrame, TaskArchiveInlineAction, TaskRow, countProjectTasksToArchive, deriveSidebarPlacement, deriveVisibleSidebarPlacement, sameWorkspacePath, groupAgentTasks, groupTasksByTime, resolveSidebarAccountSummary, resolveSidebarContextMenuPlacement, resolveSidebarMenuOverlayStyle, resolveSidebarUpdateAction, resolveTaskAncestorGroupKeys, shouldCreateNewAgentDraft, truncateAccountDisplayText } from "../app-frame.js";
+import { AppFrame, TaskArchiveInlineAction, TaskRow, countProjectTasksToArchive, deriveSidebarPlacement, deriveVisibleSidebarPlacement, freshDecisionAnnouncements, sameWorkspacePath, groupAgentTasks, groupTasksByTime, resolveSidebarAccountSummary, resolveSidebarContextMenuPlacement, resolveSidebarMenuOverlayStyle, resolveSidebarUpdateAction, resolveTaskAncestorGroupKeys, shouldCreateNewAgentDraft, truncateAccountDisplayText } from "../app-frame.js";
 
 describe("AppFrame", () => {
   it("使用原型 MainLayout 的侧栏图标与导航文案", () => {
@@ -1312,14 +1313,51 @@ describe("AppFrame", () => {
     const source = readFileSync(resolve(__dirname, "..", "app-frame.tsx"), "utf8");
     const poll = source.slice(
       source.indexOf("pendingApplicationCount"),
-      source.indexOf("A rename by the owner")
+      source.indexOf("const recheckPendingApplication")
     );
 
     expect(poll).toContain("if (!collabClient || !state.account.userId || pendingApplicationCount === 0) return;");
     expect(poll).toContain("document.visibilityState === \"hidden\"");
     expect(poll).toContain("void loadCollabProjects(collabClient)");
-    expect(poll).toContain("COLLAB_FOCUS_REFRESH_MS");
+    // 审批落在云端，本机没有推送：有几秒的节奏就不再需要人自己刷新。
+    expect(source).toContain("const COLLAB_APPLICATION_POLL_MS = 4_000;");
+    expect(poll).toContain("COLLAB_APPLICATION_POLL_MS");
     expect(poll).toContain("window.clearInterval(timer)");
+    // 从别的应用切回来时也立刻读一次，而不是等下一个 30 秒。
+    expect(source).toContain('document.addEventListener("visibilitychange", onVisibilityChange)');
+  });
+
+  it("announces a reviewed application once, and only while it still holds", () => {
+    const approved = { projectId: "cloud-1", projectName: "Memmy 开发", status: "approved" as const, decidedAt: "2026-10-29T02:00:00.000Z" };
+    const rejected = { projectId: "cloud-2", projectName: "旧项目", status: "rejected" as const, decidedAt: "2026-10-29T03:00:00.000Z" };
+    const decisions = [approved, rejected];
+
+    // 通过且项目已在列表里、未通过：两条都提示。
+    expect(freshDecisionAnnouncements(decisions, ["cloud-1"], [])).toEqual([approved, rejected]);
+    // 已提示过的按「项目 + 审核时间」去重。
+    expect(freshDecisionAnnouncements(decisions, ["cloud-1"], ["cloud-1|2026-10-29T02:00:00.000Z"])).toEqual([rejected]);
+    // 通过但项目不在列表里（例如随后被移出）：不提示「已加入」。
+    expect(freshDecisionAnnouncements([approved], [], [])).toEqual([]);
+  });
+
+  it("renders a pending application as a row one can click to recheck", () => {
+    addPendingApplication({ projectId: "cloud-9", projectName: "灵动栗子的项目" });
+    try {
+      const html = renderToString(
+        <AppProviders>
+          <AppFrame title="测试页面">
+            <div>工作区</div>
+          </AppFrame>
+        </AppProviders>
+      );
+      // 行本身是按钮：点一下与鼠标划过都会静默重查，不再只靠等。
+      expect(html).toContain("app-frame-project-row app-frame-project-row--pending");
+      expect(html).toContain("灵动栗子的项目");
+      expect(html).toContain("申请中");
+      expect(html).toContain("点一下可立即检查");
+    } finally {
+      resetCollabProjectsStore();
+    }
   });
 });
 

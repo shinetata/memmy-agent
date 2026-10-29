@@ -587,6 +587,28 @@ describe("collab service", () => {
     expect(await service(older).listProjects()).toEqual({ projects: [] });
   });
 
+  it("passes reviewed applications through, and drops statuses it cannot read", async () => {
+    const { fetcher } = fakeFetch({
+      "GET /api/collab/projects": () => ({
+        code: 0,
+        data: {
+          projects: [],
+          applications: [],
+          decisions: [
+            { projectId: "p-9", projectName: "Memmy 开发", status: "approved", decidedAt: "2026-10-29T03:00:00.000Z" },
+            { projectId: "p-8", projectName: "旧项目", status: "rejected", decidedAt: null },
+            // 旧云端或以后的第三态：不认识就不当结果，免得桌面端提示错。
+            { projectId: "p-7", projectName: "未知", status: "pending", decidedAt: null }
+          ]
+        }
+      })
+    });
+    expect((await service(fetcher).listProjects()).decisions).toEqual([
+      { projectId: "p-9", projectName: "Memmy 开发", status: "approved", decidedAt: "2026-10-29T03:00:00.000Z" },
+      { projectId: "p-8", projectName: "旧项目", status: "rejected", decidedAt: null }
+    ]);
+  });
+
   it("uploads the bound project's own Memmy tasks, which need no session link", async () => {
     const root = mkdtempSync(join(tmpdir(), "memmy-collab-home-"));
     roots.push(root);

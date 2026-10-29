@@ -10,7 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CollabMembers } from "../../api/collab-client.js";
 import { I18nProvider } from "../../i18n/i18n-provider.js";
 import { JoinProjectModal } from "../collab-join-project-dialog.js";
-import { ProjectMembersDialog } from "../collab-members-dialog.js";
+import { MEMBER_REQUESTS_POLL_MS, ProjectMembersDialog } from "../collab-members-dialog.js";
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -19,6 +19,15 @@ const project = { id: "cloud-1", name: "Memmy 开发", role: "owner", memberCoun
 async function flush(): Promise<void> {
   for (let index = 0; index < 8; index += 1) {
     await act(async () => new Promise((resolve) => window.setTimeout(resolve, 0)));
+  }
+}
+
+/** 假定时器下的同一个冲刷：把待处理的微任务与零延时定时器都放完。 */
+async function pushTimers(): Promise<void> {
+  for (let index = 0; index < 8; index += 1) {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
   }
 }
 
@@ -145,6 +154,56 @@ describe("project members dialog", () => {
     expect(hasText("获得链接者")).toBe(false);
     expect(document.querySelectorAll("button[aria-haspopup='menu']")).toHaveLength(0);
     expect(button("复制邀请链接")).toBeTruthy();
+  });
+
+  /** 轮询用假定时器：申请在别的电脑上提交，这里只等一个周期就能看到。 */
+  it("picks up a request submitted while the dialog stays open", async () => {
+    const base: CollabMembers = {
+      project,
+      joinMode: "approval",
+      canManage: true,
+      members: [{ userId: "7", name: "用户A", role: "owner", mine: true, joinedAt: null }],
+      requests: []
+    };
+    vi.useFakeTimers();
+    try {
+      collab.listMembers.mockResolvedValue(base);
+      const onRequestsChange = vi.fn();
+      await act(async () => {
+        root.render(
+          <I18nProvider language="zh-CN">
+            <ProjectMembersDialog
+              open
+              collab={collab as never}
+              projectId="cloud-1"
+              onClose={vi.fn()}
+              onToast={onToast}
+              onRequestsChange={onRequestsChange}
+            />
+          </I18nProvider>
+        );
+      });
+      await pushTimers();
+      expect(hasText("加入申请")).toBe(false);
+      expect(onRequestsChange).toHaveBeenLastCalledWith(0);
+
+      // 对方提交后不关弹窗：下一个周期里列表中就出现待审核的申请。
+      collab.listMembers.mockResolvedValue({
+        ...base,
+        requests: [{ userId: "10", name: "用户D", inviterName: "用户A", createdAt: null }]
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(MEMBER_REQUESTS_POLL_MS);
+      });
+      await pushTimers();
+      expect(hasText("加入申请 · 1")).toBe(true);
+      expect(hasText("用户D")).toBe(true);
+      expect(onToast).toHaveBeenCalledWith("用户D 申请加入项目");
+      expect(onRequestsChange).toHaveBeenLastCalledWith(1);
+      expect(button("通过")).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

@@ -76,10 +76,18 @@ const ApplicationSchema = z.object({
   projectName: z.string(),
   createdAt: z.string().nullable().optional()
 });
+/** 已审完的加入申请：通过或未通过。旧后端没有这一列，所以整字段可缺省。 */
+const DecisionSchema = z.object({
+  projectId: z.string(),
+  projectName: z.string(),
+  status: z.enum(["approved", "rejected"]),
+  decidedAt: z.string().nullable().optional()
+});
 const ProjectsResponseSchema = z.object({
   projects: z.array(ProjectSchema),
   /** 旧后端没有待审核列表时省略；空数组表示当前没有申请。 */
-  applications: z.array(ApplicationSchema).optional()
+  applications: z.array(ApplicationSchema).optional(),
+  decisions: z.array(DecisionSchema).optional()
 });
 const CreateProjectResponseSchema = z.object({ project: ProjectSchema, localDirectory: z.string().optional() });
 const ProjectSessionsResponseSchema = z.object({
@@ -170,6 +178,13 @@ export interface CollabApplication {
   projectId: string;
   projectName: string;
 }
+/** 审核结果：桌面端据此给一次明确提示，而不是让「申请中」默默消失。 */
+export interface CollabApplicationDecision {
+  projectId: string;
+  projectName: string;
+  status: "approved" | "rejected";
+  decidedAt: string | null;
+}
 export type CollabProjectSession = z.infer<typeof ProjectSessionSchema>;
 export type LocalAgentSession = z.infer<typeof LocalAgentSessionSchema>;
 export type LocalSessionGroup = z.infer<typeof LocalSessionGroupSchema>;
@@ -196,7 +211,12 @@ export type CollabJoinResult = z.infer<typeof JoinResultSchema>;
 export type CollabKnowledgeView = z.infer<typeof KnowledgeViewSchema>;
 
 export interface CollabClient {
-  listProjects(): Promise<{ projects: CollabProject[]; applications?: CollabApplication[] }>;
+  listProjects(): Promise<{
+    projects: CollabProject[];
+    applications?: CollabApplication[];
+    /** 后台没实现审核结果（旧版本）时不填字段，申请人侧就不提示。 */
+    decisions?: CollabApplicationDecision[];
+  }>;
   /** Creates the cloud project and returns the directory its tasks run in, absent on a backend without it. */
   createProject(name: string, directory?: string): Promise<{ project: CollabProject; localDirectory?: string }>;
   /** Records which local Memmy project runs this online project's tasks. */
@@ -272,10 +292,17 @@ export function createHttpCollabClient(config: RuntimeConfig): CollabClient {
   return {
     async listProjects() {
       const result = await requestJson({ config, path: "/api/collab/projects", schema: ProjectsResponseSchema });
-      if (!result.applications) return { projects: result.projects };
+      const decisions = result.decisions?.map((item) => ({
+        projectId: item.projectId,
+        projectName: item.projectName,
+        status: item.status,
+        decidedAt: item.decidedAt ?? null
+      }));
+      if (!result.applications) return { projects: result.projects, ...(decisions ? { decisions } : {}) };
       return {
         projects: result.projects,
-        applications: result.applications.map((item) => ({ projectId: item.projectId, projectName: item.projectName }))
+        applications: result.applications.map((item) => ({ projectId: item.projectId, projectName: item.projectName })),
+        ...(decisions ? { decisions } : {})
       };
     },
 

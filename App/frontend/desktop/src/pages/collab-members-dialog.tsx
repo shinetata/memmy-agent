@@ -1,5 +1,5 @@
 import { ChevronDown, Link2, X } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { CollabClient, CollabJoinMode, CollabMember, CollabMembers, CollabProject, CollabRole } from "../api/collab-client.js";
 import { Button } from "../components/button.js";
 import { ConfirmDialog } from "../components/confirm-dialog.js";
@@ -21,6 +21,12 @@ const JOIN_MODE_LABELS: Record<CollabJoinMode, MessageKey> = {
 };
 
 /**
+ * 弹窗开着时的刷新间隔。申请落在云端，本机只是读它：对方在别的电脑上提交申请后，这里不必关掉重开就能看到，
+ * 看板在弹窗关着时也用同一个间隔查待审核数。
+ */
+export const MEMBER_REQUESTS_POLL_MS = 4_000;
+
+/**
  * 「邀请成员」/「项目成员 · N」: copy one's invite link, and for owners and admins the join mode, the requests waiting
  * for review, and each other member's role. The cloud decides who may do what; this only hides what would be refused.
  */
@@ -33,9 +39,11 @@ export function ProjectMembersDialog(props: {
   onToast: (message: string) => void;
   /** The member count changed, so the board header and the sidebar show the new one. */
   onProjectChanged?: (project: CollabProject) => void;
+  /** 待审核的申请数，弹窗关着时看板照样能在「邀请」入口上带角标。 */
+  onRequestsChange?: (count: number) => void;
 }) {
   const { t } = useTranslation();
-  const { collab, projectId, onProjectChanged, onToast } = props;
+  const { collab, projectId, onProjectChanged, onRequestsChange, onToast } = props;
   const [view, setView] = useState<CollabMembers | null>(null);
   const [failed, setFailed] = useState(false);
   /** The action in flight, so a second click does not send it twice. */
@@ -43,25 +51,70 @@ export function ProjectMembersDialog(props: {
   /** Which picker is open: the join mode, or a member's role by user id. */
   const [menu, setMenu] = useState<string | null>(null);
   const [removing, setRemoving] = useState<CollabMember | null>(null);
+  /** 上一次读到的成员与申请：轮询据此判断该不该重画，以及有没有新申请要提示。 */
+  const latest = useRef<CollabMembers | null>(null);
+  /** 操作进行中不轮询，免得刚点下去的结果被一份旧列表盖掉。 */
+  const acting = useRef(false);
+  acting.current = busy !== null;
 
   const load = useCallback(async () => {
     try {
       const next = await collab.listMembers(projectId);
+      latest.current = next;
       setView(next);
       setFailed(false);
       onProjectChanged?.(next.project);
+      onRequestsChange?.(next.requests.length);
     } catch {
       setFailed(true);
     }
-  }, [collab, projectId, onProjectChanged]);
+  }, [collab, projectId, onProjectChanged, onRequestsChange]);
+
+  /**
+   * 轮询走的静默刷新：只把变了的成员与申请换上去，失败不弹错，也不清空正在用的列表。
+   * 新申请出现时提示一次，让邀请人不用盯着这张列表。
+   */
+  const refreshQuietly = useCallback(async () => {
+    if (acting.current) return;
+    try {
+      const next = await collab.listMembers(projectId);
+      const previous = latest.current;
+      latest.current = next;
+      onRequestsChange?.(next.requests.length);
+      if (previous) {
+        const known = new Set(previous.requests.map((old) => old.userId));
+        const added = next.requests.filter((request) => !known.has(request.userId));
+        const newest = added[added.length - 1];
+        if (newest) onToast(t("collab.members.newRequest", { name: newest.name }));
+      }
+      if (!previous || !sameView(previous, next)) {
+        setView(next);
+        onProjectChanged?.(next.project);
+      }
+    } catch {
+      // 静默刷新失败保留当前列表，下一个周期再试。
+    }
+  }, [collab, projectId, onProjectChanged, onRequestsChange, onToast, t]);
 
   useEffect(() => {
     if (!props.open) return;
+    latest.current = null;
     setView(null);
     setFailed(false);
     setMenu(null);
     void load();
   }, [props.open, load]);
+
+  // 申请由别的电脑提交，本机没有推送通道：弹窗开着时按固定间隔读一次，成员与申请都能自己更新。
+  const canManage = view?.canManage === true;
+  useEffect(() => {
+    if (!props.open || !canManage) return;
+    const timer = setInterval(() => {
+      if (document.hidden) return;
+      void refreshQuietly();
+    }, MEMBER_REQUESTS_POLL_MS);
+    return () => clearInterval(timer);
+  }, [props.open, canManage, refreshQuietly]);
 
   async function run(key: string, action: () => Promise<string | null>) {
     if (busy) return;
@@ -301,6 +354,20 @@ function MemberAvatar(props: { name: string }) {
       {Array.from(props.name.trim())[0] ?? "?"}
     </span>
   );
+}
+
+/** 成员、申请与加入方式都没变时保留原对象，列表不跟着每次轮询重画。 */
+function sameView(left: CollabMembers, right: CollabMembers): boolean {
+  return left.canManage === right.canManage
+    && left.joinMode === right.joinMode
+    && left.project.memberCount === right.project.memberCount
+    && fingerprint(left) === fingerprint(right);
+}
+
+function fingerprint(view: CollabMembers): string {
+  const members = view.members.map((member) => `${member.userId}:${member.name}:${member.role}:${member.mine}`).join("|");
+  const requests = view.requests.map((request) => `${request.userId}:${request.name}:${request.inviterName}`).join("|");
+  return `${members}\n${requests}`;
 }
 
 function messageOf(cause: unknown): string {

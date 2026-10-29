@@ -1,5 +1,5 @@
 import { BookOpen, LayoutPanelLeft } from "lucide-react";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type MouseEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type MouseEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import {
   productTourIncludesLogs,
@@ -20,6 +20,7 @@ import {
 } from "../app/agent-runtime-bridge.js";
 import { useOptionalApiClients } from "../app/providers.js";
 import { createHttpCollabClient } from "../api/collab-client.js";
+import type { CollabApplicationDecision } from "../api/collab-client.js";
 import { openAgentTaskInChat } from "../app/open-agent-task.js";
 import {
   addCollabProject,
@@ -39,6 +40,7 @@ import {
 import { ApiRequestError } from "../api/http.js";
 import { MemmyAgentRequestError } from "../api/memmy-agent-client.js";
 import { ConfirmDialog } from "../components/confirm-dialog.js";
+import { useOptionalNotificationCenter } from "../components/notification-center.js";
 import { MemoryTokenBudgetBanner } from "../components/memory-token-budget-banner.js";
 import { Tooltip } from "../components/tooltip.js";
 import type { MessageKey, MessageValues } from "../i18n/messages.js";
@@ -268,8 +270,56 @@ const SIDEBAR_PROFILE_NAME_MAX_VISUAL_WIDTH = 10;
 const MAX_PROJECT_NAME_CHARS = 20;
 const SIDEBAR_PROFILE_META_MAX_VISUAL_WIDTH = 12;
 const ACCOUNT_DISPLAY_ELLIPSIS = "…";
-/** How often an open window rereads online projects: on focus, and while a join request is still pending. */
+/** How often an open window rereads online projects: on focus, on becoming visible, and while a join request is pending. */
 const COLLAB_FOCUS_REFRESH_MS = 30_000;
+/**
+ * 有待审核的申请时读得快一些：审批落在云端，本机没有推送通道，几秒内读到就不需要人自己刷新。
+ * 与邀请人那一侧（`MEMBER_REQUESTS_POLL_MS`）同一节奏。
+ */
+const COLLAB_APPLICATION_POLL_MS = 4_000;
+/** 「申请中」那一行被鼠标划过时的重查节流：同一个动作几秒内只查一次。 */
+const COLLAB_RECHECK_THROTTLE_MS = 3_000;
+/** 已经提示过的审核结果，按「项目 + 审核时间」记在本机，重启后不再重复弹。 */
+const SEEN_DECISIONS_STORAGE_KEY = "memmy.collab.decisions";
+const SEEN_DECISIONS_LIMIT = 50;
+
+function decisionKey(decision: CollabApplicationDecision): string {
+  return `${decision.projectId}|${decision.decidedAt ?? ""}`;
+}
+
+/**
+ * 该给哪些审核结果提示：还没提示过的、并且真的成立的那条——未通过的总是提示，
+ * 已通过的只在项目确实出现在列表里时才提示，免得被移出项目后又收到一条「已加入」。
+ */
+export function freshDecisionAnnouncements(
+  decisions: readonly CollabApplicationDecision[],
+  projectIds: readonly string[],
+  seen: readonly string[]
+): CollabApplicationDecision[] {
+  const joined = new Set(projectIds);
+  return decisions.filter((decision) => (
+    !seen.includes(decisionKey(decision))
+    && (decision.status === "rejected" || joined.has(decision.projectId))
+  ));
+}
+
+function readSeenDecisions(): string[] {
+  try {
+    const raw = window.localStorage.getItem(SEEN_DECISIONS_STORAGE_KEY);
+    const parsed: unknown = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed.filter((value): value is string => typeof value === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeSeenDecisions(keys: readonly string[]): void {
+  try {
+    window.localStorage.setItem(SEEN_DECISIONS_STORAGE_KEY, JSON.stringify(keys.slice(-SEEN_DECISIONS_LIMIT)));
+  } catch {
+    // 存不下就算了：顶多下次启动再提示一遍。
+  }
+}
 const standaloneRenderTaskStateCoordinator: AgentTaskStateCoordinator = {
   refreshTaskState: () => undefined,
   focusTask: () => undefined,
@@ -371,17 +421,30 @@ export function AppFrame(props: AppFrameProps) {
 
   // Coming back to the window picks up an approval that happened while Memmy was in the background.
   const collabRefreshedAt = useRef(0);
+  const collabRecheckedAt = useRef(0);
+  const refreshCollabProjects = useCallback((throttleMs: number) => {
+    if (!collabClient || !state.account.userId) return;
+    const now = Date.now();
+    if (now - collabRefreshedAt.current < throttleMs) return;
+    collabRefreshedAt.current = now;
+    void loadCollabProjects(collabClient);
+  }, [collabClient, state.account.userId]);
+
   useEffect(() => {
     if (!collabClient || !state.account.userId) return;
-    const refresh = () => {
-      if (Date.now() - collabRefreshedAt.current < COLLAB_FOCUS_REFRESH_MS) return;
-      collabRefreshedAt.current = Date.now();
-      void loadCollabProjects(collabClient);
-    };
     collabRefreshedAt.current = Date.now();
+    const refresh = () => refreshCollabProjects(COLLAB_FOCUS_REFRESH_MS);
+    // 从别的应用切回来也立即读一次：人回来的第一眼就该是新的。
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") refreshCollabProjects(COLLAB_RECHECK_THROTTLE_MS);
+    };
     window.addEventListener("focus", refresh);
-    return () => window.removeEventListener("focus", refresh);
-  }, [collabClient, state.account.userId]);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, [collabClient, state.account.userId, refreshCollabProjects]);
 
   // While a join request is still pending, reread the same list so approval shows up without leaving the window.
   // The timer stops once the list is empty, so a person with no request pays nothing.
@@ -391,9 +454,47 @@ export function AppFrame(props: AppFrameProps) {
     const timer = window.setInterval(() => {
       if (document.visibilityState === "hidden") return;
       void loadCollabProjects(collabClient);
-    }, COLLAB_FOCUS_REFRESH_MS);
+    }, COLLAB_APPLICATION_POLL_MS);
     return () => window.clearInterval(timer);
   }, [collabClient, pendingApplicationCount, state.account.userId]);
+
+  /**
+   * 「申请中」那一行没有按钮也没有菜单：鼠标划到它、或者点它一下，就在背后重查一次。
+   * 没有变化时界面完全不动，有结果时由轮询那套逻辑统一处理，所以不需要额外的反馈。
+   */
+  const recheckPendingApplication = useCallback((force = false) => {
+    if (!collabClient || !state.account.userId) return;
+    const now = Date.now();
+    if (!force && now - collabRecheckedAt.current < COLLAB_RECHECK_THROTTLE_MS) return;
+    collabRecheckedAt.current = now;
+    void loadCollabProjects(collabClient);
+  }, [collabClient, state.account.userId]);
+
+  // 审核结果只提示一次：通过就告诉人已经加入，未通过就说清还能再申请。
+  const notifications = useOptionalNotificationCenter();
+  const collabDecisions = collabSnapshot.decisions;
+  const collabProjectIds = collabSnapshot.projects;
+  useEffect(() => {
+    if (!notifications || collabDecisions.length === 0) return;
+    const seen = readSeenDecisions();
+    const announced = freshDecisionAnnouncements(collabDecisions, (collabProjectIds ?? []).map((project) => project.id), seen);
+    if (announced.length === 0) return;
+    writeSeenDecisions([...seen, ...announced.map(decisionKey)]);
+    for (const decision of announced) {
+      if (decision.status === "approved") {
+        notifications.notify({
+          variant: "success",
+          title: t("collab.application.approved", { name: decision.projectName })
+        });
+      } else {
+        notifications.notify({
+          variant: "warning",
+          title: t("collab.application.rejected", { name: decision.projectName }),
+          body: t("collab.application.rejectedHint")
+        });
+      }
+    }
+  }, [notifications, collabDecisions, collabProjectIds, t]);
 
   /**
    * A rename by the owner changes what every member reads. Their local project keeps the name on their own
@@ -1498,6 +1599,7 @@ export function AppFrame(props: AppFrameProps) {
               collapsedGroups={state.agent.sidebarState.collapsed_groups}
               projects={visibleProjectTree.projects}
               applications={collabSnapshot.applications}
+              onRecheckPendingApplication={recheckPendingApplication}
               openBoardProjectId={boardProjectId}
               onOpenProjectBoard={openProjectBoard}
               renamingProjectId={renamingProjectId}
@@ -2272,6 +2374,8 @@ function ProjectTreeSection(props: {
   projects: ProjectSidebarNode[];
   /** 已提交、还在等审核的加入申请。只有项目分组展示。 */
   applications?: Array<{ projectId: string; projectName: string }>;
+  /** 「申请中」那一行被鼠标划到或点一下时静默重查一次（force 表示点击）。 */
+  onRecheckPendingApplication?: (force?: boolean) => void;
   /** The project whose board is open, so its row is highlighted. */
   openBoardProjectId?: string | null;
   /** The project being renamed in place, with its draft and the three handlers the row needs. */
@@ -2381,7 +2485,11 @@ function ProjectTreeSection(props: {
           <div className="app-frame-task-section-body">
             {props.tasks.map((task) => renderTask(task))}
             {(props.applications ?? []).map((application) => (
-              <PendingApplicationRow key={application.projectId} name={application.projectName} />
+              <PendingApplicationRow
+                key={application.projectId}
+                name={application.projectName}
+                onRecheck={props.onRecheckPendingApplication}
+              />
             ))}
             {props.projects.map((node) => {
               const projectKey = `project:${node.project.id}`;
@@ -2563,11 +2671,18 @@ function SidebarInlineRenameInput(props: {
   );
 }
 
-/** 还没加入的项目：只显示名称和「申请中」，不能展开任务，也不能打开看板。 */
-function PendingApplicationRow(props: { name: string }) {
+/** 还没加入的项目：显示名称和「申请中」，不能展开任务也打不开看板；鼠标划过或点一下会静默重查一次。 */
+function PendingApplicationRow(props: { name: string; onRecheck?: (force?: boolean) => void }) {
   const { t } = useTranslation();
   return (
-    <div className="app-frame-project-row app-frame-project-row--pending" title={t("collab.application.pendingHint")}>
+    <button
+      type="button"
+      className="app-frame-project-row app-frame-project-row--pending"
+      title={t("collab.application.pendingHint")}
+      onClick={() => props.onRecheck?.(true)}
+      onMouseEnter={() => props.onRecheck?.(false)}
+      onFocus={() => props.onRecheck?.(false)}
+    >
       <span className="app-frame-project-row__mark" aria-hidden="true">
         <Folder size={16} />
       </span>
@@ -2575,7 +2690,7 @@ function PendingApplicationRow(props: { name: string }) {
         <SidebarMarqueeText text={props.name} className="app-frame-project-title" />
         <span className="app-frame-project-pending">{t("collab.application.pending")}</span>
       </span>
-    </div>
+    </button>
   );
 }
 

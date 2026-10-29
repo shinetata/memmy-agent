@@ -23,12 +23,19 @@ function project(id: string, name = id, localProjectId: string | null = null): C
 
 function clientWith(
   list: () => Promise<CollabProject[]>,
-  applications?: { projectId: string; projectName: string }[]
+  applications?: { projectId: string; projectName: string }[],
+  decisions?: { projectId: string; projectName: string; status: "approved" | "rejected"; decidedAt: string | null }[]
 ): CollabClient {
   return {
-    listProjects: async () => (
-      applications === undefined ? { projects: await list() } : { projects: await list(), applications }
-    ),
+    listProjects: async () => {
+      const projects = await list();
+      if (applications === undefined && decisions === undefined) return { projects };
+      return {
+        projects,
+        ...(applications === undefined ? {} : { applications }),
+        ...(decisions === undefined ? {} : { decisions })
+      };
+    },
     createProject: async (name) => ({ project: project("new", name) }),
     listSessions: async () => ({ project: project("x"), sessions: [], total: 0 }),
     listLocalSessions: async () => ({ sessions: [], refreshing: false }),
@@ -137,5 +144,19 @@ describe("collab projects store", () => {
 
     consumeTaskPickerRequest();
     expect(getCollabProjectsSnapshot().taskPickerFor).toBeNull();
+  });
+
+  it("keeps reviewed applications for the result toast, and holds them when the cloud is older", async () => {
+    const decision = { projectId: "cloud-1", projectName: "Memmy 开发", status: "approved" as const, decidedAt: "2026-10-29T02:00:00.000Z" };
+    await loadCollabProjects(clientWith(async () => [project("cloud-1")], [], [decision]));
+    expect(getCollabProjectsSnapshot().decisions).toEqual([decision]);
+
+    // 后台还没有这一列：保留上一次的结果，等前端提示完自己记下来。
+    await loadCollabProjects(clientWith(async () => [project("cloud-1")]));
+    expect(getCollabProjectsSnapshot().decisions).toEqual([decision]);
+
+    // 云端给出空列表时就清空，不再一直挂着。
+    await loadCollabProjects(clientWith(async () => [project("cloud-1")], [], []));
+    expect(getCollabProjectsSnapshot().decisions).toEqual([]);
   });
 });

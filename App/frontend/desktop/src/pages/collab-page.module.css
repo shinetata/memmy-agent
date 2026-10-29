@@ -1759,6 +1759,24 @@
   font-size: 12.5px;
 }
 
+/* 「邀请」入口上的待审核数：小圆角数字，提示有人等着审核，不抢标题的位置 */
+.requestBadge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  margin-left: 6px;
+  padding: 0 5px;
+  border-radius: 8px;
+  background: var(--collab-accent);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
 .roleText {
   flex: none;
   color: var(--collab-muted);

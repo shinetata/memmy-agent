@@ -3,13 +3,15 @@
  * names the project's shared record. The sidebar lists local projects and the board reads the same store, so one
  * store keeps a single open project — named by the local project id — and a single fetch of the cloud list.
  */
-import type { CollabApplication, CollabClient, CollabProject } from "../api/collab-client.js";
+import type { CollabApplication, CollabApplicationDecision, CollabClient, CollabProject } from "../api/collab-client.js";
 
 export interface CollabProjectsSnapshot {
   /** Null until the first load finishes, so the sidebar can tell "none" from "not loaded yet". */
   projects: CollabProject[] | null;
   /** 已提交、尚未通过的加入申请。云端没返回这个字段时保持上次的值。 */
   applications: CollabApplication[];
+  /** 已经审完的申请（通过或未通过），带审核时间；桌面端据此提示一次结果。 */
+  decisions: CollabApplicationDecision[];
   /** The local project whose board is open; the cloud project, if any, is derived from it. */
   selectedId: string | null;
   loading: boolean;
@@ -30,6 +32,7 @@ export interface CollabProjectsSnapshot {
 let snapshot: CollabProjectsSnapshot = {
   projects: null,
   applications: [],
+  decisions: [],
   selectedId: null,
   loading: false,
   error: null,
@@ -82,7 +85,10 @@ export async function loadCollabProjects(client: CollabClient): Promise<void> {
       const joined = new Set(listed.projects.map((project) => project.id));
       const applications = (listed.applications ?? snapshot.applications)
         .filter((application) => !joined.has(application.projectId));
-      update({ projects: listed.projects, applications, loading: false, error: null });
+      // 后台还没有审核结果这一列时保留上一次的值，免得一次刷新把待提示的结果冲掉。
+      // 结果不按「已加入」过滤：通过的那一条正是靠它给一次提示，提示过之后就记在本机不再弹。
+      const decisions = listed.decisions ?? snapshot.decisions;
+      update({ projects: listed.projects, applications, decisions, loading: false, error: null });
     } catch (cause) {
       // 云端不可用时保留已有列表：项目就在本机，云端只决定能不能看共享内容。
       update({ loading: false, error: messageOf(cause) });
@@ -174,6 +180,7 @@ export function resetCollabProjectsStore(): void {
   snapshot = {
     projects: null,
     applications: [],
+    decisions: [],
     selectedId: null,
     loading: false,
     error: null,
@@ -189,8 +196,12 @@ export function resetCollabProjectsStore(): void {
  * `applications` 缺省表示云端还没有这份列表。
  */
 function normalizeProjectList(
-  listed: { projects: CollabProject[]; applications?: CollabApplication[] } | CollabProject[]
-): { projects: CollabProject[]; applications?: CollabApplication[] } {
+  listed: {
+    projects: CollabProject[];
+    applications?: CollabApplication[];
+    decisions?: CollabApplicationDecision[];
+  } | CollabProject[]
+): { projects: CollabProject[]; applications?: CollabApplication[]; decisions?: CollabApplicationDecision[] } {
   if (Array.isArray(listed)) return { projects: listed };
   return listed;
 }

@@ -19,7 +19,8 @@ const mocks = vi.hoisted(() => ({
   knowledge: vi.fn(),
   getLinks: vi.fn(),
   listProjectTasks: vi.fn(),
-  readSessionDetail: vi.fn()
+  readSessionDetail: vi.fn(),
+  listMembers: vi.fn()
 }));
 
 vi.mock("../../api/collab-client.js", async (importOriginal) => {
@@ -114,6 +115,14 @@ describe("collab task list", () => {
     mocks.getLinks.mockResolvedValue({ groups: [], sessions: [] });
     mocks.listProjectTasks.mockResolvedValue([]);
     mocks.readSessionDetail.mockResolvedValue({ session: SESSIONS[2], turns: [] });
+    // 默认没有待审核的申请：看板开着的轮询不该改到其它用例的界面。
+    mocks.listMembers.mockResolvedValue({
+      project: CLOUD_PROJECT,
+      joinMode: "approval",
+      canManage: true,
+      members: [],
+      requests: []
+    });
 
     container = document.createElement("div");
     document.body.append(container);
@@ -143,9 +152,29 @@ describe("collab task list", () => {
     expect(rows).toHaveLength(3);
     expect(rows.map((row) => SESSIONS.find((entry) => row.textContent?.includes(entry.title))?.id)).toEqual(["s-1", "s-2", "s-3"]);
     expect(container.querySelectorAll("h2 button")).toHaveLength(0);
-    expect(document.body.textContent).toContain("你 · 09:05");
-    expect(document.body.textContent).toContain("你 · 昨天");
+    // 本人的任务也写昵称，不再用「你」。
+    expect(document.body.textContent).toContain("林晓 · 09:05");
+    expect(document.body.textContent).toContain("林晓 · 昨天");
     expect(document.body.textContent).toMatch(/陈墨 · \d{1,2}月\d{1,2}日/);
+  });
+
+  it("shows the join requests waiting on the invite button, without opening the dialog", async () => {
+    mocks.listMembers.mockResolvedValue({
+      project: CLOUD_PROJECT,
+      joinMode: "approval",
+      canManage: true,
+      members: [],
+      requests: [
+        { userId: "10", name: "苏禾", inviterName: "林晓", createdAt: null },
+        { userId: "11", name: "许一", inviterName: "林晓", createdAt: null }
+      ]
+    });
+    await renderBoard();
+    const invite = Array.from(document.querySelectorAll<HTMLButtonElement>("button"))
+      .find((element) => element.textContent?.includes("邀请"));
+    expect(invite, "看板头部应有「邀请」入口").toBeTruthy();
+    expect(invite!.title).toBe("2 个加入申请待审核");
+    expect(invite!.textContent).toContain("2");
   });
 
   it("shows 10 tasks on the first page and loads the next page", async () => {

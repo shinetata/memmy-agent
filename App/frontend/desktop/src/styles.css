@@ -11964,9 +11964,15 @@ body.memmy-platform-windows :is(
   --sidebar-row-bg: color-mix(in srgb, var(--color-action-sky) 16%, var(--color-sidebar-bg));
 }
 
-/* 待审核的加入申请：能看见项目名和状态，但不能当成本机项目去打开。 */
+/* 待审核的加入申请：能看见项目名和状态，但不能当成本机项目去打开；划过或点一下会静默重查。 */
 .app-frame-project-row--pending {
-  cursor: default;
+  /* 这一行是按钮：光标和焦点环都按可点击处理，点下去只重查一次，不会有别的动作。 */
+  cursor: pointer;
+  border: 0;
+  padding: 0;
+  text-align: left;
+  font: inherit;
+  appearance: none;
 }
 
 .app-frame-project-row__mark {

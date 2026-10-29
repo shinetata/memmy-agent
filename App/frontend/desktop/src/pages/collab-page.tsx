@@ -54,7 +54,7 @@ import { AgentMessageContent } from "./agent-message-content.js";
 import { agentSourceDisplayName, agentSourceLogoUrl } from "./agent-source-logos.js";
 import { AppFrame } from "./app-frame.js";
 import { memberColor } from "./collab-member-color.js";
-import { ProjectMembersDialog } from "./collab-members-dialog.js";
+import { MEMBER_REQUESTS_POLL_MS, ProjectMembersDialog } from "./collab-members-dialog.js";
 import styles from "./collab-page.module.css";
 
 export { memberColor };
@@ -307,6 +307,8 @@ export function CollabPage() {
   const [knowledgeManageOpen, setKnowledgeManageOpen] = useState(false);
   /** 「邀请」in the header and「项目成员」in the sidebar menu open the same dialog. */
   const [membersOpen, setMembersOpen] = useState(false);
+  /** 待审核的加入申请数：弹窗没开时也轮询，别人提交申请后「邀请」入口上直接出现角标。 */
+  const [pendingRequests, setPendingRequests] = useState(0);
   const [deleting, setDeleting] = useState<CollabProjectSession | null>(null);
   /** 多选删除：进入选择模式后勾选本人的任务，一次移除。 */
   const [selecting, setSelecting] = useState(false);
@@ -600,6 +602,44 @@ export function CollabPage() {
     };
   }, [collab, sharedId, member, query, pageIndex, pollKey]);
 
+  // 换一个项目就从头算角标，不把上个项目的待审核数带到这个项目上。
+  useEffect(() => {
+    setPendingRequests(0);
+  }, [sharedId]);
+
+  /**
+   * 弹窗关着时也读一次待审核的申请：别人在本机之外提交申请后，「邀请」入口上直接出现角标，
+   * 不用先打开弹窗才知道。弹窗开着时由弹窗自己轮询，这里让位。
+   */
+  useEffect(() => {
+    if (!collab || !sharedId || membersOpen) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
+    const tick = async () => {
+      if (document.hidden) {
+        timer = setTimeout(() => void tick(), MEMBER_REQUESTS_POLL_MS);
+        return;
+      }
+      try {
+        const view = await collab.listMembers(sharedId);
+        if (cancelled) return;
+        setPendingRequests(view.canManage ? view.requests.length : 0);
+        // 不是所有者或管理员就没有可审核的申请，学到这一点后本窗口不再查。
+        if (!view.canManage) return;
+      } catch {
+        // 云端暂时不可用：下一轮再试，角标保留上一份结果。
+      }
+      if (!cancelled) timer = setTimeout(() => void tick(), MEMBER_REQUESTS_POLL_MS);
+    };
+
+    void tick();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [collab, sharedId, membersOpen]);
+
   useEffect(() => () => {
     if (toastTimer.current) clearTimeout(toastTimer.current);
   }, []);
@@ -758,9 +798,19 @@ export function CollabPage() {
                   </span>
                   <span className={styles.grow} />
                   {shared ? (
-                    <Button size="sm" variant="ghost" onClick={() => setMembersOpen(true)}>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => setMembersOpen(true)}
+                      // 有待审核的申请时把数量写进无障碍名称，按钮上也带一个角标。
+                      aria-label={pendingRequests > 0 ? t("collab.members.pending", { count: String(pendingRequests) }) : undefined}
+                      title={pendingRequests > 0 ? t("collab.members.pending", { count: String(pendingRequests) }) : undefined}
+                    >
                       <UserPlus size={15} aria-hidden="true" />
                       {t("collab.members.invite")}
+                      {pendingRequests > 0 ? (
+                        <span className={styles.requestBadge} aria-hidden="true">{pendingRequests}</span>
+                      ) : null}
                     </Button>
                   ) : null}
                   {/* 收起与展开不同时出现：展开时入口在面板标题栏，收起后才回到这里，与 WorkBuddy 一致 */}
@@ -1175,6 +1225,8 @@ export function CollabPage() {
           onToast={showToast}
           // The member count in the header and the sidebar follows approvals and removals.
           onProjectChanged={replaceCollabProject}
+          // 弹窗关掉后角标沿用弹窗里读到的数，不必再查一次。
+          onRequestsChange={setPendingRequests}
         />
       ) : null}
       {collab && shared ? (
