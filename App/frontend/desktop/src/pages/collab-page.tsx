@@ -1,5 +1,5 @@
 import { BookOpen, ChevronDown, ChevronRight, Cloud, Folder, Layers, Link2, ListChecks, MessageSquarePlus, MoreHorizontal, PanelRight, PanelRightClose, Pencil, Plus, Quote, RefreshCw, Search, Settings, Trash2, UserPlus, Users, X } from "lucide-react";
-import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties } from "react";
+import { memo, useCallback, useDeferredValue, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
 import {
   createHttpCollabClient,
@@ -34,7 +34,7 @@ import {
 import type { MemmyAgentProject } from "../api/memmy-agent-client.js";
 import { openAgentTaskInChat } from "../app/open-agent-task.js";
 import type { AgentTaskView } from "../state/agent-chat-slice.js";
-import { useOptionalAppState } from "../state/app-state.js";
+import { useOptionalAppState, type AppStateContextValue } from "../state/app-state.js";
 import { ApiRequestError } from "../api/http.js";
 import { ProjectKnowledgeDialog, ProjectKnowledgeManageDialog } from "./collab-knowledge-dialog.js";
 import {
@@ -50,7 +50,7 @@ import { Modal } from "../components/modal.js";
 import type { MessageKey, MessageValues } from "../i18n/messages.js";
 import { useTranslation } from "../i18n/use-translation.js";
 import { isComposingKeyboardEvent } from "../utils/keyboard.js";
-import { AgentMessageContent } from "./agent-message-content.js";
+import { AgentMessageContent, isLikelyExpensiveAgentMarkdown } from "./agent-message-content.js";
 import { agentSourceDisplayName, agentSourceLogoUrl } from "./agent-source-logos.js";
 import { AppFrame } from "./app-frame.js";
 import { memberColor } from "./collab-member-color.js";
@@ -62,6 +62,14 @@ export { memberColor };
 const TOAST_MS = 1_800;
 /** The board shows ten sessions at a time, so a long project stays scannable. */
 const SESSION_PAGE_SIZE = 10;
+/**
+ * 阅读面板首屏同步渲染的轮次数；之后的轮次先占位，滚到附近再展开。
+ * 与聊天页的即时渲染条数同一考虑：面板高度内的那几轮必须马上有内容。
+ */
+const READER_IMMEDIATE_TURNS = 4;
+/** 展开后续轮次的起始延迟与递增间隔：让它们分给孩子空闲时段，不扰动正在进行的操作。 */
+const READER_DEFERRED_REVEAL_START_MS = 120;
+const READER_DEFERRED_REVEAL_STEP_MS = 80;
 /** 看板顶部的一次性提示停留时长。 */
 const BOARD_NOTICE_MS = 6_000;
 /**
@@ -269,16 +277,78 @@ export function localSessionKey(session: { sourceId: string; conversationId: str
   return `${session.sourceId}\u0000${session.conversationId}`;
 }
 
+/** 会话行真正用到的字段：这些一样，屏上就没有变化。 */
+function sessionSignature(session: CollabProjectSession): string {
+  return [
+    session.id,
+    session.title,
+    session.lastQuestion,
+    session.memberName,
+    session.mine ? "1" : "0",
+    session.source,
+    String(session.turnCount),
+    session.lastActiveAt ?? "",
+    session.link,
+    session.shareText
+  ].join("\u0000");
+}
+
+/**
+ * 云端每次返回都是新对象，直接写回会让看板白重画一次。内容一致时返回值告诉调用方「不用写」。
+ * 只比较画面上与复制链接真正读到的字段，够用且比整串 JSON 便宜。
+ */
+function sameSessionPage(current: CollabSessionPage | null, next: CollabSessionPage): boolean {
+  if (!current || current.total !== next.total) return false;
+  if (current.sessions.length !== next.sessions.length) return false;
+  for (let index = 0; index < current.sessions.length; index += 1) {
+    const left = current.sessions[index];
+    const right = next.sessions[index];
+    if (!left || !right || sessionSignature(left) !== sessionSignature(right)) return false;
+  }
+  return true;
+}
+
+/** 上传进度也一样：四个数没变就不必重画进度条。 */
+function sameSyncProgress(current: CollabSyncProgress | null, next: CollabSyncProgress | null): boolean {
+  if (current === next) return true;
+  if (!current || !next) return false;
+  return current.running === next.running
+    && current.total === next.total
+    && current.completed === next.completed
+    && current.failed === next.failed;
+}
+
+/** 空值常量：wrapper 每次都要读一遍全局状态，不能每次现造空数组把 memo 冲掉。 */
+const NO_PROJECTS: MemmyAgentProject[] = [];
+const NO_TASKS: AgentTaskView[] = [];
+
+/**
+ * The page entry: reads the two lists from app state and hands them to the board.
+ * 看板只用到这两份数据。全局状态的其余部分（消息流、连接状态、界面开关）每变一次都会换掉 context 的
+ * value，所以真正干活的看板是 memo 的：后台有任务输出时，它不该跟着每个事件重画一遍。
+ */
+export function CollabPage() {
+  // 看板只用到这两份数据。全局状态的其余部分（消息流、连接状态、界面开关）每变一次都会换掉 context 的
+  // value，所以真正干活的看板必须是 memo 的：后台有任务输出时，它不该跟着每个事件重画一遍。
+  const appState = useOptionalAppState();
+  const projects = appState?.state.agent.projects ?? NO_PROJECTS;
+  const tasks = appState?.state.agent.tasks ?? NO_TASKS;
+  // dispatch 的引用是稳定的，当作 prop 传下去不会把 memo 冲掉。
+  const dispatch = appState?.dispatch ?? null;
+  return <CollabBoard dispatch={dispatch} projects={projects} tasks={tasks} />;
+}
+
 /**
  * The board of one project: its header and the session list. A project is local; when its sharing switch is on,
  * the sessions come from the cloud and the list also carries members and references.
  */
-export function CollabPage() {
+const CollabBoard = memo(function CollabBoard(props: {
+  dispatch: AppStateContextValue["dispatch"] | null;
+  projects: MemmyAgentProject[];
+  tasks: AgentTaskView[];
+}) {
+  const { dispatch, projects, tasks } = props;
   const { clients } = useApiClients();
-  // The board belongs to a project on this computer, so it reads the same project list the sidebar does.
-  const appState = useOptionalAppState();
-  const projects = appState?.state.agent.projects ?? [];
-  const tasks = appState?.state.agent.tasks ?? [];
   const { t } = useTranslation();
   const collab = useMemo(() => (clients ? createHttpCollabClient(clients.runtimeConfig) : null), [clients]);
   const snapshot = useSyncExternalStore(subscribeCollabProjects, getCollabProjectsSnapshot, getCollabProjectsSnapshot);
@@ -330,6 +400,15 @@ export function CollabPage() {
     setToast(message);
     if (toastTimer.current) clearTimeout(toastTimer.current);
     toastTimer.current = setTimeout(() => setToast(null), TOAST_MS);
+  }, []);
+
+  /**
+   * 写回一页列表。轮询、手动刷新、上传后重读都走这里：内容与屏上一样就保留原对象，
+   * 让 React 中途退出渲染，也不去动共享 store（否则侧栏会跟着重画）。
+   */
+  const applyPage = useCallback((next: CollabSessionPage) => {
+    setPage((current) => (sameSessionPage(current, next) ? current : next));
+    replaceCollabProject(next.project);
   }, []);
 
   useEffect(() => {
@@ -503,8 +582,7 @@ export function CollabPage() {
           limit: SESSION_PAGE_SIZE
         });
         if (cancelled) return;
-        setPage(result);
-        replaceCollabProject(result.project);
+        applyPage(result);
       } catch (cause) {
         if (!cancelled) showToast(messageOf(cause));
       }
@@ -513,7 +591,7 @@ export function CollabPage() {
     return () => {
       cancelled = true;
     };
-  }, [collab, sharedId, query, member, pageIndex, showToast]);
+  }, [applyPage, collab, sharedId, query, member, pageIndex, showToast]);
 
   /**
    * Called once the background upload of this project's own tasks finishes, so a task finished moments ago shows
@@ -528,9 +606,9 @@ export function CollabPage() {
       offset: pageIndex * SESSION_PAGE_SIZE,
       limit: SESSION_PAGE_SIZE
     })
-      .then((result) => setPage(result))
+      .then((result) => applyPage(result))
       .catch(() => undefined);
-  }, [collab, sharedId, query, member, pageIndex]);
+  }, [applyPage, collab, sharedId, query, member, pageIndex]);
   refreshAfterUploadRef.current = refreshAfterUpload;
 
   /** Re-reads the current page without blanking it, so rows arrive instead of the board flickering. */
@@ -543,12 +621,11 @@ export function CollabPage() {
         offset: pageIndex * SESSION_PAGE_SIZE,
         limit: SESSION_PAGE_SIZE
       });
-      setPage(result);
-      replaceCollabProject(result.project);
+      applyPage(result);
     } catch {
       // A failed refresh keeps the last page; the next poll retries.
     }
-  }, [collab, member, pageIndex, query]);
+  }, [applyPage, collab, member, pageIndex, query]);
 
   const refreshBoard = useCallback(async () => {
     if (!sharedId || refreshing) return;
@@ -566,30 +643,45 @@ export function CollabPage() {
     if (!collab || !sharedId) return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
+    /** 上一次看到的「是否在上传」，窗口隐藏时据此决定回到前台后多久再查。 */
+    let uploading = false;
 
     const schedule = (running: boolean) => {
+      if (timer) clearTimeout(timer);
       timer = setTimeout(() => void tick(), running ? PROGRESS_POLL_MS : BOARD_POLL_MS);
     };
 
     const tick = async () => {
+      // 窗口在后台就没人看得到这次结果：不查、不写，等着回来那一下补上。
+      if (document.hidden) {
+        schedule(uploading);
+        return;
+      }
       const [next, listing] = await Promise.all([
         collab.getSyncProgress(sharedId).catch(() => null),
         collab.listSessions(sharedId, { ...(member === "all" ? {} : { member }), ...(query ? { query } : {}), offset: pageIndex * SESSION_PAGE_SIZE, limit: SESSION_PAGE_SIZE }).catch(() => null)
       ]);
       if (cancelled) return;
-      if (listing) {
-        setPage(listing);
-        replaceCollabProject(listing.project);
-      }
-      setProgress(next);
-      schedule(Boolean(next?.running));
+      if (listing) applyPage(listing);
+      setProgress((current) => (sameSyncProgress(current, next) ? current : next));
+      uploading = Boolean(next?.running);
+      schedule(uploading);
     };
+
+    // 切回窗口时立刻补一次：后台跳过的那几拍不会让人先看到旧列表。
+    const refreshNow = () => {
+      if (cancelled || document.hidden) return;
+      if (timer) clearTimeout(timer);
+      void tick();
+    };
+    document.addEventListener("visibilitychange", refreshNow);
 
     // Opening the board joins an upload that started earlier, and keeps refreshing after it stops.
     void collab.getSyncProgress(sharedId)
       .then((current) => {
         if (cancelled) return;
-        setProgress(current);
+        uploading = current.running;
+        setProgress((previous) => (sameSyncProgress(previous, current) ? previous : current));
         schedule(current.running);
       })
       .catch(() => {
@@ -598,9 +690,10 @@ export function CollabPage() {
 
     return () => {
       cancelled = true;
+      document.removeEventListener("visibilitychange", refreshNow);
       if (timer) clearTimeout(timer);
     };
-  }, [collab, sharedId, member, query, pageIndex, pollKey]);
+  }, [applyPage, collab, sharedId, member, query, pageIndex, pollKey]);
 
   // 换一个项目就从头算角标，不把上个项目的待审核数带到这个项目上。
   useEffect(() => {
@@ -1124,7 +1217,6 @@ export function CollabPage() {
                   <LocalProjectSessions
                     tasks={localTasks}
                     onOpenTask={(task) => {
-                      const dispatch = appState?.dispatch;
                       if (!dispatch) return;
                       void openAgentTaskInChat({ memmyAgent: clients?.memmyAgent, dispatch, task });
                     }}
@@ -1304,7 +1396,7 @@ export function CollabPage() {
       </>, document.body)}
     </AppFrame>
   );
-}
+});
 
 /**
  * The sessions tab of a project that is not shared: this computer's own tasks for it, nothing more. Sharing is
@@ -2005,33 +2097,45 @@ function SessionReaderPanel(props: {
           ) : null}
           {spoken.length === 0 ? (
             <p className={styles.loading}>{t("collab.reader.empty")}</p>
-          ) : spoken.map((turn) => (
-            <article key={`${turn.startedAt}-${turn.number}`} className={styles.readerTurn}>
-              {spoken.length > 1 ? (
-                <span className={styles.readerTurnIndex}>{t("collab.reader.turn", { index: String(turn.number) })}</span>
-              ) : null}
-              {turn.question ? (
-                <div className={styles.readerUser} data-collab-role="user">
-                  <p className={styles.readerUserBubble}>{turn.question}</p>
-                </div>
-              ) : null}
-              {turn.reply ? (
-                <div className={styles.readerAgent} data-collab-role="agent">
-                  {turn.number === spoken[firstAgent]?.number ? (
-                    <div className={styles.readerAgentHead}>
-                      {agentLogo ? (
-                        <img className={styles.readerAgentLogo} src={agentLogo} alt="" />
-                      ) : (
-                        <span className={styles.readerAgentMark} aria-hidden="true">{Array.from(agentName)[0] ?? "A"}</span>
-                      )}
-                      <span>{agentName}</span>
-                    </div>
-                  ) : null}
-                  <AgentMessageContent content={turn.reply} readOnlyFileReferences />
-                </div>
-              ) : null}
-            </article>
-          ))}
+          ) : spoken.map((turn, index) => {
+            // 打开面板时只有开头几轮真在屏上：其余的先按估算高度占位，滚到附近再由 AgentMessageContent
+            // 自己展开。否则一个长任务的全部 Markdown、代码块会在同一次提交里算完，点击要等几百毫秒。
+            const defer = index >= READER_IMMEDIATE_TURNS && Boolean(turn.reply) && isLikelyExpensiveAgentMarkdown(turn.reply);
+            return (
+              <article key={`${turn.startedAt}-${turn.number}`} className={styles.readerTurn}>
+                {spoken.length > 1 ? (
+                  <span className={styles.readerTurnIndex}>{t("collab.reader.turn", { index: String(turn.number) })}</span>
+                ) : null}
+                {turn.question ? (
+                  <div className={styles.readerUser} data-collab-role="user">
+                    <p className={styles.readerUserBubble}>{turn.question}</p>
+                  </div>
+                ) : null}
+                {turn.reply ? (
+                  <div className={styles.readerAgent} data-collab-role="agent">
+                    {turn.number === spoken[firstAgent]?.number ? (
+                      <div className={styles.readerAgentHead}>
+                        {agentLogo ? (
+                          <img className={styles.readerAgentLogo} src={agentLogo} alt="" />
+                        ) : (
+                          <span className={styles.readerAgentMark} aria-hidden="true">{Array.from(agentName)[0] ?? "A"}</span>
+                        )}
+                        <span>{agentName}</span>
+                      </div>
+                    ) : null}
+                    <AgentMessageContent
+                      content={turn.reply}
+                      readOnlyFileReferences
+                      deferRender={defer}
+                      deferredRevealDelayMs={defer
+                        ? READER_DEFERRED_REVEAL_START_MS + (index - READER_IMMEDIATE_TURNS) * READER_DEFERRED_REVEAL_STEP_MS
+                        : 0}
+                    />
+                  </div>
+                ) : null}
+              </article>
+            );
+          })}
         </div>
         <footer className={styles.readerFoot}>{t("collab.reader.hint")}</footer>
       </aside>
@@ -2127,10 +2231,19 @@ export function AssociateSessionsModal(props: {
     for (const session of sessions ?? []) if (!seen.has(session.sourceId)) seen.set(session.sourceId, session.agentName);
     return [...seen.entries()].map(([sourceId, name]) => ({ sourceId, name }));
   }, [sessions]);
-  const activeAgent = agents.find((agent) => agent.sourceId === agentId) ?? agents.find((agent) => agentHasLinks(links, agent.sourceId)) ?? agents[0] ?? null;
+  /**
+   * 列表用的 Agent 比导航栏慢一帧：点一下立刻看到选中态，列表的内容跟着补上。
+   * 两者在稳定后始终一致，只是渲染优先级不同。
+   */
+  const shownAgentId = useDeferredValue(agentId);
+  const activeAgent = agents.find((agent) => agent.sourceId === shownAgentId) ?? agents.find((agent) => agentHasLinks(links, agent.sourceId)) ?? agents[0] ?? null;
   const kind = activeAgent ? groupingKind(activeAgent.sourceId) : "directory";
-  const view = activeAgent ? groupAgentSessions(sessions ?? [], activeAgent.sourceId, query) : { groups: [], ungrouped: [] };
-  const changed = !linksEqual(links, saved);
+  const view = useMemo(
+    () => (activeAgent ? groupAgentSessions(sessions ?? [], activeAgent.sourceId, query) : { groups: [], ungrouped: [] }),
+    [activeAgent, query, sessions]
+  );
+  // 每次渲染都把两份勾选树串成 JSON 再排序很浪费：两者都不变时沿用上一次的结果。
+  const changed = useMemo(() => !linksEqual(links, saved), [links, saved]);
   /** 当前勾选会关联的任务数，用于在提交前提示云端只保留最近 20 个。 */
   const selectedCount = useMemo(
     () => (sessions ?? []).filter((session) => isSessionChecked(links, session)).length,
@@ -2180,6 +2293,60 @@ export function AssociateSessionsModal(props: {
     );
   }
 
+  /**
+   * 列表本体只在数据真的变化时重建。切换 Agent 时导航栏的选中态立刻画出来，
+   * 列表的重建留到下一帧（`useDeferredValue`），点击不必等这份渲染完才有反馈。
+   */
+  const pickerList = useMemo(() => (
+        <div className={styles.pickList}>
+          {sessions === null && !error ? (
+            <p className={styles.loading}>{t("collab.pick.loading")}</p>
+          ) : !view.groups.length && !view.ungrouped.length ? (
+            <p className={styles.loading}>{t("collab.pick.empty")}</p>
+          ) : (
+            <>
+              {view.groups.length ? <p className={styles.pickSection}>{t(`collab.pick.unit.${kind}` as MessageKey)}</p> : null}
+              {view.groups.map((item) => {
+                const state = groupCheckState(links, activeAgent!.sourceId, item);
+                const isOpen = Boolean(query.trim()) || expanded.has(item.group.id);
+                const GroupIcon = kind === "directory" ? Folder : Layers;
+                return (
+                  <div key={item.group.id} className={styles.groupBlock}>
+                    <div className={styles.groupRow}>
+                      <input
+                        type="checkbox"
+                        aria-label={item.group.label}
+                        checked={state === "checked"}
+                        ref={(element) => {
+                          if (element) element.indeterminate = state === "mixed";
+                        }}
+                        onChange={() => setLinks((current) => {
+                          // Search narrows visible rows, not the scope of the whole-group operation.
+                          const complete = groupAgentSessions(sessions ?? [], activeAgent!.sourceId, "").groups
+                            .find((group) => group.group.id === item.group.id) ?? item;
+                          return toggleGroupLink(current, activeAgent!.sourceId, complete);
+                        })}
+                      />
+                      <button type="button" className={styles.groupToggle} aria-expanded={isOpen} title={item.group.path ?? item.group.label} onClick={() => toggleExpanded(item.group.id)}>
+                        <span className={styles.groupIcon}><GroupIcon size={15} aria-hidden="true" /></span>
+                        <span className={styles.groupText}>
+                          <span className={styles.groupName}>{item.group.label}</span>
+                          {findGroupLink(links, activeAgent!.sourceId, item.group.id) ? <span className={styles.groupHint}>{t("collab.pick.wholeGroup")}</span> : null}
+                        </span>
+                        {isOpen ? <ChevronDown size={15} aria-hidden="true" /> : <ChevronRight size={15} aria-hidden="true" />}
+                      </button>
+                    </div>
+                    {isOpen ? item.sessions.map((session) => sessionRow(session, true)) : null}
+                  </div>
+                );
+              })}
+              {view.ungrouped.length ? <p className={styles.pickSection}>{t(`collab.pick.ungrouped.${kind}` as MessageKey)}</p> : null}
+              {view.ungrouped.map((session) => sessionRow(session, false))}
+            </>
+          )}
+        </div>
+  ), [error, sessions, view, kind, activeAgent, links, expanded, query, t]);
+
   return (
     <>
     <Modal
@@ -2211,7 +2378,7 @@ export function AssociateSessionsModal(props: {
         <nav className={styles.agentList} aria-label="Agent">
           {agents.map((agent) => {
             const logo = agentSourceLogoUrl(agent.sourceId);
-            const active = agent.sourceId === activeAgent?.sourceId;
+            const active = agent.sourceId === (agentId ?? activeAgent?.sourceId);
             return (
               <button
                 key={agent.sourceId}
@@ -2243,53 +2410,7 @@ export function AssociateSessionsModal(props: {
               onChange={(event) => setQuery(event.target.value)}
             />
           </label>
-          <div className={styles.pickList}>
-            {sessions === null && !error ? (
-              <p className={styles.loading}>{t("collab.pick.loading")}</p>
-            ) : !view.groups.length && !view.ungrouped.length ? (
-              <p className={styles.loading}>{t("collab.pick.empty")}</p>
-            ) : (
-              <>
-                {view.groups.length ? <p className={styles.pickSection}>{t(`collab.pick.unit.${kind}` as MessageKey)}</p> : null}
-                {view.groups.map((item) => {
-                  const state = groupCheckState(links, activeAgent!.sourceId, item);
-                  const isOpen = Boolean(query.trim()) || expanded.has(item.group.id);
-                  const GroupIcon = kind === "directory" ? Folder : Layers;
-                  return (
-                    <div key={item.group.id} className={styles.groupBlock}>
-                      <div className={styles.groupRow}>
-                        <input
-                          type="checkbox"
-                          aria-label={item.group.label}
-                          checked={state === "checked"}
-                          ref={(element) => {
-                            if (element) element.indeterminate = state === "mixed";
-                          }}
-                          onChange={() => setLinks((current) => {
-                            // Search narrows visible rows, not the scope of the whole-group operation.
-                            const complete = groupAgentSessions(sessions ?? [], activeAgent!.sourceId, "").groups
-                              .find((group) => group.group.id === item.group.id) ?? item;
-                            return toggleGroupLink(current, activeAgent!.sourceId, complete);
-                          })}
-                        />
-                        <button type="button" className={styles.groupToggle} aria-expanded={isOpen} title={item.group.path ?? item.group.label} onClick={() => toggleExpanded(item.group.id)}>
-                          <span className={styles.groupIcon}><GroupIcon size={15} aria-hidden="true" /></span>
-                          <span className={styles.groupText}>
-                            <span className={styles.groupName}>{item.group.label}</span>
-                            {findGroupLink(links, activeAgent!.sourceId, item.group.id) ? <span className={styles.groupHint}>{t("collab.pick.wholeGroup")}</span> : null}
-                          </span>
-                          {isOpen ? <ChevronDown size={15} aria-hidden="true" /> : <ChevronRight size={15} aria-hidden="true" />}
-                        </button>
-                      </div>
-                      {isOpen ? item.sessions.map((session) => sessionRow(session, true)) : null}
-                    </div>
-                  );
-                })}
-                {view.ungrouped.length ? <p className={styles.pickSection}>{t(`collab.pick.ungrouped.${kind}` as MessageKey)}</p> : null}
-                {view.ungrouped.map((session) => sessionRow(session, false))}
-              </>
-            )}
-          </div>
+          {pickerList}
         </section>
       </div>
     </Modal>

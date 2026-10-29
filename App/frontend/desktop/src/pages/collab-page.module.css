@@ -1024,8 +1024,12 @@
 /*
  * One dialog over the main window, so the window background stays the reference: a light scrim and no blur.
  * The default .modal-backdrop blurs 8px and dims 32%, which reads as a separate page rather than the current one.
+ *
+ * 选择器要带上 .modal-backdrop 才稳定胜过默认样式：两者都是单个类时由样式表顺序决定，
+ * 而元素同时带 `modal-backdrop` 与这里的类，顺序又不是我们能控制的。
+ * 这条写紧了，一条全窗口的 8px 模糊就不会在弹窗打开时每帧重新栅格化。
  */
-.backdrop {
+:global(.modal-backdrop).backdrop {
   background: rgba(17, 29, 28, 0.12);
   backdrop-filter: none;
   -webkit-backdrop-filter: none;

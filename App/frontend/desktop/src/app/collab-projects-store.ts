@@ -67,6 +67,23 @@ export function sharedProjectFor(
   return projects.find((project) => project.localProjectId === localProjectId) ?? null;
 }
 
+/**
+ * 共享 store 的两个写入点都会收到「内容一样的新对象」（轮询、切回窗口后的重读），
+ * 字段逐个比一遍就能判断要不要通知订阅方；值都是字符串与数字，浅比即可。
+ */
+function sameRecord(left: object, right: object): boolean {
+  const a = left as Record<string, unknown>;
+  const b = right as Record<string, unknown>;
+  const keys = Object.keys(a);
+  if (keys.length !== Object.keys(b).length) return false;
+  return keys.every((key) => a[key] === b[key]);
+}
+
+function sameRecords(left: readonly object[], right: readonly object[]): boolean {
+  if (left.length !== right.length) return false;
+  return left.every((entry, index) => sameRecord(entry, right[index]!));
+}
+
 /** The load in flight, so a caller that arrives during one waits for it instead of reading a stale list. */
 let inFlight: Promise<void> | null = null;
 
@@ -77,7 +94,8 @@ let inFlight: Promise<void> | null = null;
 export async function loadCollabProjects(client: CollabClient): Promise<void> {
   if (inFlight) await inFlight.catch(() => undefined);
   const run = (async () => {
-    update({ loading: true, error: null });
+    // 列表第一次读之前才需要「加载中」；重读时不动这个标记，也就不会白通知一次订阅方。
+    if (snapshot.projects === null) update({ loading: true, error: null });
     try {
       const listed = normalizeProjectList(await client.listProjects());
       // The open project is local, so a reload must not move the board: only a vanished project clears it.
@@ -88,6 +106,13 @@ export async function loadCollabProjects(client: CollabClient): Promise<void> {
       // 后台还没有审核结果这一列时保留上一次的值，免得一次刷新把待提示的结果冲掉。
       // 结果不按「已加入」过滤：通过的那一条正是靠它给一次提示，提示过之后就记在本机不再弹。
       const decisions = listed.decisions ?? snapshot.decisions;
+      // 一个字段都没变（切回窗口、轮询带来的重读）就不写：侧栏与看板不必跟着重画一遍。
+      const unchanged = snapshot.projects !== null
+        && snapshot.error === null
+        && sameRecords(snapshot.projects, listed.projects)
+        && sameRecords(snapshot.applications, applications)
+        && sameRecords(snapshot.decisions, decisions);
+      if (unchanged) return;
       update({ projects: listed.projects, applications, decisions, loading: false, error: null });
     } catch (cause) {
       // 云端不可用时保留已有列表：项目就在本机，云端只决定能不能看共享内容。
@@ -133,7 +158,10 @@ export function addCollabProject(project: CollabProject): void {
 /** Keeps the sidebar name and member count current after the board reloads a project. */
 export function replaceCollabProject(project: CollabProject): void {
   if (!snapshot.projects) return;
-  update({ projects: snapshot.projects.map((current) => (current.id === project.id ? project : current)) });
+  // 轮询每 5 秒带回一份新对象：字段没变就不通知，否则侧栏会跟着重画一次。
+  const current = snapshot.projects.find((entry) => entry.id === project.id);
+  if (current && sameRecord(current, project)) return;
+  update({ projects: snapshot.projects.map((entry) => (entry.id === project.id ? project : entry)) });
 }
 
 /** Drops a project's cloud record after sharing was turned off; the local project stays. */

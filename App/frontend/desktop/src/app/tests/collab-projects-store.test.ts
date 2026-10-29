@@ -14,7 +14,8 @@ import {
   requestTaskPicker,
   resetCollabProjectsStore,
   selectCollabProject,
-  sharedProjectFor
+  sharedProjectFor,
+  subscribeCollabProjects
 } from "../collab-projects-store.js";
 
 function project(id: string, name = id, localProjectId: string | null = null): CollabProject {
@@ -158,5 +159,24 @@ describe("collab projects store", () => {
     // 云端给出空列表时就清空，不再一直挂着。
     await loadCollabProjects(clientWith(async () => [project("cloud-1")], [], []));
     expect(getCollabProjectsSnapshot().decisions).toEqual([]);
+  });
+
+  it("stays silent when a reload or a board refresh brings the same content", async () => {
+    await loadCollabProjects(clientWith(async () => [project("a", "a", "local-a")]));
+    let notifications = 0;
+    const unsubscribe = subscribeCollabProjects(() => {
+      notifications += 1;
+    });
+
+    // 切回窗口、看板轮询都会重读一遍：内容一样就不通知，侧栏与看板因此不必重画。
+    await loadCollabProjects(clientWith(async () => [project("a", "a", "local-a")]));
+    replaceCollabProject(project("a", "a", "local-a"));
+    expect(notifications).toBe(0);
+
+    // 真的变了照旧写回。
+    replaceCollabProject(project("a", "更名为 A", "local-a"));
+    expect(notifications).toBe(1);
+    expect(getCollabProjectsSnapshot().projects?.[0]?.name).toBe("更名为 A");
+    unsubscribe();
   });
 });
