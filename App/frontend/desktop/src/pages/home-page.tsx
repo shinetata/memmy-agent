@@ -34,7 +34,8 @@ import {
   type MemmyAgentMediaInput,
   type UploadAgentMediaInput,
   type UploadedAgentMedia,
-  type WebuiSessionTarget
+  type WebuiSessionTarget,
+  type ArtifactScope
 } from "../api/memmy-agent-client.js";
 import type { AnalyticsEvent } from "../analytics/analytics-events.js";
 import { setAnalyticsModelSource } from "../analytics/analytics-context.js";
@@ -1316,13 +1317,18 @@ export function HomePage() {
   const sessionArtifactClient = useMemo(() => {
     const client = clients?.memmyAgent;
     const sessionKey = state.agent.currentSessionKey;
-    if (!client || !sessionKey) return null;
+    // A task that has not sent its first message has no session yet, but its side panel already shows the
+    // draft project's files, so previews are authorized against that project instead.
+    const scope: ArtifactScope | null = sessionKey
+      ? { sessionKey }
+      : selectedDraftProject?.id ? { projectId: selectedDraftProject.id } : null;
+    if (!client || !scope) return null;
     return {
-      resolveArtifact: (path: string) => client.resolveArtifact(path, sessionKey),
-      revealArtifact: (path: string) => client.revealArtifact(path, sessionKey),
-      openArtifact: (path: string) => client.openArtifact(path, sessionKey)
+      resolveArtifact: (path: string) => client.resolveArtifact(path, scope),
+      revealArtifact: (path: string) => client.revealArtifact(path, scope),
+      openArtifact: (path: string) => client.openArtifact(path, scope)
     };
-  }, [clients?.memmyAgent, state.agent.currentSessionKey]);
+  }, [clients?.memmyAgent, state.agent.currentSessionKey, selectedDraftProject?.id]);
   const isCurrentAgentRunning = Boolean(
     state.agent.currentChatId &&
     (
