@@ -2,7 +2,14 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AssistInboxItem, AssistRequest, AssistTaskView, AssistThread, CollabClient } from "../../api/collab-client.js";
+import type {
+  AssistInboxItem,
+  AssistRequest,
+  AssistSafety,
+  AssistTaskView,
+  AssistThread,
+  CollabClient
+} from "../../api/collab-client.js";
 import { ApiRequestError } from "../../api/http.js";
 import { consumeAssistFocus, getAssistFocus } from "../../app/collab-assist-focus.js";
 import { loadCollabProjects, resetCollabProjectsStore } from "../../app/collab-projects-store.js";
@@ -207,6 +214,41 @@ describe("成员协助的授权弹窗", () => {
     expect(button("Cursor")?.getAttribute("aria-pressed")).toBe("true");
     await act(async () => button("允许")?.click());
     expect(onDecided).toHaveBeenCalledWith({ action: "allow", agent: "cursor", scope: "once" });
+  });
+
+  it("审查结论晚一步回来时补上原因行，已经选好的 Agent 不变", async () => {
+    const onDecided = vi.fn();
+    const collab = client();
+    const page = (safety: AssistSafety | null) => (
+      <I18nProvider language="zh-CN">
+        <CollabAssistDialog
+          open
+          request={inbox}
+          safety={safety}
+          collab={collab}
+          onDecided={onDecided}
+          onClose={() => undefined}
+        />
+      </I18nProvider>
+    );
+
+    await act(async () => root.render(page(null)));
+    await flush();
+    expect(document.body.textContent).not.toContain("需要你确认：");
+    await act(async () => button("Claude Code")?.click());
+    expect(button("Claude Code")?.getAttribute("aria-pressed")).toBe("true");
+
+    // 宿主下一次轮询把审查结论传进来：原因行出现，她选好的 Agent 与展开状态都不动。
+    await act(async () => root.render(page({
+      executor: { status: "confirm", reason: "附带的脚本会删除下载目录里的文件" }
+    })));
+
+    expect(document.body.textContent).toContain("需要你确认：附带的脚本会删除下载目录里的文件");
+    expect(button("Claude Code")?.getAttribute("aria-pressed")).toBe("true");
+    // 没有因为换了一份数据就重新拉一次 Agent 候选、把选择清掉。
+    expect(collab.assistAgents).toHaveBeenCalledTimes(1);
+    await act(async () => button("允许")?.click());
+    expect(onDecided).toHaveBeenCalledWith({ action: "allow", agent: "claude_code", scope: "once" });
   });
 
   it("拒绝时不带执行方", async () => {
@@ -970,6 +1012,38 @@ describe("成员协助的宿主", () => {
     ));
     expect(document.body.textContent).toContain("有 1 条协助请求待处理");
     resetCollabProjectsStore();
+  });
+
+  it("限时授权的请求在审查结论要求确认后弹出授权弹窗", async () => {
+    vi.useFakeTimers();
+    try {
+      Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "visible" });
+      const granted = { ...inbox, granted: true, grantAgent: "claude_code", grantExpiresAt: null };
+      const assistInbox = vi.fn()
+        .mockResolvedValueOnce({ requests: [granted] })
+        .mockResolvedValue({
+          requests: [{
+            ...granted,
+            safety: { executor: { status: "confirm", reason: "附带的脚本会删除下载目录里的文件" } }
+          }]
+        });
+      await act(async () => root.render(
+        <I18nProvider language="zh-CN">
+          <CollabAssistHost collab={client({ assistInbox })} enabled />
+        </I18nProvider>
+      ));
+      // 结论还没落地：限时授权有效，先不打扰她。
+      expect(document.body.textContent).not.toContain("孙起请求你的电脑协助");
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5_000);
+      });
+      // 结论要求她看过：和没有授权的请求一样弹出授权弹窗，原因行一起出来。
+      expect(document.body.textContent).toContain("孙起请求你的电脑协助");
+      expect(document.body.textContent).toContain("需要你确认：附带的脚本会删除下载目录里的文件");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("请求在别处处理掉之后，开着的授权弹窗自己关上", async () => {

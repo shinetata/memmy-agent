@@ -344,8 +344,8 @@ const AssistTranscriptSchema = z.array(z.unknown()).transform((items) => items.f
 }));
 
 /**
- * 安全检查：发起方发出前那次（requester）、执行方收到后那次（executor）、执行时跳过的操作（skipped）
- * 与回传前隐藏的密钥处数（redacted）。旧请求没有这一段，按 null 读。
+ * 安全检查：执行方收到后那次（executor）、执行时跳过的操作（skipped）与回传前隐藏的密钥处数（redacted）。
+ * `requester` 只出现在旧请求里（发起方的模型审查已经取消），读到时界面不显示；整段没有时按 null 读。
  */
 const AssistSafetySchema = z.object({
   requester: z.object({
@@ -550,7 +550,7 @@ export type AssistAgent = z.infer<typeof AssistAgentSchema>;
 export type AssistGrantInfo = z.infer<typeof AssistGrantInfoSchema>;
 export type AssistReceiving = z.infer<typeof AssistReceivingSchema>;
 export type AssistTranscriptItem = z.infer<typeof AssistTranscriptItemSchema>;
-/** 一条请求的安全检查结果（发起方的检查、执行方的检查、跳过的操作、隐藏的密钥处数）。 */
+/** 一条请求的安全检查结果（执行方的检查、跳过的操作、隐藏的密钥处数；发起方的检查只在旧数据里）。 */
 export type AssistSafety = NonNullable<z.infer<typeof AssistSafetySchema>>;
 
 /** 打开一次协助：完整会话，加上双方在这台电脑上能打开的任务。 */

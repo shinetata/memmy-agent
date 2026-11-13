@@ -1086,18 +1086,8 @@ function Preview() {
   // dialog-review / dialog-skipped：她的 Memmy 检查后要求她确认，标题下多一行原因；上次有跳过时直接写跳过了什么。
   if (view === "dialog-review" || view === "dialog-skipped") {
     const reviewSafety = view === "dialog-skipped"
-      ? {
-        requester: { status: "passed" as const, summary: "会查看日志与版本" },
-        executor: { status: "confirm" as const, reason: "上次跳过了：删除缓存目录" }
-      }
-      : {
-        requester: {
-          status: "passed" as const,
-          summary: "会运行附带的脚本并读取日志",
-          declared: [{ action: "运行 scan-probe.sh", reason: "收集两边版本" }]
-        },
-        executor: { status: "confirm" as const, reason: "附带的脚本会删除下载目录里的文件" }
-      };
+      ? { executor: { status: "confirm" as const, reason: "上次跳过了：删除缓存目录" } }
+      : { executor: { status: "confirm" as const, reason: "附带的脚本会删除下载目录里的文件" } };
     return (
       <div style={{ minHeight: "100vh", background: "var(--color-canvas-oat, #f4f7f6)" }}>
         <CollabAssistDialog
@@ -1111,7 +1101,7 @@ function Preview() {
     );
   }
 
-  // conversation-review：协助会话里的一轮带两次检查的结论、被跳过的工具步骤与「隐藏了几处密钥」。
+  // conversation-review：协助会话里的一轮带检查结论、被跳过的工具步骤与「隐藏了几处密钥」。
   if (view === "conversation-review") {
     const reviewed = request({
       ...CONV_FIRST,
@@ -1127,8 +1117,7 @@ function Preview() {
       finishedAt: minutesAgo(20),
       deliveredAt: minutesAgo(19.9),
       safety: {
-        requester: { status: "passed", summary: "会删除缓存目录后重新复现" },
-        executor: { status: "confirm", reason: "附带的脚本会删除下载目录里的文件", undeclared: ["删除 ~/Downloads"] },
+        executor: { status: "confirm", reason: "附带的脚本会删除下载目录里的文件" },
         skipped: [{ title: "删除缓存目录", detail: "rm -rf ~/Library/Caches/foo" }],
         redacted: 2
       },

@@ -29,6 +29,18 @@ function waitingForHer(item: AssistInboxItem): boolean {
   return item.status === "pending" || item.status === "confirm";
 }
 
+/**
+ * 限时授权还在、审查结论却要她看过：她的 Memmy 不会自动执行，得她自己选 Agent 并授权。
+ *
+ * <p>要等审查结论落地才算：请求刚到时结论还没出来，这时弹窗只会让她等一次空跑，原因行也没有。
+ * 审查没能完成（unavailable）同样要她决定，一起算在这里。</p>
+ */
+function needsHerDecision(item: AssistInboxItem): boolean {
+  if (item.status !== "pending" || !item.granted || item.autoRun) return false;
+  const check = item.safety?.executor;
+  return check != null && check.status !== "auto";
+}
+
 /** 发起方收到的结果通知：按结局写标题与正文。 */
 function outcomeNotice(
   outcome: AssistOutcome,
@@ -107,6 +119,11 @@ export function CollabAssistHost(props: {
   const projects = useSyncExternalStore(subscribeCollabProjects, getCollabProjectsSnapshot, getCollabProjectsSnapshot).projects ?? [];
   /** 已经提示过的请求 → 那条通知的 id：同一条请求只弹一次，请求处理掉后收起。 */
   const announced = useRef(new Map<string, string | null>());
+  /**
+   * 已经自动弹过授权弹窗的请求。和 {@link announced} 分开算：限时授权的请求第一次出现时已经发过通知，
+   * 审查结论落地之后仍要弹一次窗。
+   */
+  const prompted = useRef(new Set<string>());
   /** 已经通知过的发起方结果：本机删除失败时也不重复弹。 */
   const announcedOutcomes = useRef(new Set<string>());
 
@@ -175,6 +192,13 @@ export function CollabAssistHost(props: {
       if (notificationId) notifications?.dismiss(notificationId);
       announced.current.set(id, null);
     }
+    // 限时授权还在、审查结论却要她确认：和没有授权的请求一样弹授权弹窗，同一条只自动弹一次。
+    const asking = next.find((item) => needsHerDecision(item) && !prompted.current.has(item.id));
+    if (asking) {
+      prompted.current.add(asking.id);
+      // 已经开着一个弹窗时不换人：她正在做的那次选择不能被打断。
+      setDialogRequest((current) => current ?? asking);
+    }
     for (const item of next) {
       if (announced.current.has(item.id)) continue;
       if (!waitingForHer(item)) continue;
@@ -193,13 +217,17 @@ export function CollabAssistHost(props: {
         onAction: () => actOn(item)
       }) ?? null;
       announced.current.set(item.id, notificationId);
-      // 有生效中的限时授权的请求不打扰她：她的 Memmy 会直接开始执行。
-      if (item.status === "pending" && !item.granted) setDialogRequest(item);
+      // 有生效中的限时授权的请求不打扰她：她的 Memmy 会直接开始执行。审查结论要求她确认时由上面那一段弹窗。
+      if (item.status === "pending" && !item.granted && !prompted.current.has(item.id)) {
+        prompted.current.add(item.id);
+        setDialogRequest((current) => current ?? item);
+      }
     }
   }, [collab, enabled, notifications, t, actOn, announceOutcomes]);
 
   useEffect(() => {
     announced.current.clear();
+    prompted.current.clear();
     setInbox([]);
     setDialogRequest(null);
   }, [collab, enabled]);
@@ -230,6 +258,8 @@ export function CollabAssistHost(props: {
       <CollabAssistDialog
         open={dialogRequest !== null}
         request={dialogRequest}
+        // 审查在弹窗打开之后才完成时，原因行靠这一份出现；request 对象不动，选择不会被重置。
+        safety={inbox.find((item) => item.id === dialogRequest?.id)?.safety ?? dialogRequest?.safety ?? null}
         collab={collab}
         onDecided={async (decision) => {
           if (!dialogRequest) return;

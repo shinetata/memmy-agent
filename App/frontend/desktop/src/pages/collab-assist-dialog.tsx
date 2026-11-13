@@ -10,7 +10,15 @@
  */
 import { useEffect, useRef, useState } from "react";
 import { AlertTriangle, ChevronDown, ChevronRight, Folder } from "lucide-react";
-import type { AssistAgent, AssistGrantMinutes, AssistInboxItem, AssistRequest, AssistScope, CollabClient } from "../api/collab-client.js";
+import type {
+  AssistAgent,
+  AssistGrantMinutes,
+  AssistInboxItem,
+  AssistRequest,
+  AssistSafety,
+  AssistScope,
+  CollabClient
+} from "../api/collab-client.js";
 import { Button } from "../components/button.js";
 import { Memmy } from "../components/mascot/memmy.js";
 import { Modal } from "../components/modal.js";
@@ -25,6 +33,11 @@ export function CollabAssistDialog(props: {
   open: boolean;
   /** 收到的那条请求：谁发的、要做的事、来自哪个项目。 */
   request: AssistInboxItem | null;
+  /**
+   * 这条请求最新的安全检查：宿主每次轮询收件箱都传进来。审查在弹窗打开之后才完成时，
+   * 原因行靠它出现；`request` 对象保持不变，她在这里做的选择不会被重置。
+   */
+  safety?: AssistSafety | null;
   collab: CollabClient | null;
   /** 她做完选择：允许时带上 Agent 与授权方式（限时带时长），拒绝时只有 action。 */
   onDecided: (decision: { action: "allow" | "reject"; agent?: string; scope?: AssistScope; minutes?: AssistGrantMinutes }) => Promise<void> | void;
@@ -102,8 +115,9 @@ export function CollabAssistDialog(props: {
   const agentName = chosen?.name ?? t("collab.assist.executorFallback");
   const waited = assistWaitedText(request.waitingSeconds, t);
   // 她的 Memmy 检查过之后认为需要她确认：标题下用一行说明为什么，不加块、不加边框。
-  // 详情是为附件拉的，可能比收件箱里那份晚一步拿到检查结论：哪份有结论就用哪份。
-  const reviewLine = assistReviewLine(shown.safety?.executor ? shown : request, t);
+  // 宿主传进来的是最新的一份，详情是为附件拉的、可能比收件箱晚一步：哪份有结论就用哪份。
+  const safety = props.safety?.executor ? props.safety : shown.safety;
+  const reviewLine = assistReviewLine({ safety }, t);
   const others = agents?.filter((item) => item.group === "other") ?? [];
 
   async function submit(action: "allow" | "reject") {

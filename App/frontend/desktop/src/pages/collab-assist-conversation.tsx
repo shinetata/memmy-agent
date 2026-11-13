@@ -398,17 +398,9 @@ function AssistRound(props: {
     ?? request.steps.map((step) => ({ kind: "tool" as const, name: step.text, input: "", output: step.output ?? "", status: "done" as const }));
   // 发起方的记录（Memmy 与 DeepSeek Harness 发起时有）：有就按链展示，没有就是原来的「收到的内容」。
   const chain = props.withConversation && (request.origin != null || request.followup != null);
-  // 两次检查的结论：发起方的检查（写清楚了没有）、执行方的检查（发现了什么）。旧请求没有 safety，不显示。
+  // 检查的结论：只有执行方那次（发现了什么、为什么需要她看过）。旧请求没有 safety，不显示。
+  // 发起方的模型审查已经取消；旧数据里即使还留着 `safety.requester` 也不再显示。
   const checkLines: Array<{ key: string; text: string }> = [];
-  if (request.safety?.requester) {
-    const check = request.safety.requester;
-    checkLines.push({
-      key: "requester",
-      text: check.status === "passed"
-        ? t("collab.assist.checkRequester", { summary: check.summary ?? t("collab.assist.checkExecutorClean") })
-        : t("collab.assist.checkRequesterMissing")
-    });
-  }
   if (request.safety?.executor) {
     const check = request.safety.executor;
     checkLines.push({
