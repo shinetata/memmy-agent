@@ -285,7 +285,7 @@ describe("new project dialog", () => {
     await flush();
 
     expect(document.querySelector(".modal-body [role='switch']")).toBeNull();
-    expect(document.body.textContent).not.toContain("开启项目共享");
+    expect(document.body.textContent).not.toContain("开启项目协作");
     expect(document.body.textContent).not.toContain("加入项目");
     // 没有云端账号就没有「加入项目」，页脚左侧只剩占位，不在弹窗里留一个走不通的按钮。
     expect(document.querySelector("[role='tablist']")).toBeNull();
@@ -382,26 +382,26 @@ describe("new project dialog", () => {
     expect(popover()).toBeNull();
     expect(document.body.textContent).not.toContain("成员可以查看和引用项目中的任务");
 
-    await act(async () => hintButton("共享说明").click());
-    expect(hintButton("共享说明").getAttribute("aria-expanded")).toBe("true");
+    await act(async () => hintButton("协作说明").click());
+    expect(hintButton("协作说明").getAttribute("aria-expanded")).toBe("true");
     expect(popover()?.textContent).toContain("成员可以查看和引用项目中的任务，本机文件不会上传。");
 
     // 焦点在问号上按 Escape：只关说明，整个弹窗留着。
     await act(async () => {
-      hintButton("共享说明").dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+      hintButton("协作说明").dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     });
     expect(popover()).toBeNull();
     expect(onClose).not.toHaveBeenCalled();
 
     // 再点一次也能收起。
-    await act(async () => hintButton("共享说明").click());
+    await act(async () => hintButton("协作说明").click());
     expect(popover()).not.toBeNull();
-    await act(async () => hintButton("共享说明").click());
+    await act(async () => hintButton("协作说明").click());
     expect(popover()).toBeNull();
   });
 
   it("closes the explanation when pressing outside it", async () => {
-    await act(async () => hintButton("共享说明").click());
+    await act(async () => hintButton("协作说明").click());
     expect(popover()).not.toBeNull();
     await act(async () => {
       document.body.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
@@ -413,9 +413,9 @@ describe("new project dialog", () => {
   it("toggles sharing from anywhere in the share field except its question mark", async () => {
     // 共享是一个整框：点文字与点开关一样切换，点问号只看说明。
     const label = Array.from(document.querySelectorAll<HTMLElement>(".modal-body span"))
-      .find((node) => node.textContent === "开启项目共享");
-    expect(label, "共享字段应显示「开启项目共享」").toBeTruthy();
-    expect(shareSwitch().getAttribute("aria-label")).toBe("开启项目共享");
+      .find((node) => node.textContent === "开启项目协作");
+    expect(label, "协作字段应显示「开启项目协作」").toBeTruthy();
+    expect(shareSwitch().getAttribute("aria-label")).toBe("开启项目协作");
 
     await act(async () => label!.click());
     expect(shareSwitch().getAttribute("aria-checked")).toBe("true");
@@ -423,7 +423,7 @@ describe("new project dialog", () => {
     await act(async () => shareSwitch().click());
     expect(shareSwitch().getAttribute("aria-checked")).toBe("false");
 
-    await act(async () => hintButton("共享说明").click());
+    await act(async () => hintButton("协作说明").click());
     expect(popover()).not.toBeNull();
     expect(shareSwitch().getAttribute("aria-checked")).toBe("false");
   });
