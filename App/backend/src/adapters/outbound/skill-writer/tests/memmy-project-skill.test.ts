@@ -85,11 +85,16 @@ describe("memmy-project skill", () => {
   it("tells the agent about the safety check on both sides", () => {
     // 请求会被退回：不写明对象与原因时发起方 Agent 得知道要改什么、不要绕过。
     expect(skill).toContain("### 安全检查");
-    expect(skill).toContain("请求发出前，你的 Memmy 会先检查一次；对方的 Memmy 收到后也会独立检查一次");
+    // 只有对方的 Memmy 会做模型审查：发起方这边只按规则查密钥。
+    expect(skill).toContain("对方的 Memmy 收到请求后会检查四类敏感操作");
+    expect(skill).not.toContain("请求发出前，你的 Memmy 会先检查一次");
     expect(skill).toContain("删除或覆盖文件、读取密钥和登录凭据、对外发送");
-    expect(skill).toContain("没写明时请求会被退回");
+    expect(skill).toContain("写不清楚时，对方需要看过之后才会执行，也可能拒绝");
+    expect(skill).not.toContain("没写明时请求会被退回");
     expect(skill).toContain("不要把这类操作藏进脚本，也不要换一种说法绕开");
     expect(skill).toContain("不要把你或用户的密钥、令牌写进请求和附件");
+    // 带了密钥就直接报错，按提示改完重发。
+    expect(skill).toContain("按提示删掉后重新发送");
     // 需要对方确认是正常流程，照常等待，不要重发。
     expect(skill).toContain("需要她确认时，`assist wait` 会说明原因");
     // 跳过的操作要告诉用户，确实需要时先征得同意再发一次。
