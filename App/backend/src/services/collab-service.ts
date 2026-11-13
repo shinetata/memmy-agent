@@ -2005,7 +2005,7 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
             lastQuestion: task.lastQuestion,
             updatedAt: task.updatedAt,
             turnCount: task.turnCount,
-            // 本人开启过共享、或这一版之前已上传过的任务才算在内；新任务默认不共享。
+            // 本人开启过共享（含新建时默认开启）、或这一版之前已上传过的任务才算在内；没有记录的不算。
             included: isTaskShared(stored, task.conversationId),
             synced: Boolean(stored.synced[sessionKey(task)])
           }))

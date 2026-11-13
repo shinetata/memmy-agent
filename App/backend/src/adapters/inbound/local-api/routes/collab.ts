@@ -223,7 +223,8 @@ export function registerCollabRoutes(app: FastifyInstance, options: RegisterColl
     return reply.send(await options.collab.saveProjectTasks(projectId, input.included));
   }));
 
-  // 一条 Memmy 任务的共享开关：默认关闭，开启才上传，关闭会删掉云端副本。
+  // 一条 Memmy 任务的共享开关：没有记录时视为不共享，开启才上传，关闭会删掉云端副本。
+  // 桌面端在已共享项目里新建任务时默认开启，会话建立时调用这里写入。
   app.get<{ Params: { projectId: string; conversationId: string } }>("/api/collab/projects/:projectId/tasks/:conversationId/sharing", guard, withErrorEnvelope(async (request, reply) => {
     const params = request.params as { projectId: string; conversationId: string };
     return reply.send(await options.collab.getTaskSharing(

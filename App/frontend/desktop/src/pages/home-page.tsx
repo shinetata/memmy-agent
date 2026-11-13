@@ -15,8 +15,8 @@ import { CollabAssistTaskBar, CollabAssistTaskDock, useAssistTask } from "./coll
 import { collabEnabledFor } from "../app/collab-mode.js";
 import { mentionEmptyLabelKey } from "./collab-session-mention.js";
 import { CollabShareToggle } from "./collab-share-toggle.js";
-import { getCollabProjectsSnapshot, selectCollabProject, subscribeCollabProjects } from "../app/collab-projects-store.js";
-import { setShareIntent, takeShareIntent } from "../app/collab-share-intent.js";
+import { getCollabProjectsSnapshot, selectCollabProject, sharedProjectFor, subscribeCollabProjects } from "../app/collab-projects-store.js";
+import { handOffDraftShare } from "../app/collab-share-intent.js";
 import { hydrateAgentThreadInBackground, refreshAgentTaskList, useAgentRuntimeBridge, type AgentTaskStateCoordinator } from "../app/agent-runtime-bridge.js";
 import { useApiClients } from "../app/providers.js";
 import { FOCUSED_AGENT_CHAT_STORAGE_KEY, clearFocusedAgentTarget, isAccountTokenQuotaExhausted, normalizeAgentChatId, readLaunchAgentChatId, removeLaunchAgentChatIdFromUrl } from "../app/routes.js";
@@ -1118,7 +1118,7 @@ export function HomePage() {
     : t("home.mention.noProject");
   /**
    * 输入框旁的共享开关：只在这条任务（或草稿）所属的项目已经开启协作共享时出现。
-   * 新建任务时它先记在草稿上，发出第一条消息后由新会话接手（见 `onChatResolved`）。
+   * 新建任务默认开启，选择先记在草稿上，发出第一条消息后由新会话接手（见 `onChatResolved`）。
    */
   const sharedOnlineProject = useMemo(() => {
     if (!composerLocalProjectId) return null;
@@ -1224,6 +1224,13 @@ export function HomePage() {
         if (chatSelectionEpochRef.current !== selectionEpoch) return null;
         ensureChatSubscription(created.chatId);
         threadPanel.promoteScope(draftScope, created.chatId);
+        // 插件从草稿建立的会话同样是用户新建的任务：按输入框旁开关的选择决定是否共享，与发送第一条消息一致。
+        void handOffDraftShare({
+          collab: collabClient,
+          onlineProjectId: sharedProjectFor(getCollabProjectsSnapshot().projects, composerLocalProjectId)?.id ?? null,
+          draftScopeKey: draftScope,
+          chatId: created.chatId
+        });
         // A plugin-only chat has no Agent message yet, so it is absent from the
         // canonical session snapshot. Keep an optimistic task row for it; without
         // one the next sidebar refresh reopens the blank draft and hides the card.
@@ -1258,8 +1265,9 @@ export function HomePage() {
       if (pluginConversationCreationRef.current === flight) pluginConversationCreationRef.current = null;
     });
     return flight;
-  }, [chatScopeKey, connection, dispatch, ensureChatSubscription, resolvedConversationModel.candidateId,
-    resolvedConversationModel.unavailable, state.agent, taskStateCoordinator, threadPanel.promoteScope, draftTarget]);
+  }, [chatScopeKey, collabClient, composerLocalProjectId, connection, dispatch, ensureChatSubscription,
+    resolvedConversationModel.candidateId, resolvedConversationModel.unavailable, state.agent, taskStateCoordinator,
+    threadPanel.promoteScope, draftTarget]);
   const features = useConversationFeatures({
     scopeKey: chatScopeKey, sharedRowWidth: workspaceRowWidth,
     agentMessages: state.agent.messages,
@@ -1798,6 +1806,7 @@ export function HomePage() {
       chatSelectionEpoch: state.agent.chatSelectionEpoch,
       getChatSelectionEpoch: () => chatSelectionEpochRef.current,
       scopeKey: agentChatScopeKey(null, state.agent.newChatRequestId),
+      // 系统代用户新建的任务（如「添加 Agent 支持」）不接手草稿的共享选择，始终只在本机。
       onChatResolved: (chatId) => threadPanel.promoteScope(agentChatScopeKey(null, state.agent.newChatRequestId), chatId),
       onNewChatMessageSent: (chatId) => {
         rememberFirstEncounterRelayChatIfArmed(chatId);
@@ -2235,16 +2244,14 @@ export function HomePage() {
             clientRequestId,
             resolvedConversationModel.candidateId
           ));
-          // 新建任务时打开了「共享给成员」：会话一建立就共享，之后以本机记录为准。
+          // 在已共享的项目里新建任务默认共享给成员，草稿里关掉的不共享：会话一建立就写入本机记录，之后以它为准。
           // 即使随后的发送失败，也只是共享了一条空任务，不影响别的任务。
-          if (takeShareIntent(sendScopeKey)) {
-            const online = (getCollabProjectsSnapshot().projects ?? [])
-              .find((project) => project.localProjectId === composerLocalProjectId) ?? null;
-            if (online && collabClient) {
-              setShareIntent(chatId, true);
-              void collabClient.setTaskSharing(online.id, chatId, true).catch(() => setShareIntent(chatId, false));
-            }
-          }
+          void handOffDraftShare({
+            collab: collabClient,
+            onlineProjectId: sharedProjectFor(getCollabProjectsSnapshot().projects, composerLocalProjectId)?.id ?? null,
+            draftScopeKey: sendScopeKey,
+            chatId
+          });
         },
         onNewChatMessageSent: clients?.memmyAgent
           ? (chatId) => {

@@ -808,7 +808,7 @@ function Preview() {
               <div className={board.guideText}>
                 <b>你还没有任务</b>
                 <span>
-                  {"在侧栏新建任务并打开「共享给成员」，或"}
+                  {"在侧栏新建任务，发出第一条消息后即进入项目；或"}
                   <button type="button" className={board.guideAction}>关联任务</button>
                   {"，把其他 Agent 中的任务纳入。"}
                 </span>
