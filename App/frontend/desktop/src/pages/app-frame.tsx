@@ -363,6 +363,19 @@ export function resolveSelectedSidebarProjectId(
   return draft?.kind === "project" ? draft.projectId : null;
 }
 
+/**
+ * 项目建好后落在哪儿。没打算共享的项目直接进入它的新会话面板（与 Codex 一致：落地就能开始写第一句话）；
+ * 试过共享的那条路径回看板——共享成功后的授权询问、共享失败与数量上限的提示都挂在看板上。
+ */
+export function resolveCreatedProjectDestination(
+  localProjectId: string,
+  shareRequested: boolean
+): { kind: "board" } | { kind: "newSession"; target: WebuiSessionTarget } {
+  return shareRequested
+    ? { kind: "board" }
+    : { kind: "newSession", target: { kind: "project", projectId: localProjectId } };
+}
+
 export function AppFrame(props: AppFrameProps) {
   const { state, dispatch } = useAppState();
   const { clients } = useOptionalApiClients();
@@ -939,8 +952,8 @@ export function AppFrame(props: AppFrameProps) {
     });
   }
 
-  function expandTaskAncestors(task: AgentTaskView) {
-    for (const key of resolveTaskAncestorGroupKeys(task, state.agent.projects, showingArchived)) {
+  function expandSidebarGroups(keys: string[]) {
+    for (const key of keys) {
       if (!state.agent.sidebarState.collapsed_groups[key]) continue;
       void enqueueSidebarIntent({
         id: nextAgentSidebarMutationId(),
@@ -949,6 +962,16 @@ export function AppFrame(props: AppFrameProps) {
         collapsed: false
       });
     }
+  }
+
+  function expandTaskAncestors(task: AgentTaskView) {
+    expandSidebarGroups(resolveTaskAncestorGroupKeys(task, state.agent.projects, showingArchived));
+  }
+
+  /** 空白草稿落在某个项目时，侧栏要能看见它：折叠着的分组与项目节点一并展开。 */
+  function expandProjectInSidebar(projectId: string) {
+    const project = state.agent.projects.find((candidate) => candidate.id === projectId);
+    expandSidebarGroups([project?.pinned && !showingArchived ? "pinned" : "projects", `project:${projectId}`]);
   }
 
   /** Opens a project's board. The board is the project, so this is one click on the row's name. */
@@ -2091,10 +2114,17 @@ export function AppFrame(props: AppFrameProps) {
         shareAvailable={collabEnabled}
         defaultShare={createProjectShare}
         onClose={() => setCreateProjectOpen(false)}
-        onCreated={(localProjectId) => {
+        onCreated={(localProjectId, outcome) => {
           setCreateProjectOpen(false);
-          // Only now, once the project exists, does the window move to its board.
-          openProjectBoard(localProjectId);
+          // Only now, once the project exists, does the window move on.
+          const destination = resolveCreatedProjectDestination(localProjectId, outcome.shareRequested);
+          if (destination.kind === "board") {
+            openProjectBoard(localProjectId);
+            return;
+          }
+          // 本机项目直接进入它的新会话：先把侧栏里的这一行露出来，再打开空白草稿。
+          expandProjectInSidebar(localProjectId);
+          openNewAgent(destination.target);
         }}
         onShared={(project) => addCollabProject(project)}
         onJoinProject={() => {

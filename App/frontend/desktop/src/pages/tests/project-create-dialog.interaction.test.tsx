@@ -165,7 +165,8 @@ describe("new project dialog", () => {
         allowShared: true
       }
     });
-    expect(onCreated).toHaveBeenCalledWith("local-1");
+    // 没开共享的项目只落本机：调用方据此直接进入它的新会话。
+    expect(onCreated).toHaveBeenCalledWith("local-1", { shareRequested: false });
     expect(getCollabProjectsSnapshot().taskPickerFor).toBeNull();
   });
 
@@ -192,7 +193,7 @@ describe("new project dialog", () => {
     await pressEnter(nameInput(), false);
 
     expect(mocks.mutateProject).toHaveBeenCalledWith(expect.objectContaining({ kind: "create" }));
-    expect(onCreated).toHaveBeenCalledWith("local-1");
+    expect(onCreated).toHaveBeenCalledWith("local-1", { shareRequested: false });
   });
 
   it("creates the cloud record once sharing is ticked", async () => {
@@ -207,7 +208,8 @@ describe("new project dialog", () => {
     expect(mocks.bindLocalProject).toHaveBeenCalledWith("cloud-1", "local-1");
     // A brand-new project has no sessions yet, so nothing is asked and nothing pops up over the board.
     expect(getCollabProjectsSnapshot().taskPickerFor).toBeNull();
-    expect(onCreated).toHaveBeenCalledWith("local-1");
+    // 试过共享：即使失败也回看板，提示都挂在那里。
+    expect(onCreated).toHaveBeenCalledWith("local-1", { shareRequested: true });
   });
 
   /** 本机已经拥有 `count` 个协作项目，云端给出的上限是 `limit`。 */
@@ -252,7 +254,7 @@ describe("new project dialog", () => {
     await flush();
 
     // 本机项目照建；失败原因是额度，不该走「服务暂时不可用」那条提示。
-    expect(onCreated).toHaveBeenCalledWith("local-1");
+    expect(onCreated).toHaveBeenCalledWith("local-1", { shareRequested: true });
     expect(onShareLimitReached).toHaveBeenCalledWith(5);
     expect(onShareFailed).not.toHaveBeenCalled();
   });
@@ -294,7 +296,7 @@ describe("new project dialog", () => {
     await act(async () => submitButton().click());
     await flush();
     expect(mocks.createProject).not.toHaveBeenCalled();
-    expect(onCreated).toHaveBeenCalledWith("local-1");
+    expect(onCreated).toHaveBeenCalledWith("local-1", { shareRequested: false });
     await act(async () => bareRoot.unmount());
   });
 
@@ -309,7 +311,7 @@ describe("new project dialog", () => {
 
     expect(onShareFailed).toHaveBeenCalledWith("暂时无法连接 Memmy 云端，请稍后重试。");
     expect(onShareLimitReached).not.toHaveBeenCalled();
-    expect(onCreated).toHaveBeenCalledWith("local-1");
+    expect(onCreated).toHaveBeenCalledWith("local-1", { shareRequested: true });
   });
 
   it("starts with sharing off unless the opener asks for it", async () => {

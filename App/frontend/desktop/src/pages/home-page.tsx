@@ -2689,6 +2689,17 @@ export function HomePage() {
   }, [input, hasActiveConversation]);
 
   /**
+   * 带着项目进入空白草稿时把光标放进输入框：落地面板就能直接写第一句话。
+   * 只在项目草稿上生效，其他进入 /main 的场景保持原样——焦点仍然只跟着人的操作走。
+   */
+  const draftProjectId = draftTarget.kind === "project" ? draftTarget.projectId : null;
+  useEffect(() => {
+    if (hasActiveConversation || !draftProjectId) return undefined;
+    const frame = window.requestAnimationFrame(() => inputRef.current?.focus());
+    return () => window.cancelAnimationFrame(frame);
+  }, [draftProjectId, hasActiveConversation]);
+
+  /**
    * Resets the input box height after sending, so the next empty input does not inherit the previous height.
    */
   function resetComposerHeight() {
@@ -3416,7 +3427,18 @@ export function HomePage() {
             <div className="home-empty-brand-mascot flex justify-center">
               <Memmy pose="think" size={165} className="memmy-bob" />
             </div>
-            <h1 className="text-2xl font-bold text-text-ink">{t("home.subtitle")}</h1>
+            {/* 草稿落在某个项目上时，标题带出项目名：悬停显示完整路径，长名字换行不撑破版面 */}
+            <h1 className="home-empty-title text-2xl font-bold text-text-ink">
+              {selectedDraftProject ? (
+                <>
+                  {t("home.subtitle.projectPrefix")}
+                  <span className="home-empty-title__project" title={selectedDraftProject.rootPath}>
+                    {selectedDraftProject.name}
+                  </span>
+                  {t("home.subtitle.projectSuffix")}
+                </>
+              ) : t("home.subtitle")}
+            </h1>
           </div>
           <div className="home-empty-column home-empty-input">
             <AgentOperationErrorSlot message={agentError} />

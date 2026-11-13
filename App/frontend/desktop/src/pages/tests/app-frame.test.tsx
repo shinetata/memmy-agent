@@ -13,7 +13,7 @@ import { appActions } from "../../state/app-actions.js";
 import { appReducer, createInitialAppState } from "../../state/app-reducer.js";
 import type { AgentTaskView } from "../../state/agent-chat-slice.js";
 import { mockBootstrap } from "./fixtures/bootstrap.js";
-import { AppFrame, TaskArchiveInlineAction, TaskRow, countProjectTasksToArchive, deriveSidebarPlacement, deriveVisibleSidebarPlacement, freshDecisionAnnouncements, sameWorkspacePath, groupAgentTasks, groupTasksByTime, resolveSidebarAccountSummary, resolveSidebarContextMenuPlacement, resolveSidebarMenuOverlayStyle, resolveSidebarUpdateAction, resolveTaskAncestorGroupKeys, shouldCreateNewAgentDraft, shouldShowRecordingView, truncateAccountDisplayText } from "../app-frame.js";
+import { AppFrame, TaskArchiveInlineAction, TaskRow, countProjectTasksToArchive, deriveSidebarPlacement, deriveVisibleSidebarPlacement, freshDecisionAnnouncements, sameWorkspacePath, groupAgentTasks, groupTasksByTime, resolveCreatedProjectDestination, resolveSidebarAccountSummary, resolveSidebarContextMenuPlacement, resolveSidebarMenuOverlayStyle, resolveSidebarUpdateAction, resolveTaskAncestorGroupKeys, shouldCreateNewAgentDraft, shouldShowRecordingView, truncateAccountDisplayText } from "../app-frame.js";
 
 describe("AppFrame", () => {
   it("hides the recording view shortcut while its tab is already open", () => {
@@ -454,6 +454,16 @@ describe("AppFrame", () => {
     expect(source).not.toContain("app-frame-workspace-picker-menu");
     expect(source).toContain("function newProject()");
     expect(source.match(/requestCreateProject\(\)/gu)).toHaveLength(1);
+  });
+
+  it("lands a new project in its own session unless sharing was attempted", () => {
+    // 本机项目：直接进入它的新会话面板，标题与项目选择器都是这个项目。
+    expect(resolveCreatedProjectDestination("local-1", false)).toEqual({
+      kind: "newSession",
+      target: { kind: "project", projectId: "local-1" }
+    });
+    // 试过共享（成功、失败、达到上限）：回看板，授权询问与提示都挂在那里。
+    expect(resolveCreatedProjectDestination("local-1", true)).toEqual({ kind: "board" });
   });
 
   it("keeps top-level sidebar task menus mutually exclusive", () => {

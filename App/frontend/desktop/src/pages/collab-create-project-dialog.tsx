@@ -29,8 +29,11 @@ export function CollabCreateProjectDialog(props: {
   /** 打开时「与成员共享」是否已经开启：新功能介绍的最后一页会要求默认共享。 */
   defaultShare?: boolean;
   onClose: () => void;
-  /** The project exists on this computer; the caller opens its board. */
-  onCreated: (localProjectId: string) => void;
+  /**
+   * The project exists on this computer. `shareRequested` says whether the person tried to share it: a project that
+   * was never meant to be shared lands in a new session, one that sharing was attempted for lands on its board.
+   */
+  onCreated: (localProjectId: string, outcome: { shareRequested: boolean }) => void;
   /** The project's cloud record was created and is about to be bound. */
   onShared: (project: CollabProject) => void;
   onBound: (projectId: string, localProjectId: string) => void;
@@ -61,7 +64,7 @@ export function CreateProjectModal(props: {
   defaultShare?: boolean;
   collab: CollabClient;
   onClose: () => void;
-  onCreated: (localProjectId: string) => void;
+  onCreated: (localProjectId: string, outcome: { shareRequested: boolean }) => void;
   onShared: (project: CollabProject) => void;
   onBound: (projectId: string, localProjectId: string) => void;
   onBindFailed: (reason: string) => void;
@@ -148,7 +151,8 @@ export function CreateProjectModal(props: {
 
     if (!share) {
       setBusy(false);
-      props.onCreated(localProjectId);
+      // 只建在本机：直接进入这个项目的新会话，看板留给共享过的那条路径。
+      props.onCreated(localProjectId, { shareRequested: false });
       return;
     }
 
@@ -180,7 +184,8 @@ export function CreateProjectModal(props: {
     }
     // 刚开启共享：看板打开后，若还没授权「在其他 Agent 中使用协作项目」，询问一次。
     if (sharingStarted) requestCollabAccessPrompt(createdLocalProjectId);
-    props.onCreated(createdLocalProjectId);
+    // 共享成功、共享失败与达到上限都回看板：授权询问与顶部提示都挂在看板上。
+    props.onCreated(createdLocalProjectId, { shareRequested: true });
   }
 
   return (
