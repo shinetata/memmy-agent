@@ -1,5 +1,5 @@
 /**
- * Offers the 1.2.7 project-collaboration announcement once, when the person first reaches a workspace.
+ * Offers the one-time project-collaboration announcement, when the person first reaches a workspace.
  *
  * One run shows at most one large prompt and this one goes first: it claims the slot in the same effect that opens
  * it, before the other hosts read their own conditions, so they wait for the next launch instead of queueing behind.

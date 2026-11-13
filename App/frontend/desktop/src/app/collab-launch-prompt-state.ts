@@ -1,9 +1,9 @@
 /**
- * The one-time 1.2.7 project-collaboration announcement.
+ * The one-time project-collaboration announcement.
  *
- * The record lives on this computer instead of comparing versions: the code ships with 1.2.7, so both an update and a
- * fresh install see it for the first time and show the carousel once. A single run shows at most one large prompt,
- * and this announcement goes first.
+ * The record lives on this computer instead of comparing versions: every computer shows the carousel once the
+ * conditions first hold, whichever version happens to ship it, and never again after that. A single run shows at
+ * most one large prompt, and this announcement goes first.
  */
 import type { UserMode } from "@memmy/local-api-contracts";
 

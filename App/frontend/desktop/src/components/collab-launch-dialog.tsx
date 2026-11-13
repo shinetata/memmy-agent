@@ -1,5 +1,5 @@
 /**
- * The 1.2.7 project-collaboration announcement: a four-page carousel with the same shell as the 1.2.5 feature
+ * The one-time project-collaboration announcement: a four-page carousel with the same shell as the older feature
  * carousel (focus handling, Esc, backdrop click, Tab trap, sizes). The last page leads into the new-project dialog
  * with sharing already switched on.
  */

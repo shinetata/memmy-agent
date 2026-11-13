@@ -1,5 +1,5 @@
 /*
- * Shell for the 1.2.7 project-collaboration announcement carousel.
+ * Shell for the one-time project-collaboration announcement carousel.
  *
  * Its own `collab-launch-*` names on purpose: the 1.2.5 history launch styles in this branch are the old ones and
  * will be replaced when the release branch merges, so nothing here may depend on them.

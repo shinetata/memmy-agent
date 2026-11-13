@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 /**
- * The 1.2.7 project-collaboration announcement: it appears once per computer on the first workspace visit, pages
+ * The one-time project-collaboration announcement: it appears once per computer on the first workspace visit, pages
  * left and right, and its last page opens the new-project dialog with sharing already on.
  */
 import { act } from "react";
