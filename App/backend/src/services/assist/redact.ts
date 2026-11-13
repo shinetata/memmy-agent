@@ -23,6 +23,8 @@ interface RedactionRule {
   pattern: RegExp;
   /** 保留匹配到的第一段（例如 `Authorization: Bearer ` 这个前缀），只替换其余部分。 */
   keep?: number;
+  /** 命中的是哪一类凭据：只用于「哪里疑似有密钥」的提示，不参与替换。 */
+  kind: string;
 }
 
 /**
@@ -31,36 +33,70 @@ interface RedactionRule {
  */
 const RULES: readonly RedactionRule[] = [
   // PEM 私钥：从 BEGIN 到 END 整段，不管中间有多少行。
-  { pattern: /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----/gu },
+  { pattern: /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----/gu, kind: "私钥" },
   // AWS 访问密钥（AKIA/ASIA 开头，共 20 位）。
-  { pattern: /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/gu },
+  { pattern: /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/gu, kind: "AWS 访问密钥" },
   // GitHub 的各种令牌：ghp_/gho_/ghu_/ghs_/ghr_ 与细粒度令牌 github_pat_。
-  { pattern: /\bgh[pousr]_[A-Za-z0-9]{20,}\b/gu },
-  { pattern: /\bgithub_pat_[A-Za-z0-9_]{20,}\b/gu },
+  { pattern: /\bgh[pousr]_[A-Za-z0-9]{20,}\b/gu, kind: "GitHub 令牌" },
+  { pattern: /\bgithub_pat_[A-Za-z0-9_]{20,}\b/gu, kind: "GitHub 令牌" },
   // OpenAI / Anthropic 的密钥：sk-、sk-ant-、sk-proj-。后面不足 20 个字符不算，免得误伤「sk-learn」这类词。
-  { pattern: /\bsk-(?:ant-|proj-)?[A-Za-z0-9_-]{20,}\b/gu },
+  { pattern: /\bsk-(?:ant-|proj-)?[A-Za-z0-9_-]{20,}\b/gu, kind: "API Key" },
   // Slack 的 xox 系列。
-  { pattern: /\bxox[abprs]-[A-Za-z0-9-]{10,}\b/gu },
+  { pattern: /\bxox[abprs]-[A-Za-z0-9-]{10,}\b/gu, kind: "Slack 令牌" },
   // GitLab 个人访问令牌。
-  { pattern: /\bglpat-[A-Za-z0-9_-]{20,}\b/gu },
+  { pattern: /\bglpat-[A-Za-z0-9_-]{20,}\b/gu, kind: "GitLab 令牌" },
   // Google API Key：AIza 加 35 位。
-  { pattern: /\bAIza[0-9A-Za-z_-]{35}\b/gu },
+  { pattern: /\bAIza[0-9A-Za-z_-]{35}\b/gu, kind: "Google API Key" },
   // JWT：三段 base64url，第一段以 eyJ（`{"`）开头。
-  { pattern: /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{4,}\b/gu },
+  { pattern: /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{4,}\b/gu, kind: "JWT" },
   // 请求头里的凭据：保留头名与认证方式，只隐藏值。
-  { pattern: /\b(Authorization\s*:\s*(?:Bearer|Basic|Token|Digest)?\s*)([^\s"',;]+)/giu, keep: 1 },
-  { pattern: /\b(Cookie\s*:\s*)([^\n\r]+)/giu, keep: 1 },
-  { pattern: /\b(Set-Cookie\s*:\s*)([^\n\r]+)/giu, keep: 1 },
+  { pattern: /\b(Authorization\s*:\s*(?:Bearer|Basic|Token|Digest)?\s*)([^\s"',;]+)/giu, keep: 1, kind: "Authorization 头" },
+  { pattern: /\b(Cookie\s*:\s*)([^\n\r]+)/giu, keep: 1, kind: "Cookie 头" },
+  { pattern: /\b(Set-Cookie\s*:\s*)([^\n\r]+)/giu, keep: 1, kind: "Cookie 头" },
   // 赋值与键值：PASSWORD=…、*_TOKEN=…、*_SECRET=…、*_API_KEY=…、password: …，键名大小写不敏感。
   {
     pattern: /\b([A-Za-z0-9_]*(?:PASSWORD|PASSWD|TOKEN|SECRET|API_?KEY|PRIVATE_KEY|ACCESS_KEY|CLIENT_SECRET))(["']?\s*[:=]\s*)("[^"\n]*"|'[^'\n]*'|[^\s"',;]+)/giu,
-    keep: 2
+    keep: 2,
+    kind: "密码或令牌赋值"
   }
 ];
 
 /** 已经替换过的标记不再参与后续规则：它本身不含凭据，但会挡住「值」的匹配。 */
 function alreadyRedacted(value: string): boolean {
   return value === REDACTED || value.startsWith(REDACTED);
+}
+
+/** 检测到的一处疑似凭据：位置、长度、哪一类。只用来提示「哪里要去掉」，不带原文。 */
+export interface SecretHit {
+  /** 在传入的那段文字里的起始位置。 */
+  index: number;
+  length: number;
+  /** 哪一类，例如「私钥」「GitHub 令牌」。 */
+  kind: string;
+}
+
+/**
+ * 只检测、不替换：返回命中的位置与类别。请求发出前用它挡住夹带密钥的请求。
+ * 规则与 {@link redactSecrets} 完全同一套；重叠的命中只留最靠前的那个，同一处不会报两遍。
+ */
+export function findSecrets(input: string): SecretHit[] {
+  if (!input) return [];
+  const hits: SecretHit[] = [];
+  for (const rule of RULES) {
+    rule.pattern.lastIndex = 0;
+    for (const match of input.matchAll(rule.pattern)) {
+      if (typeof match.index !== "number" || !match[0]) continue;
+      hits.push({ index: match.index, length: match[0].length, kind: rule.kind });
+    }
+  }
+  hits.sort((left, right) => left.index - right.index || right.length - left.length);
+  const merged: SecretHit[] = [];
+  for (const hit of hits) {
+    const last = merged[merged.length - 1];
+    if (last && hit.index < last.index + last.length) continue;
+    merged.push(hit);
+  }
+  return merged;
 }
 
 /**

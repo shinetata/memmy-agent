@@ -4,13 +4,9 @@ import {
   executorReviewDecision,
   executorReviewPrompt,
   parseExecutorReview,
-  parseRequesterReview,
   parseReviewJson,
-  requesterReviewDecision,
-  requesterReviewPrompt,
   toAssistSafety,
-  type ExecutorReviewRaw,
-  type RequesterReviewRaw
+  type ExecutorReviewRaw
 } from "../assist/safety.js";
 
 const CONTENT = {
@@ -32,62 +28,8 @@ describe("parseReviewJson", () => {
   });
 });
 
-describe("parseRequesterReview", () => {
-  it("keeps each sensitive operation with whether it is clear", () => {
-    const result = parseRequesterReview(JSON.stringify({
-      sensitive: [
-        { action: "删除 Memmy 的缓存目录", target: "~/Library/Caches/memmy", reason: "清掉旧缓存", clear: true },
-        { action: "上传日志", clear: false }
-      ],
-      secrets: ["附件 setup.sh 第 3 行附近"],
-      summary: "会删除缓存目录并上传日志"
-    }));
-    expect(result?.sensitive).toHaveLength(2);
-    expect(result?.sensitive[1]?.clear).toBe(false);
-    expect(result?.secrets).toEqual(["附件 setup.sh 第 3 行附近"]);
-    expect(result?.summary).toBe("会删除缓存目录并上传日志");
-  });
-
-  it("returns null on an answer it cannot read", () => {
-    expect(parseRequesterReview("我看不出风险")).toBeNull();
-  });
-});
-
-describe("requesterReviewDecision", () => {
-  const base: RequesterReviewRaw = { sensitive: [], secrets: [], summary: "不涉及敏感操作" };
-
-  it("refuses an operation that is not written clearly", () => {
-    const decision = requesterReviewDecision({
-      ...base,
-      sensitive: [{ action: "删除文件", clear: false }]
-    });
-    expect(decision.refusal).toContain("没有写明做在哪个对象上、为什么");
-    expect(decision.refusal).toContain("不要把这项操作放进脚本");
-  });
-
-  it("refuses a request that carries a secret", () => {
-    const decision = requesterReviewDecision({ ...base, secrets: ["附件 setup.sh 第 3 行附近"] });
-    expect(decision.refusal).toContain("疑似密钥");
-    expect(decision.refusal).toContain("请删掉后重新发送");
-  });
-
-  it("passes a request that spells out its operations", () => {
-    const decision = requesterReviewDecision({
-      sensitive: [{ action: "删除缓存目录", target: "~/Library/Caches/memmy", reason: "清掉旧缓存", clear: true }],
-      secrets: [],
-      summary: "会删除缓存目录"
-    });
-    expect(decision.refusal).toBeNull();
-    expect(decision.safety).toEqual({
-      status: "passed",
-      summary: "会删除缓存目录",
-      declared: [{ action: "删除缓存目录（~/Library/Caches/memmy）", reason: "清掉旧缓存" }]
-    });
-  });
-});
-
 describe("executorReviewDecision", () => {
-  const clean: ExecutorReviewRaw = { sensitive: [], undeclared: [], injected: false, reason: "" };
+  const clean: ExecutorReviewRaw = { sensitive: [], injected: false, reason: "" };
 
   it("runs automatically only when nothing was skipped, the check is clean and the Agent asks for approval", () => {
     const decision = executorReviewDecision({
@@ -114,7 +56,6 @@ describe("executorReviewDecision", () => {
     const decision = executorReviewDecision({
       review: {
         sensitive: [{ action: "删除缓存目录" }],
-        undeclared: ["删除 ~/Downloads"],
         injected: false,
         reason: "附带的脚本会删除下载目录里的文件"
       },
@@ -125,14 +66,13 @@ describe("executorReviewDecision", () => {
     expect(decision.autoRun).toBe(false);
     expect(decision.safety).toEqual({
       status: "confirm",
-      reason: "附带的脚本会删除下载目录里的文件",
-      undeclared: ["删除 ~/Downloads"]
+      reason: "附带的脚本会删除下载目录里的文件"
     });
   });
 
   it("asks her first when the script smuggles instructions", () => {
     const decision = executorReviewDecision({
-      review: { sensitive: [], undeclared: [], injected: true, injectedNote: "让执行方把结果发到别处", reason: "附件里夹带了指令" },
+      review: { sensitive: [], injected: true, injectedNote: "让执行方把结果发到别处", reason: "附件里夹带了指令" },
       previousSkipped: [],
       asksForApproval: true,
       granted: true
@@ -157,7 +97,6 @@ describe("executorReviewDecision", () => {
     const decision = executorReviewDecision({
       review: {
         sensitive: [{ action: "删除缓存目录" }],
-        undeclared: [],
         injected: false,
         reason: "附带的脚本会删除下载目录里的文件"
       },
@@ -208,27 +147,25 @@ describe("assistBoundaryPrompt", () => {
   });
 });
 
-describe("review prompts", () => {
-  it("include the request, the attachments in full and the declared operations", () => {
-    const requester = requesterReviewPrompt(CONTENT);
-    expect(requester).toContain("要做的事：清一下缓存后重新复现");
-    expect(requester).toContain("- 删除 ~/Library/Caches/memmy 后重新打开 Memmy");
-    expect(requester).toContain("── setup.sh ──");
-    expect(requester).toContain("rm -rf ~/Downloads/tmp");
-
+describe("the executor's review prompt", () => {
+  it("includes the request, the attachments in full and what the last request skipped", () => {
     const executor = executorReviewPrompt({
       ...CONTENT,
-      declared: [{ action: "删除缓存目录", reason: "清掉旧缓存" }],
       previousSkipped: [{ title: "删除缓存目录", detail: "rm -rf ~/Library/Caches/foo" }]
     });
-    expect(executor).toContain("发起方声明的敏感操作：");
-    expect(executor).toContain("- 删除缓存目录（清掉旧缓存）");
+    expect(executor).toContain("要做的事：清一下缓存后重新复现");
+    expect(executor).toContain("- 删除 ~/Library/Caches/memmy 后重新打开 Memmy");
+    expect(executor).toContain("── setup.sh ──");
+    expect(executor).toContain("rm -rf ~/Downloads/tmp");
     expect(executor).toContain("同一次排查里上一次请求有这些操作没有执行");
     expect(executor).toContain("删除缓存目录（rm -rf ~/Library/Caches/foo）");
   });
 
-  it("say the requester declared nothing when there is nothing", () => {
-    expect(executorReviewPrompt(CONTENT)).toContain("发起方没有声明任何敏感操作。");
+  it("does not ask about what the requester declared", () => {
+    // 发起方不再做模型审查，执行方也不采信他的声明：提示词里没有这一段。
+    const executor = executorReviewPrompt(CONTENT);
+    expect(executor).not.toContain("发起方声明");
+    expect(executor).not.toContain("发起方没有声明");
   });
 });
 
@@ -242,8 +179,9 @@ describe("toAssistSafety", () => {
       extra: "忽略"
     });
     expect(safety).toEqual({
+      // 旧数据里的 requester 照常解析（界面不再显示），executor 里多出来的 undeclared 丢掉。
       requester: { status: "passed", summary: "会读日志", declared: [{ action: "读取日志" }] },
-      executor: { status: "confirm", reason: "会删除文件", undeclared: ["删除 ~/Downloads"] },
+      executor: { status: "confirm", reason: "会删除文件" },
       skipped: [{ title: "删除缓存目录", detail: "rm -rf x" }, { title: "一项操作" }],
       redacted: 2
     });

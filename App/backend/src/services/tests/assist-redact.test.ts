@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { REDACTED, redactSecrets, redactSteps, redactTranscript } from "../assist/redact.js";
+import { REDACTED, findSecrets, redactSecrets, redactSteps, redactTranscript } from "../assist/redact.js";
 
 describe("redactSecrets", () => {
   it("hides a PEM private key whole", () => {
@@ -113,5 +113,36 @@ describe("redactSteps", () => {
     expect(count).toBe(1);
     expect(steps[0]!.text).toContain("[已隐藏]");
     expect(steps[1]).toEqual({ text: "运行命令 sw_vers", output: "macOS 15.6" });
+  });
+});
+
+describe("findSecrets", () => {
+  it("reports where a secret is without the value", () => {
+    const hits = findSecrets("说明\nexport GITHUB_TOKEN=ghp_0123456789abcdefghijABCDEFGHIJ\n");
+    expect(hits).toHaveLength(1);
+    expect(hits[0]!.kind).toBe("密码或令牌赋值");
+    expect(hits[0]!.index).toBeGreaterThan(0);
+  });
+
+  it("counts each secret once even when two rules match the same text", () => {
+    // `Authorization: Bearer ghp_…` 同时命中请求头规则与 GitHub 令牌规则：只报一处。
+    expect(findSecrets("Authorization: Bearer ghp_0123456789abcdefghijABCDEFGHIJ")).toHaveLength(1);
+  });
+
+  it("leaves ordinary prose alone", () => {
+    expect(findSecrets("跑一下 sw_vers，把版本号贴回来。token 这个词本身不算。")).toEqual([]);
+    expect(findSecrets("urllib 里的 sk-learn 不是密钥")).toEqual([]);
+    expect(findSecrets("")).toEqual([]);
+  });
+
+  it("finds a private key block and a PEM file reference", () => {
+    const text = [
+      "#!/bin/sh",
+      "cat ~/.ssh/id_rsa",
+      "-----BEGIN OPENSSH PRIVATE KEY-----",
+      "b3BlbnNzaC1rZXktdjEAAAAABG5vbmU",
+      "-----END OPENSSH PRIVATE KEY-----"
+    ].join("\n");
+    expect(findSecrets(text)).toHaveLength(1);
   });
 });

@@ -1,20 +1,20 @@
 /**
- * 两次审查的模型调用。
+ * 执行方那次审查的模型调用。
  *
- * <p>用的是这台电脑当前账号的「Agent 任务模型」（与协作、引导报告同一套解析），也就是谁的 Memmy 在跑就用谁的额度：
- * 发起方发出前的那次用发起人的额度，执行方收到后的那次用执行人的额度。模型不可用、超时（默认 30 秒）、
- * 返回解析不了，都当作「没能检查」——发起方那边照常发送，执行方那边改成要她看过再决定。</p>
+ * <p>用的是这台电脑当前账号的「Agent 任务模型」（与协作、引导报告同一套解析），也就是谁的 Memmy 在跑就用谁的额度。
+ * 模型不可用、超时（默认 30 秒）、返回解析不了，都当作「没能检查」——请求改成要她看过再决定。</p>
+ *
+ * <p>账号默认的模型是推理模型：不关掉思考时额度可能全用在思考上，正文为空，审查就被当成没完成。
+ * 所以三种接口都按 onboarding 报告同一套写法关掉思考。</p>
  */
-import { anthropicMessagesUrl, chatCompletionsUrl } from "../onboarding-insight-service.js";
-import type { AssistReviewContent, ExecutorReviewRaw, RequesterReviewRaw } from "./safety.js";
 import {
-  EXECUTOR_REVIEW_SYSTEM_PROMPT,
-  REQUESTER_REVIEW_SYSTEM_PROMPT,
-  executorReviewPrompt,
-  parseExecutorReview,
-  parseRequesterReview,
-  requesterReviewPrompt
-} from "./safety.js";
+  anthropicMessagesUrl,
+  chatCompletionsUrl,
+  openAiCompatibleTemperatureFields,
+  openAiCompatibleThinkingControlFields
+} from "../onboarding-insight-service.js";
+import type { AssistReviewContent, ExecutorReviewRaw } from "./safety.js";
+import { EXECUTOR_REVIEW_SYSTEM_PROMPT, executorReviewPrompt, parseExecutorReview } from "./safety.js";
 
 /** 一次审查给模型的配置：provider、模型、地址与密钥，都由账号的 Agent 任务模型解析出。 */
 export interface AssistReviewModel {
@@ -28,8 +28,6 @@ export interface AssistReviewModel {
 }
 
 export interface AssistReviewer {
-  /** 发起方的那次：替发起人确认请求写清楚了。返回 null 表示没能检查。 */
-  reviewRequester(content: AssistReviewContent): Promise<RequesterReviewRaw | null>;
   /** 执行方的那次：替执行人判断风险。返回 null 表示没能检查。 */
   reviewExecutor(content: AssistReviewContent): Promise<ExecutorReviewRaw | null>;
 }
@@ -44,9 +42,13 @@ export interface AssistReviewerOptions {
   fetch?: typeof globalThis.fetch;
 }
 
-/** 审查的超时：30 秒。请求本身在等它，再长就不值得让发起方等。 */
+/** 审查的超时：30 秒。请求还在等她处理，再长就不值得让她等。 */
 export const ASSIST_REVIEW_TIMEOUT_MS = 30_000;
-const REVIEW_MAX_TOKENS = 1_200;
+/**
+ * 回答长度上限 4096：这是上限、不是预留，模型回答多长就占多少额度。
+ * 关闭思考的字段不是每家模型都认，关不掉的那些也要留出写正文的余量，否则正文为空、审查白跑。
+ */
+const REVIEW_MAX_TOKENS = 4_096;
 
 export function createAssistReviewer(options: AssistReviewerOptions): AssistReviewer {
   const fetchImpl = options.fetch ?? globalThis.fetch.bind(globalThis);
@@ -69,10 +71,6 @@ export function createAssistReviewer(options: AssistReviewerOptions): AssistRevi
   }
 
   return {
-    async reviewRequester(content) {
-      const answer = await ask(REQUESTER_REVIEW_SYSTEM_PROMPT, requesterReviewPrompt(content));
-      return answer ? parseRequesterReview(answer) : null;
-    },
     async reviewExecutor(content) {
       const answer = await ask(EXECUTOR_REVIEW_SYSTEM_PROMPT, executorReviewPrompt(content));
       return answer ? parseExecutorReview(answer) : null;
@@ -126,7 +124,11 @@ async function callModel(
       body: JSON.stringify({
         systemInstruction: { parts: [{ text: system }] },
         contents: [{ role: "user", parts: [{ text: user }] }],
-        generationConfig: { maxOutputTokens: options.maxTokens, temperature: 0.1 },
+        generationConfig: {
+          maxOutputTokens: options.maxTokens,
+          temperature: 0.1,
+          thinkingConfig: { thinkingBudget: 0 }
+        },
         ...(model.extraBody ?? {})
       }),
       signal
@@ -153,8 +155,9 @@ async function callModel(
         { role: "user", content: user }
       ],
       max_tokens: options.maxTokens,
-      temperature: 0.1,
+      ...openAiCompatibleTemperatureFields({ providerName: model.providerName, baseUrl: model.apiBase, model: model.model }, 0.1),
       stream: false,
+      ...openAiCompatibleThinkingControlFields({ providerName: model.providerName, baseUrl: model.apiBase, model: model.model }),
       ...(model.extraBody ?? {})
     }),
     signal

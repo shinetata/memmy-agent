@@ -380,7 +380,7 @@ export async function createLocalBackend(options: CreateLocalBackendOptions): Pr
       },
       // 本机关联记录里各 Agent 的使用情况：这个项目里关联过的放在第一层。
       agentUsage: (projectId: string) => collab.agentUsage(projectId),
-      // 两次审查都走本机账号的「Agent 任务模型」：发起方那次用发起人的额度，执行方那次用执行人的额度。
+      // 只剩执行方那次审查：用她本机账号的「Agent 任务模型」，也就是她自己的额度。发起方只按规则查密钥，不调模型。
       reviewer: createAssistReviewer({
         resolveModel: async () =>
           (await createCatalogAgentTaskModelResolver(appStateStore, memmyConfigWriter).getAgentTaskModel()) ?? null

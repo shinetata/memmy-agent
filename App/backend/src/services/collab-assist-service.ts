@@ -23,17 +23,15 @@ import type { AssistStep } from "./assist/acp-client.js";
 import { AcpError } from "./assist/acp-client.js";
 import { assistAgentName, MEMMY_SOURCE_ID } from "./assist/recipes.js";
 import { ASSIST_RESULT_FORMAT, assistPrompt, parseResultItems, replyWithoutItems } from "./assist/prompt.js";
-import { redactSecrets, redactSteps, redactTranscript, type RedactableTranscriptItem } from "./assist/redact.js";
+import { findSecrets, redactSecrets, redactSteps, redactTranscript, type RedactableTranscriptItem } from "./assist/redact.js";
 import { readRequesterRecord, sliceRequesterRecord, type RequesterSource } from "./assist/requester-record.js";
 import type { AssistReviewer } from "./assist/review.js";
 import {
   assistBoundaryPrompt,
   executorReviewDecision,
-  requesterReviewDecision,
   toAssistSafety,
   type AssistSafety,
   type ExecutorCheck,
-  type RequesterCheck,
   type SkippedOperation
 } from "./assist/safety.js";
 import {
@@ -403,8 +401,8 @@ export interface CollabAssistServiceOptions {
   /** 每一步向云端追加的最小间隔，默认 1.5 秒：步骤是给人看的摘要，不必逐字同步。 */
   progressIntervalMs?: number;
   /**
-   * 两次审查（见 ./assist/review）：发起方发出前一次、执行方收到后一次，都用本机账号的 Agent 任务模型。
-   * 不给时视为「没能检查」——发起方照常发送，执行方那边改成要她看过再决定。
+   * 执行方收到请求后的那次审查（见 ./assist/review）：用本机账号的 Agent 任务模型替她本人把关。
+   * 不给时视为「没能检查」——请求改成要她看过再决定。
    */
   reviewer?: AssistReviewer | null;
   /** 某个执行方在协助执行时会不会对危险操作发批准请求（见 ./assist/recipes 的 assistAsksForApproval）。 */
@@ -484,7 +482,7 @@ interface AssistLocalSafety {
    * 不要当成「要她确认」——云端记的是 auto，她的看板不会提示，请求会一直停在收件箱里。
    */
   autoRun?: boolean;
-  /** 第二次审查识别出的敏感操作：她点允许时列进执行边界。 */
+  /** 审查识别出的敏感操作：她点允许时列进执行边界。 */
   allowed?: string[];
 }
 
@@ -900,6 +898,11 @@ export function createCollabAssistService(options: CollabAssistServiceOptions): 
   const waiting = new Map<string, string[]>();
   const activeThread = new Map<string, string>();
   let polling = false;
+  /**
+   * 正在后台审查的请求：请求 id → 那次审查。审查跑模型最长 30 秒，不能占住轮询——
+   * 占住时发起方的「停止」检测不到、别的请求的结果送不回、新请求也要排队。
+   */
+  const reviewing = new Map<string, Promise<void>>();
 
   function requireAccount(): void {
     if (options.userMode?.() === "byok") {
@@ -969,8 +972,8 @@ export function createCollabAssistService(options: CollabAssistServiceOptions): 
     const projectId = await projectIdOf(input.project);
     // 续跑时给的是上一次请求的 id：Agent 手里多半是命令行显示的短 id，先换成完整 id。
     const previous = input.thread ? await resolveRequestId(input.thread) : undefined;
-    // 发起方在自己电脑上做的那次审查：请求写清楚了才发出去，没写清楚直接告诉 Agent 要怎么改。
-    const requesterSafety = await reviewBeforeSending(input);
+    // 发出前只按规则查一遍密钥：命中就不发，直接告诉 Agent 要去掉哪里。不调用模型，耗时可以忽略。
+    assertNoSecrets(input);
     const data = await cloud(`/projects/${encodeURIComponent(projectId)}/assist/requests`, {
       method: "POST",
       body: {
@@ -981,8 +984,7 @@ export function createCollabAssistService(options: CollabAssistServiceOptions): 
         ...(input.attachments?.length ? { attachments: input.attachments } : {}),
         ...(previous ? { thread: previous } : {}),
         ...(input.via ? { via: input.via } : {}),
-        ...(input.sourceTask ? { sourceTask: input.sourceTask } : {}),
-        ...(requesterSafety ? { safety: { requester: requesterSafety } } : {})
+        ...(input.sourceTask ? { sourceTask: input.sourceTask } : {})
       }
     });
     const request = toAssistRequest(data);
@@ -1021,30 +1023,71 @@ export function createCollabAssistService(options: CollabAssistServiceOptions): 
   }
 
   /**
-   * 发起方发出前的那次审查：替发起人确认请求写清楚了。
+   * 发起方发出前的检查：只按规则查请求里有没有密钥或令牌，不调用模型。
    *
-   * <p>有没写清楚的敏感操作、或请求里有疑似密钥时不发送：把「怎么改」直接告诉发起方的 Agent，它改完再发。
-   * 模型不可用、超时、返回解析不了时照常发送，带 `{status:"unavailable"}`——执行方不依赖这次结论。</p>
+   * <p>规则与回传前隐藏密钥那一套完全相同（见 services/assist/redact 的 findSecrets）：PEM 私钥、
+   * 各类令牌前缀、Bearer/Cookie 头、`PASSWORD=` 一类赋值。标题、背景、每条事项、每个附件全文都查。</p>
+   *
+   * <p>命中时不发送：报 `collab_assist_safety_rejected`，写明是哪几处，让发起方的 Agent 改完重发。
+   * 只报位置、不回传原文。多处命中最多列三处。</p>
    */
-  async function reviewBeforeSending(input: {
+  function assertNoSecrets(input: {
     title: string;
     reason?: string;
     items: string[];
     attachments?: Array<{ name: string; content: string }>;
-  }): Promise<RequesterCheck | null> {
-    if (!options.reviewer) return null;
-    const result = await options.reviewer.reviewRequester({
-      // 请求正文里称呼的是发起人本人：这次审查跑在发起人自己的电脑上。
-      requesterName: "发起人本人",
-      title: input.title,
-      reason: input.reason ?? "",
-      items: input.items,
-      attachments: (input.attachments ?? []).map((item) => ({ name: item.name, content: item.content }))
-    }).catch(() => null);
-    if (!result) return { status: "unavailable" };
-    const decision = requesterReviewDecision(result);
-    if (decision.refusal) throw new AssistError("collab_assist_safety_rejected", decision.refusal);
-    return decision.safety;
+  }): void {
+    const places: string[] = [];
+    const check = (label: string, value: string | undefined): void => {
+      if (!value) return;
+      if (findSecrets(value).length) places.push(label);
+    };
+    check("要做的事", input.title);
+    check("背景", input.reason);
+    input.items.forEach((item, index) => check(`事项第 ${index + 1} 条`, item));
+    for (const attachment of input.attachments ?? []) check(`附件 ${attachment.name}`, attachment.content);
+    if (!places.length) return;
+    throw new AssistError(
+      "collab_assist_safety_rejected",
+      `请求里有疑似密钥（${places.slice(0, 3).join("、")}），请删掉后重新发送；不要把密钥、令牌写进请求或附件。`
+    );
+  }
+
+  /** 本机记下的审查结论：还没审过时是 null（轮询据此决定要不要启动审查）。 */
+  async function reviewedOutcome(requestId: string): Promise<{ autoRun: boolean; allowed: string[] } | null> {
+    const current = await loadState();
+    const known = current.safety?.[requestId];
+    if (!known?.reviewedAt) return null;
+    return { autoRun: known.autoRun === true, allowed: known.allowed ?? [] };
+  }
+
+  /**
+   * 启动一次后台审查：不 await，审查期间轮询照常处理别的请求。
+   *
+   * <p>结论允许自动执行、而且这条请求有生效中的限时授权时立刻开始执行，不等下一轮轮询。
+   * 其余情况只是把结论写回云端（弹窗据此说明原因）。成功、失败、抛错都从 {@link reviewing} 里移除。</p>
+   */
+  function startReview(request: AssistInboxItem): void {
+    if (reviewing.has(request.id)) return;
+    const task = reviewIncoming(request)
+      .then(async (outcome) => {
+        if (!outcome?.autoRun) return;
+        if (!request.granted || !request.grantAgent) return;
+        await decideAutoRun(request);
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        reviewing.delete(request.id);
+      });
+    reviewing.set(request.id, task);
+  }
+
+  /** 限时授权下自动开始的这次：Agent 请求批准时一律不允许（deny），跳过的操作随结果回传。 */
+  async function decideAutoRun(request: AssistInboxItem): Promise<void> {
+    await decideWithApproval(
+      { requestId: request.id, action: "allow", ...(request.grantAgent ? { agent: request.grantAgent } : {}), scope: "timed" },
+      "deny"
+    ).catch(() => undefined);
   }
 
   /**
@@ -1055,9 +1098,8 @@ export function createCollabAssistService(options: CollabAssistServiceOptions): 
    */
   async function reviewIncoming(request: AssistInboxItem): Promise<{ autoRun: boolean; allowed: string[] } | null> {
     if (!options.reviewer) return null;
-    const current = await loadState();
-    const known = current.safety?.[request.id];
-    if (known?.reviewedAt) return { autoRun: known.autoRun === true, allowed: known.allowed ?? [] };
+    const known = await reviewedOutcome(request.id);
+    if (known) return known;
     // 附件正文只有读详情才带；读不到时按收件箱里能看到的部分审（请求仍然会被审成「需要确认」）。
     const detail = await readRequest(request.id, { withAttachments: true }).catch(() => null);
     const content = detail ?? request;
@@ -1071,7 +1113,6 @@ export function createCollabAssistService(options: CollabAssistServiceOptions): 
       attachments: (content.attachments ?? [])
         .filter((item) => typeof item.content === "string")
         .map((item) => ({ name: item.name, content: item.content! })),
-      ...(content.safety?.requester?.declared ? { declared: content.safety.requester.declared } : {}),
       ...(previousSkipped.length ? { previousSkipped } : {})
     }).catch(() => null);
     const agent = request.grantAgent ?? request.lastAgent ?? MEMMY_SOURCE_ID;
@@ -2117,23 +2158,24 @@ export function createCollabAssistService(options: CollabAssistServiceOptions): 
         controller.abort();
       }
       for (const request of requests) {
-        // 限时授权还在：先由她的 Memmy 独立检查一次（同一请求只审一次），结论允许自动执行才直接跑。
-        // 检查要求她先看过、或没能完成时留在收件箱，等她在授权弹窗里决定。
-        if (request.status === "pending" && request.granted && request.grantAgent) {
-          if (options.reviewer) {
-            const review = await reviewIncoming(request).catch(() => null);
-            if (!review?.autoRun) continue;
-          }
-          // 自动开始的这次：Agent 请求批准时一律不允许，跳过的操作随结果回传。
-          await decideWithApproval(
-            { requestId: request.id, action: "allow", agent: request.grantAgent, scope: "timed" },
-            "deny"
-          ).catch(() => undefined);
-          continue;
-        }
         if (request.status === "pending") {
-          // 没有限时授权的请求同样审一次：授权弹窗里要用这次结论说明为什么需要她确认。
-          await reviewIncoming(request).catch(() => undefined);
+          const granted = request.granted && Boolean(request.grantAgent);
+          if (!options.reviewer) {
+            // 没有审查器（测试或精简环境）：限时授权下的请求直接跑。
+            if (granted) await decideAutoRun(request);
+            continue;
+          }
+          // 限时授权还在、而且已经审过：结论允许自动执行的，这一轮补做上次没成功的开始执行；
+          // 要求她先看过的留给弹窗，不再重复问模型。
+          if (granted) {
+            const reviewed = await reviewedOutcome(request.id);
+            if (reviewed) {
+              if (reviewed.autoRun) await decideAutoRun(request);
+              continue;
+            }
+          }
+          // 还没审、也不在审查中：放到后台，这一轮继续处理别的请求。同时进行的审查最多三个。
+          if (!reviewing.has(request.id) && reviewing.size < MAX_CONCURRENT_REVIEWS) startReview(request);
           continue;
         }
         if (request.status === "running") await startExecution(request);
@@ -2267,6 +2309,9 @@ function latestOf(left: string | null, right: string | null): string | null {
   if (!right) return left;
   return left > right ? left : right;
 }
+
+/** 同时进行的后台审查最多这么多条：模型的调用不该把一台电脑占满，超出的留到下一轮再启动。 */
+const MAX_CONCURRENT_REVIEWS = 3;
 
 /** 本机最多记这么多条协助检查与执行策略：早已结束的不必一直留着。 */
 const MAX_LOCAL_SAFETY = 500;
