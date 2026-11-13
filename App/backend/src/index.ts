@@ -24,13 +24,14 @@ import {
 } from "./infrastructure/memmy-config/agent-access.js";
 import { createPermissionManager } from "./permission/index.js";
 import { createLocalApiServer } from "./adapters/inbound/local-api/server.js";
-import { createBackendServices, type BootstrapScenario } from "./services/index.js";
+import { createBackendServices, createCatalogAgentTaskModelResolver, type BootstrapScenario } from "./services/index.js";
 import { migrateLegacyCollabInstructions } from "./services/collab-instructions-service.js";
 import { createCollabCloudRequest, createCollabService } from "./services/collab-service.js";
 import { createCollabAssistService } from "./services/collab-assist-service.js";
 import { createAcpAssistRunner, createAssistRunner } from "./services/assist/runner.js";
 import { createMemmyAssistRunner } from "./services/assist/memmy-runner.js";
-import { MEMMY_SOURCE_ID, assistRunnable } from "./services/assist/recipes.js";
+import { MEMMY_SOURCE_ID, assistAsksForApproval, assistRunnable } from "./services/assist/recipes.js";
+import { createAssistReviewer } from "./services/assist/review.js";
 import { assistEnv } from "./services/assist/shell-env.js";
 import { createLocalSessionReader } from "./adapters/outbound/agent-source/session-reference/local-session-reader.js";
 import { createBuiltinAgentSourceRegistry } from "./services/builtin-agent-source-registry.js";
@@ -379,6 +380,13 @@ export async function createLocalBackend(options: CreateLocalBackendOptions): Pr
       },
       // 本机关联记录里各 Agent 的使用情况：这个项目里关联过的放在第一层。
       agentUsage: (projectId: string) => collab.agentUsage(projectId),
+      // 两次审查都走本机账号的「Agent 任务模型」：发起方那次用发起人的额度，执行方那次用执行人的额度。
+      reviewer: createAssistReviewer({
+        resolveModel: async () =>
+          (await createCatalogAgentTaskModelResolver(appStateStore, memmyConfigWriter).getAgentTaskModel()) ?? null
+      }),
+      // 执行时会不会发批准请求：决定限时授权下能不能直接自动执行（不会请求批准的 Agent 必须她看过再决定）。
+      agentAsksForApproval: assistAsksForApproval,
       runner: createAssistRunner({
         acp: createAcpAssistRunner(),
         memmy: createMemmyAssistRunner({
