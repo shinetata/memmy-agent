@@ -2805,10 +2805,11 @@ function ProjectInstructionsDialog(props: {
 }
 
 /**
- * The board's settings, built like the create-project dialog: one field per line — the folder, the project's
- * collaboration and, once shared, assist requests. Each field is an icon and a name with its value, switch or
- * arrow on the right; explanations sit behind a question mark. Stopping sharing (or leaving, for a member) is one
- * danger button at the bottom rather than a switch: it removes the cloud project, which cannot be undone.
+ * The board's settings, laid out like Codex's project editor: a small label over one rounded group per topic —
+ * the folder, then collaboration (shared sessions or "Turn on collaboration", and assist requests). Each row is an
+ * icon and a name with its value, switch or arrow on the right; explanations sit behind a question mark. Stopping
+ * sharing (or leaving, for a member) is a soft danger button at the bottom left rather than a switch: it removes
+ * the cloud project, which cannot be undone. "Done" on the right closes the dialog; every change applies at once.
  */
 export function ProjectBoardSettingsDialog(props: {
   open: boolean;
@@ -2959,9 +2960,7 @@ export function ProjectBoardSettingsDialog(props: {
   const confirmBody = confirm === "leave"
     ? t("collab.leave.message", { name: props.project.name })
     : t("appFrame.project.stopSharingMessage", { name: props.project.name });
-  // 页脚只在需要右下角按钮或有进行中的动作时出现：没有它时正文自己收尾。
-  const showFooter = Boolean(confirm) || canLeave || action !== null;
-  // 确认块占满页脚；平时是右下角一个危险按钮，进行中的动作文字在左。
+  // 确认块占满页脚；平时左侧是危险操作（或进行中的动作），右侧「完成」。
   const footer = confirm ? (
     <section className={styles.settingsConfirm} role="alertdialog" aria-label={confirmTitle}>
       <b>{confirmTitle}</b>
@@ -2995,18 +2994,19 @@ export function ProjectBoardSettingsDialog(props: {
             ? t("collab.settings.sharing")
             : action === "stopping" ? t("collab.settings.stopping") : t("collab.settings.leaving")}
         </p>
-      ) : null}
-      {canLeave ? (
-        <Button
-          size="sm"
-          variant="secondary"
-          className={`${styles.settingsButton} ${styles.settingsDangerButton}`}
+      ) : canLeave ? (
+        <button
+          type="button"
+          className={styles.settingsDangerSoft}
           disabled={busy}
           onClick={() => setConfirm(isOwner ? "stop" : "leave")}
         >
           {dangerLabel}
-        </Button>
-      ) : null}
+        </button>
+      ) : <span />}
+      <Button variant="primary" className={styles.settingsDoneButton} disabled={busy} onClick={props.onClose}>
+        {t("collab.settings.done")}
+      </Button>
     </>
   );
 
@@ -3019,84 +3019,91 @@ export function ProjectBoardSettingsDialog(props: {
       closeContent={<X size={16} aria-hidden="true" />}
       className={`${styles.createModal} ${styles.simpleCreateModal} ${styles.settingsModal}`}
       backdropClassName={styles.backdrop}
-      // 和创建项目同一套留白：字段之间 10px，页脚只在需要右下角按钮时出现。
-      bodyClassName={`${styles.settingsBody}${showFooter ? "" : ` ${styles.settingsBodyLast}`}`}
-      footer={showFooter ? footer : undefined}
+      bodyClassName={styles.settingsBody}
+      footer={footer}
       footerClassName={styles.settingsFooter}
     >
-      {/* 文件夹：只显示末级目录名，完整路径在悬停提示里；点整行在系统文件管理器中打开 */}
-      <button
-        type="button"
-        className={`${styles.settingsField} ${styles.settingsFieldButton}`}
-        title={props.project.rootPath}
-        aria-label={`${t("collab.settings.reveal")}：${formatWorkspacePath(props.project.rootPath)}`}
-        disabled={!revealProject}
-        onClick={() => revealProject?.()}
-      >
-        <Folder size={16} aria-hidden="true" className={styles.settingsFieldIcon} />
-        <span className={styles.settingsFieldLabel}>{t("collab.settings.folder")}</span>
-        <span className={styles.settingsFieldValue}>{folderNameOf(props.project.rootPath)}</span>
-        <ArrowUpRight size={15} aria-hidden="true" className={styles.settingsFieldTrail} />
-      </button>
-
-      {!props.shareAvailable ? (
-        // API Key 模式没有云端账号：只写明需要登录，原因收进问号，不给开关。
-        <div className={`${styles.settingsField} ${styles.settingsFieldMuted}`}>
-          <Users size={16} aria-hidden="true" className={styles.settingsFieldIcon} />
-          <span className={styles.settingsFieldLabel}>{t("collab.create.shareToggle")}</span>
-          <InfoHint
-            placement="above"
-            label={t("collab.create.shareHelpLabel")}
-            text={t("collab.settings.shareByokHint")}
-          />
-          <span className={styles.settingsFieldValue}>{t("collab.settings.shareNeedsAccount")}</span>
-        </div>
-      ) : sharedId ? (
-        // 已共享：报共享了几个任务，点整行去选择。停止共享不是开关，在右下角。
+      {/* 文件夹：一组里只有一行，显示末级目录名，完整路径在悬停提示里；点整行在系统文件管理器中打开 */}
+      <div className={styles.settingsSectionLabel}>{t("collab.settings.folder")}</div>
+      <div className={styles.settingsGroup}>
         <button
           type="button"
-          className={`${styles.settingsField} ${styles.settingsFieldButton}`}
-          onClick={props.onPickSessions}
+          className={`${styles.settingsRow} ${styles.settingsRowAction}`}
+          title={props.project.rootPath}
+          aria-label={`${t("collab.settings.reveal")}：${formatWorkspacePath(props.project.rootPath)}`}
+          disabled={!revealProject}
+          onClick={() => revealProject?.()}
         >
-          <Users size={16} aria-hidden="true" className={styles.settingsFieldIcon} />
-          <span className={styles.settingsFieldLabel}>{t("collab.settings.sessionsRow")}</span>
-          {sessionsValue === null ? (
-            <span className={styles.settingsFieldValue} role="status" aria-label={t("collab.loading")}>
-              <Loader2 size={13} aria-hidden="true" className={styles.settingsSpinner} />
-            </span>
-          ) : (
-            <span className={styles.settingsFieldValue}>{sessionsValue}</span>
-          )}
-          <ChevronRight size={15} aria-hidden="true" className={styles.settingsFieldTrail} />
+          <Folder size={16} aria-hidden="true" className={styles.settingsRowIcon} />
+          <span className={`${styles.settingsRowLabel} ${styles.settingsRowStrong}`}>{folderNameOf(props.project.rootPath)}</span>
+          <ArrowUpRight size={15} aria-hidden="true" className={styles.settingsRowTrail} />
         </button>
-      ) : (
-        // 未共享：与创建项目里的「开启项目协作」同一个字段，点整框任意位置都能开启（问号除外）。
-        <div
-          className={`${styles.settingsField} ${styles.settingsFieldToggle}`}
-          onClick={() => void startSharing()}
-        >
-          <Users size={16} aria-hidden="true" className={styles.settingsFieldIcon} />
-          <span className={styles.settingsFieldLabel}>{t("collab.create.shareToggle")}</span>
-          <span className={styles.settingsFieldHint} onClick={(event) => event.stopPropagation()}>
-            <InfoHint placement="above" label={t("collab.create.shareHelpLabel")} text={t("collab.settings.shareOffHint")} />
-          </span>
-          {/* 开关自己不处理点击：点击冒泡到整框只触发一次，键盘的空格 / 回车同样产生点击 */}
+      </div>
+
+      {/* 协作：与成员有关的设置放在同一组里，一行一项 */}
+      <div className={styles.settingsSectionLabel}>{t("collab.settings.sectionCollab")}</div>
+      <div className={styles.settingsGroup}>
+        {!props.shareAvailable ? (
+          // API Key 模式没有云端账号：只写明需要登录，原因收进问号，不给开关。
+          <div className={`${styles.settingsRow} ${styles.settingsRowMuted}`}>
+            <Users size={16} aria-hidden="true" className={styles.settingsRowIcon} />
+            <span className={styles.settingsRowLabel}>{t("collab.create.shareToggle")}</span>
+            <span className={styles.settingsRowHint}>
+              <InfoHint
+                placement="above"
+                label={t("collab.create.shareHelpLabel")}
+                text={t("collab.settings.shareByokHint")}
+              />
+            </span>
+            <span className={styles.settingsRowValue}>{t("collab.settings.shareNeedsAccount")}</span>
+          </div>
+        ) : sharedId ? (
+          // 已共享：报共享了几个任务，点整行去选择。停止共享不是开关，在左下角。
           <button
             type="button"
-            role="switch"
-            aria-checked={false}
-            aria-label={t("collab.create.shareToggle")}
-            disabled={busy || !props.collab}
-            className={`${styles.settingsSwitch} ${styles.settingsFieldControl}`}
-          />
-        </div>
-      )}
+            className={`${styles.settingsRow} ${styles.settingsRowAction}`}
+            onClick={props.onPickSessions}
+          >
+            <Users size={16} aria-hidden="true" className={styles.settingsRowIcon} />
+            <span className={styles.settingsRowLabel}>{t("collab.settings.sessionsRow")}</span>
+            {sessionsValue === null ? (
+              <span className={styles.settingsRowValue} role="status" aria-label={t("collab.loading")}>
+                <Loader2 size={13} aria-hidden="true" className={styles.settingsSpinner} />
+              </span>
+            ) : (
+              <span className={styles.settingsRowValue}>{sessionsValue}</span>
+            )}
+            <ChevronRight size={15} aria-hidden="true" className={styles.settingsRowTrail} />
+          </button>
+        ) : (
+          // 未共享：与创建项目里的「开启项目协作」同一句话，点整行任意位置都能开启（问号除外）。
+          <div
+            className={`${styles.settingsRow} ${styles.settingsRowAction}`}
+            onClick={() => void startSharing()}
+          >
+            <Users size={16} aria-hidden="true" className={styles.settingsRowIcon} />
+            <span className={styles.settingsRowLabel}>{t("collab.create.shareToggle")}</span>
+            <span className={styles.settingsRowHint} onClick={(event) => event.stopPropagation()}>
+              <InfoHint placement="above" label={t("collab.create.shareHelpLabel")} text={t("collab.settings.shareOffHint")} />
+            </span>
+            {/* 开关自己不处理点击：点击冒泡到整行只触发一次，键盘的空格 / 回车同样产生点击 */}
+            <button
+              type="button"
+              role="switch"
+              aria-checked={false}
+              aria-label={t("collab.create.shareToggle")}
+              disabled={busy || !props.collab}
+              className={`${styles.settingsSwitch} ${styles.settingsRowControl}`}
+            />
+          </div>
+        )}
 
-      {/* 成员协助：本人在这个项目里是否接收协助请求（默认关闭），开启且有限时授权时在同一个字段里列出。
-          只在账号模式、已共享的项目里出现。 */}
-      {sharedId && props.shareAvailable ? (
-        <CollabAssistProjectSettings client={props.collab} projectId={sharedId} />
-      ) : null}
+        {/* 成员协助：本人在这个项目里是否接收协助请求（默认关闭），开启且有限时授权时列在这一行下面。
+            只在账号模式、已共享的项目里出现。 */}
+        {sharedId && props.shareAvailable ? (
+          <CollabAssistProjectSettings client={props.collab} projectId={sharedId} />
+        ) : null}
+      </div>
     </Modal>
   );
 }

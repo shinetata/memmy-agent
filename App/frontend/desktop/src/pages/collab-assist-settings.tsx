@@ -1,8 +1,8 @@
 /**
- * 项目设置里的「接收协助请求」字段。
+ * 项目设置「协作」一组里的「接收协助请求」一行。
  *
  * 本人在这个项目里的「接收协助请求」开关，默认关闭：开启后，项目里的其他成员才能请她电脑上的 Agent
- * 执行任务。说明收在问号里。开启且有仍然有效的限时授权时，同一个字段里列出它们：剩余时间、由哪个 Agent 执行，
+ * 执行任务。说明收在问号里。开启且有仍然有效的限时授权时，在这一行下面列出它们：剩余时间、由哪个 Agent 执行，
  * 可以换用或提前结束；没有授权时什么都不多写。关闭时云端结束她在这个项目里的限时授权，
  * 还在等待的请求以「某某已关闭接收协助请求」结束。
  *
@@ -13,7 +13,6 @@ import { ChevronDown, Loader2, LifeBuoy } from "lucide-react";
 import { InfoHint } from "./collab-info-hint.js";
 import type { AssistAgent, AssistGrant, CollabClient } from "../api/collab-client.js";
 import { useTranslation } from "../i18n/use-translation.js";
-import { Button } from "../components/button.js";
 import { agentSourceLogoUrl } from "./agent-source-logos.js";
 import { assistAgentName, grantRemaining } from "./collab-assist-view.js";
 import frame from "./collab-page.module.css";
@@ -65,25 +64,26 @@ export function CollabAssistProjectSettings(props: { client: CollabClient | null
   }
 
   const on = enabled === true;
+  // 这一行放在项目设置「协作」那一组里，外框由那一组提供。
   return (
-    <div className={`${frame.settingsFieldGroup}${on ? ` ${frame.settingsFieldGroupOn}` : ""}`} data-collab-assist-settings="">
+    <div className={frame.settingsAssist} data-collab-assist-settings="">
       {/* 点整行任意位置都能切换（问号除外），开关自己不处理点击，避免切换两次 */}
       <div
-        className={`${frame.settingsField} ${frame.settingsFieldToggle}`}
+        className={`${frame.settingsRow} ${frame.settingsRowAction}`}
         onClick={() => {
           if (!busy && client && enabled !== null) void toggle(!on);
         }}
       >
-        <LifeBuoy size={16} aria-hidden="true" className={frame.settingsFieldIcon} />
-        <span className={frame.settingsFieldLabel}>{t("collab.settings.assist.title")}</span>
-        <span className={frame.settingsFieldHint} onClick={(event) => event.stopPropagation()}>
+        <LifeBuoy size={16} aria-hidden="true" className={frame.settingsRowIcon} />
+        <span className={frame.settingsRowLabel}>{t("collab.settings.assist.title")}</span>
+        <span className={frame.settingsRowHint} onClick={(event) => event.stopPropagation()}>
           <InfoHint
             placement="above"
             label={t("collab.settings.assist.helpLabel")}
             text={t("collab.settings.assist.desc")}
           />
         </span>
-        <span className={frame.settingsFieldControl}>
+        <span className={frame.settingsRowControl}>
           {busy ? <Loader2 size={13} className={frame.settingsSpinner} aria-hidden="true" /> : null}
           <button
             type="button"
@@ -96,7 +96,7 @@ export function CollabAssistProjectSettings(props: { client: CollabClient | null
         </span>
       </div>
       {on ? <CollabAssistGrants client={client} projectId={projectId} /> : null}
-      {error ? <div className={frame.settingsFieldError} role="alert">{error}</div> : null}
+      {error ? <div className={frame.settingsRowError} role="alert">{error}</div> : null}
     </div>
   );
 }
@@ -192,23 +192,22 @@ export function CollabAssistGrants(props: { client: CollabClient | null; project
                     </span>
                   </div>
                 </div>
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  className={`${frame.settingsButton} ${frame.settingsDangerButton} ${frame.settingsButtonCompact}`}
+                <button
+                  type="button"
+                  className={`${frame.settingsDangerSoft} ${frame.settingsDangerSoftCompact}`}
                   disabled={busy || !client}
                   onClick={() => {
                     if (client) void update(() => client.revokeAssistGrant(projectId, grant.grantee.userId));
                   }}
                 >
                   {t("settings.assist.revoke")}
-                </Button>
+                </button>
               </div>
             );
           })}
         </div>
       ) : null}
-      {error ? <div className={frame.settingsFieldError} role="alert">{error}</div> : null}
+      {error ? <div className={frame.settingsRowError} role="alert">{error}</div> : null}
     </>
   );
 }

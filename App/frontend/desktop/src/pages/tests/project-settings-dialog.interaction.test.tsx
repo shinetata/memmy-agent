@@ -1,9 +1,9 @@
 // @vitest-environment happy-dom
 
 /**
- * 项目设置弹窗：与创建项目同一套字段，一行一个，说明收进问号。
- * 已共享的项目是「文件夹 / 共享给成员的任务 / 接收协助请求」三行，右下角一个危险按钮；未共享的本机项目是
- * 「文件夹 / 开启项目协作」两行；API Key 模式只写需要登录。后两种情况都没有页脚。停止共享与退出项目都要先确认，
+ * 项目设置弹窗：参照 Codex 的编辑项目，「文件夹」「协作」两个小标题下各一组，组内一行一项，说明收进问号。
+ * 已共享的项目在「协作」组里是「共享给成员的任务 / 接收协助请求」，左下角一个浅红的危险按钮；未共享的本机项目是
+ * 「开启项目协作」一行；API Key 模式只写需要登录。右下角始终是「完成」。停止共享与退出项目都要先确认，
  * 因为一个会删掉云端项目、一个会离开项目。
  */
 import { act } from "react";
@@ -149,15 +149,26 @@ describe("项目设置弹窗", () => {
     await flush();
   }
 
-  it("未共享的本机项目没有页脚，关闭只在右上角", async () => {
+  it("页脚右侧是「完成」，点它关闭弹窗；未共享的本机项目页脚只有它", async () => {
     await render({ shared: null });
 
-    expect(document.querySelector(".modal-footer")).toBeNull();
-    expect(button("关闭")).toBeUndefined();
+    const footer = document.querySelector(".modal-footer")!;
+    expect(Array.from(footer.querySelectorAll("button")).map((node) => node.textContent)).toEqual(["完成"]);
     expect(document.querySelector("button[aria-label='关闭']")).toBeTruthy();
+    await act(async () => button("完成")!.click());
+    expect(handlers.onClose).toHaveBeenCalled();
   });
 
-  it("所有者：共享给成员的任务一行报 x / y，点整行去选择，右下角是停止共享", async () => {
+  it("文件夹与协作各是一组，前面有小标题", async () => {
+    await render();
+
+    const labels = Array.from(document.querySelectorAll(".modal-body > div"))
+      .filter((node) => node.children.length === 0)
+      .map((node) => node.textContent);
+    expect(labels).toEqual(["文件夹", "协作"]);
+  });
+
+  it("所有者：共享给成员的任务一行报 x / y，点整行去选择，左下角是停止共享", async () => {
     mocks.listProjectTasks.mockResolvedValue([{ synced: true }, { synced: false }]);
     await render();
 
@@ -176,6 +187,9 @@ describe("项目设置弹窗", () => {
     const stop = button("停止共享")!;
     expect(stop.tagName).toBe("BUTTON");
     expect(stop.closest(".modal-footer")).toBeTruthy();
+    // 危险按钮在左、「完成」在右。
+    expect(Array.from(stop.closest(".modal-footer")!.querySelectorAll("button")).map((node) => node.textContent))
+      .toEqual(["停止共享", "完成"]);
   });
 
   it("所有者停止共享：先确认，确认后删除云端项目", async () => {
@@ -258,8 +272,8 @@ describe("项目设置弹窗", () => {
     expect(document.body.textContent).not.toContain("引导");
     expect(button("停止共享")).toBeUndefined();
     expect(button("退出项目")).toBeUndefined();
-    // 没有右下角按钮时页脚整个不出现。
-    expect(document.querySelector(".modal-footer")).toBeNull();
+    // 没有危险按钮，页脚只有「完成」。
+    expect(Array.from(document.querySelectorAll(".modal-footer button")).map((node) => node.textContent)).toEqual(["完成"]);
     // 未共享时没有共享任务那一行。
     expect(document.body.textContent).not.toContain("共享给成员的任务");
 
@@ -292,7 +306,7 @@ describe("项目设置弹窗", () => {
     expect(document.body.textContent).toContain("文件夹");
     expect(button("停止共享")).toBeUndefined();
     expect(button("退出项目")).toBeUndefined();
-    expect(document.querySelector(".modal-footer")).toBeNull();
+    expect(Array.from(document.querySelectorAll(".modal-footer button")).map((node) => node.textContent)).toEqual(["完成"]);
   });
 
   it("共享给成员的任务按读取结果给值：暂无、x / y，读取中只转圈", async () => {
@@ -318,8 +332,8 @@ describe("项目设置弹窗", () => {
   it("文件夹只显示末级目录名，完整路径在悬停提示里，整行是「在文件夹中显示」", async () => {
     await render();
 
-    const reveal = fieldButton("文件夹")!;
-    expect(reveal.textContent).toBe("文件夹Memmy");
+    const reveal = document.querySelector<HTMLButtonElement>("button[aria-label^='在文件夹中显示']")!;
+    expect(reveal.textContent).toBe("Memmy");
     expect(document.body.textContent).not.toContain("~/.memmy/online-projects/Memmy");
     expect(document.body.textContent).not.toContain(PROJECT.name);
     expect(reveal.getAttribute("title")).toBe("/Users/sunq/.memmy/online-projects/Memmy");

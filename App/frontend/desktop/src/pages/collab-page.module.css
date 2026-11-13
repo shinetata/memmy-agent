@@ -2159,107 +2159,133 @@
   outline-offset: 2px;
 }
 
-/* 项目设置：和创建项目同一套字段，一行一个，图标 + 名称｜右侧的值、开关或箭头；说明都收进问号 */
+/* 项目设置：参照 Codex 的编辑项目——小标题下一组圆角框，组内一行一项；说明都收进问号 */
 :global(.modal-body).settingsBody {
   padding: 0 24px 4px;
-  gap: 10px;
+  gap: 0;
 }
 
-/* 没有页脚的弹窗（未共享的本机项目、API Key 模式）由正文自己收尾 */
-:global(.modal-body).settingsBodyLast {
-  padding-bottom: 22px;
+/* 小标题与创建项目的「文件夹」同一个样子；第一组紧贴标题栏 */
+.settingsSectionLabel {
+  margin: 18px 0 8px;
+  color: var(--collab-muted);
+  font-size: 12.5px;
+  font-weight: 700;
 }
 
-/* 一个字段：与名称输入框同高、同边框 */
-.settingsField {
+.settingsSectionLabel:first-child {
+  margin-top: 2px;
+}
+
+/* 一组：一个圆角框，里面的行不画框也不画分隔线，悬停时整行铺一层浅底 */
+.settingsGroup {
+  display: flex;
+  flex-direction: column;
+  padding: 4px;
+  border: 1px solid var(--collab-line);
+  border-radius: 12px;
+  background: var(--color-background-paper, #fff);
+}
+
+.settingsRow {
   display: flex;
   align-items: center;
   gap: 10px;
   width: 100%;
-  height: 44px;
-  padding: 0 12px;
-  border: 1px solid var(--collab-line);
-  border-radius: 10px;
-  background: var(--color-background-paper, #fff);
+  min-height: 40px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
   color: inherit;
   font: inherit;
   text-align: left;
-  transition: border-color var(--duration-fast) ease, background-color var(--duration-fast) ease;
+  transition: background-color var(--duration-fast) ease;
 }
 
-/* 整行可点的字段（打开文件夹、选择任务、切换开关）：悬停时边框带一点主题色 */
-.settingsFieldButton,
-.settingsFieldToggle {
+/* 整行可点（打开文件夹、选择任务、切换开关） */
+.settingsRowAction {
   cursor: pointer;
 }
 
-.settingsFieldButton:hover:not(:disabled),
-.settingsFieldToggle:hover {
-  border-color: color-mix(in srgb, var(--collab-accent) 45%, var(--collab-line));
+.settingsRowAction:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--collab-ink) 4%, transparent);
 }
 
-.settingsFieldButton:hover:not(:disabled) .settingsFieldTrail {
-  color: var(--collab-accent-deep);
+.settingsRowAction:hover:not(:disabled) .settingsRowTrail {
+  color: var(--collab-ink-2);
 }
 
-.settingsFieldButton:focus-visible {
+.settingsRowAction:focus-visible {
   outline: 2px solid color-mix(in srgb, var(--collab-accent) 60%, transparent);
-  outline-offset: 2px;
+  outline-offset: -2px;
 }
 
-.settingsFieldButton:disabled {
+.settingsRowAction:disabled {
   cursor: default;
 }
 
-/* API Key 模式：字段在，但做不了，整体降一档 */
-.settingsFieldMuted .settingsFieldLabel {
-  color: var(--collab-muted);
-}
-
-.settingsFieldIcon {
+.settingsRowIcon {
   flex: none;
   color: var(--collab-ter);
-  transition: color var(--duration-fast) ease;
 }
 
-.settingsFieldLabel {
-  flex: none;
+.settingsRowLabel {
+  min-width: 0;
+  overflow: hidden;
   color: var(--collab-ink-2);
   font-size: 13.5px;
+  text-overflow: ellipsis;
   white-space: nowrap;
   user-select: none;
 }
 
-/* 问号紧跟名称（与创建项目的 6px 一致），开关推到最右 */
-.settingsFieldHint {
+/* 文件夹名就是这一行的内容本身，字重高一档（Codex 里的「测试」） */
+.settingsRowStrong {
+  flex: 1;
+  font-weight: 600;
+}
+
+/* API Key 模式：这一行在，但做不了，名称降一档 */
+.settingsRowMuted .settingsRowLabel {
+  color: var(--collab-muted);
+}
+
+/* 问号紧跟名称（与创建项目的 6px 一致），后面的值或开关推到最右 */
+.settingsRowHint {
   display: inline-flex;
   margin-left: -4px;
   margin-right: auto;
   cursor: default;
 }
 
-/* 右侧的值：比名称轻一档，过长时省略 */
-.settingsFieldValue {
+.settingsRowValue {
   display: inline-flex;
+  flex: none;
   align-items: center;
-  min-width: 0;
   margin-left: auto;
-  overflow: hidden;
   color: var(--collab-muted);
   font-size: 13px;
   font-variant-numeric: tabular-nums;
-  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.settingsFieldTrail {
+.settingsRowHint + .settingsRowValue {
+  margin-left: 0;
+}
+
+.settingsRowTrail {
   flex: none;
-  margin-left: -4px;
+  margin-left: auto;
   color: var(--collab-ter);
   transition: color var(--duration-fast) ease;
 }
 
-.settingsFieldControl {
+.settingsRowValue + .settingsRowTrail {
+  margin-left: -4px;
+}
+
+.settingsRowControl {
   display: inline-flex;
   flex: none;
   align-items: center;
@@ -2267,41 +2293,17 @@
   margin-left: auto;
 }
 
-/* 带下文的字段（接收协助请求 + 限时授权）：外框在这一层，里面那一行不再画框 */
-.settingsFieldGroup {
-  border: 1px solid var(--collab-line);
-  border-radius: 10px;
-  background: var(--color-background-paper, #fff);
-  transition: border-color var(--duration-fast) ease, background-color var(--duration-fast) ease;
+.settingsRowHint + .settingsRowControl {
+  margin-left: 0;
 }
 
-.settingsFieldGroup > .settingsField {
-  border: 0;
-  background: transparent;
+/* 接收协助请求：开关一行，下面跟着限时授权；左缘与名称对齐（行内边距 10 + 图标 16 + 间距 10） */
+.settingsAssist .grantList {
+  padding: 4px 10px 10px 36px;
 }
 
-.settingsFieldGroup:has(> .settingsFieldToggle:hover) {
-  border-color: color-mix(in srgb, var(--collab-accent) 45%, var(--collab-line));
-}
-
-/* 开启后整框铺一层浅薄荷色、图标变主题色，与创建项目里开启协作的样子一致 */
-.settingsFieldGroupOn {
-  border-color: color-mix(in srgb, var(--collab-accent) 55%, var(--collab-line));
-  background: color-mix(in srgb, var(--collab-accent) 7%, var(--color-background-paper, #fff));
-}
-
-.settingsFieldGroupOn .settingsFieldIcon {
-  color: var(--collab-accent-deep);
-}
-
-/* 字段里的限时授权：与名称左缘对齐，紧贴开关那一行 */
-.settingsFieldGroup .grantList {
-  padding: 0 12px 12px 38px;
-}
-
-/* 某个字段出错：贴在字段里那一行下面 */
-.settingsFieldError {
-  padding: 0 12px 10px 38px;
+.settingsRowError {
+  padding: 0 10px 8px 36px;
   color: var(--color-status-error, #b44c42);
   font-size: 12px;
   line-height: 1.55;
@@ -2319,36 +2321,61 @@
   color: var(--collab-accent-deep);
 }
 
-/* 危险按钮同一个形状，只换边框与文字色：错误色本身偏浅，向正文色混一点才读得清 */
-:global(.button).settingsDangerButton {
-  border-color: color-mix(in srgb, var(--color-status-error, #b44c42) 55%, transparent);
-  color: color-mix(in srgb, var(--color-status-error, #b44c42) 72%, var(--color-text-ink, #111d1c));
-}
-
-:global(.button).settingsDangerButton:hover:not(:disabled) {
-  border-color: var(--color-status-error, #b44c42);
-  background: color-mix(in srgb, var(--color-status-error, #b44c42) 7%, var(--color-background-paper, #fff));
-  color: color-mix(in srgb, var(--color-status-error, #b44c42) 72%, var(--color-text-ink, #111d1c));
-}
-
-/* 授权行里的「结束授权」跟着内容宽度走，不与卡片右缘对齐 */
-:global(.button).settingsDangerButton.settingsButtonCompact {
-  min-width: 0;
-  padding: 0 10px;
-}
-
-/* 页脚：平时只有右下角一个危险按钮；有动作文字时文字在左、按钮在右 */
+/* 页脚：左侧是停止共享 / 退出项目（或进行中的动作），右侧「完成」 */
 :global(.modal-footer).settingsFooter {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: space-between;
   gap: 12px;
-  padding: 16px 24px 20px;
+  padding: 20px 24px 20px;
+}
+
+/* 危险操作照 Codex 的「移除本地项目」：浅红底、红字，不描边，和「完成」同高。错误色本身偏浅，向正文色混一点才读得清 */
+.settingsDangerSoft {
+  min-height: 36px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: var(--radius-btn, 8px);
+  background: var(--color-status-error-soft, #fde4e7);
+  color: color-mix(in srgb, var(--color-status-error, #f87b8e) 62%, var(--color-text-ink, #111d1c));
+  font: inherit;
+  font-size: 14px;
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color var(--duration-fast) ease;
+}
+
+/* 「完成」与左侧危险按钮同一字号，主按钮默认的 16px 在这一屏里过重 */
+:global(.button).settingsDoneButton {
+  padding: 0 18px;
+  font-size: 14px;
+}
+
+/* 限时授权行里的「结束授权」：同一个样子，矮一档 */
+.settingsDangerSoft.settingsDangerSoftCompact {
+  min-height: 28px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+.settingsDangerSoft:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--color-status-error-soft, #fde4e7) 78%, var(--color-status-error, #b44c42) 22%);
+}
+
+.settingsDangerSoft:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--color-status-error, #b44c42) 50%, transparent);
+  outline-offset: 2px;
+}
+
+.settingsDangerSoft:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
 }
 
 /* A slow cloud should look like work happening, not a dead button. */
 .settingsFooterStatus {
-  margin: 0 auto 0 0;
+  margin: 0;
   color: var(--collab-muted);
   font-size: 12px;
   line-height: 1.5;

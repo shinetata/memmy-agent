@@ -1139,7 +1139,7 @@ describe("项目设置的成员协助", () => {
     expect(document.body.textContent).not.toContain("由 Claude Code 执行");
     const revoke = button("结束授权")!;
     expect(revoke.tagName).toBe("BUTTON");
-    expect(revoke.className).toContain("settingsDangerButton");
+    expect(revoke.className).toContain("settingsDangerSoft");
   });
 
   it("读取协助设置失败时，错误贴在字段里那一行下面", async () => {
@@ -1157,7 +1157,7 @@ describe("项目设置的成员协助", () => {
 
     const alert = document.querySelector("[role='alert']");
     expect(alert?.textContent).toContain("读取成员协助的设置没有完成");
-    expect(alert?.className).toContain("settingsFieldError");
+    expect(alert?.className).toContain("settingsRowError");
   });
 
   it("开启但没有限时授权时什么都不多写", async () => {
