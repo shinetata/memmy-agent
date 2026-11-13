@@ -363,20 +363,21 @@ export function executorReviewDecision(input: {
       autoRun: false
     };
   }
-  const risky = input.review.sensitive.length > 0 || input.review.injected;
-  if (risky) {
-    const reason = input.review.reason || input.review.sensitive[0]?.action || "涉及敏感操作";
-    return {
-      safety: { status: "confirm", reason, ...(input.review.undeclared.length ? { undeclared: input.review.undeclared } : {}) },
-      autoRun: false
-    };
-  }
+  // 原因按固定优先级写：上次有跳过 > 审查失败 > Agent 不会请求批准 > 模型给的原因。
   if (!input.asksForApproval) {
     return {
       safety: {
         status: "confirm",
         reason: `${input.agentName ?? "这个 Agent"} 执行时不会请求批准，需要你看过后再决定`
       },
+      autoRun: false
+    };
+  }
+  const risky = input.review.sensitive.length > 0 || input.review.injected;
+  if (risky) {
+    const reason = input.review.reason || input.review.sensitive[0]?.action || "涉及敏感操作";
+    return {
+      safety: { status: "confirm", reason, ...(input.review.undeclared.length ? { undeclared: input.review.undeclared } : {}) },
       autoRun: false
     };
   }

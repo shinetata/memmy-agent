@@ -268,7 +268,9 @@ describe("the executor's check decides whether it still runs directly", () => {
           reason: "会删除 Memmy 的缓存目录"
         }
       }),
-      runner: recordingRunner()
+      runner: recordingRunner(),
+      // Codex 会自己请求批准：这一次拦住它的是审查结论，不是 Agent 的能力。
+      asksForApproval: () => true
     });
 
     await created.pollNow();

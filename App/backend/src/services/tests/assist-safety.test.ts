@@ -153,6 +153,22 @@ describe("executorReviewDecision", () => {
     expect(decision.safety.reason).toBe("Pi 执行时不会请求批准，需要你看过后再决定");
   });
 
+  it("puts the Agent reason before the model's when the Agent never asks for approval", () => {
+    const decision = executorReviewDecision({
+      review: {
+        sensitive: [{ action: "删除缓存目录" }],
+        undeclared: [],
+        injected: false,
+        reason: "附带的脚本会删除下载目录里的文件"
+      },
+      previousSkipped: [],
+      agentName: "Pi",
+      asksForApproval: false,
+      granted: true
+    });
+    expect(decision.safety.reason).toBe("Pi 执行时不会请求批准，需要你看过后再决定");
+  });
+
   it("asks her first when the check could not run", () => {
     const decision = executorReviewDecision({
       review: null,
