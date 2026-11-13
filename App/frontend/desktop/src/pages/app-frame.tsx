@@ -59,7 +59,6 @@ import { agentChatScopeKey, shouldCreateNewAgentDraft } from "../state/agent-com
 import type { AgentTaskView } from "../state/agent-chat-slice.js";
 import { decideTaskDoneNotification } from "../state/task-done-notification.js";
 import { maskAccountIdentifier } from "../utils/mask-account-identifier.js";
-import { formatWorkspacePath } from "../app/workspace-path.js";
 import { WindowsTitlebar } from "../components/windows-titlebar.js";
 import { openExternalUrl } from "../utils/open-url.js";
 import { isWindowsDesktopPlatform } from "../utils/window-fullscreen.js";
@@ -276,12 +275,6 @@ const projectContextMenuSize: SidebarMenuSize = {
   height: 196,
   margin: 8,
   gap: 4
-};
-const projectCreateMenuSize: SidebarMenuSize = {
-  width: 260,
-  height: 280,
-  margin: 8,
-  gap: 2
 };
 const sidebarMenuOverlayZIndex = 9999;
 const SIDEBAR_PROFILE_NAME_MAX_VISUAL_WIDTH = 10;
@@ -556,7 +549,6 @@ export function AppFrame(props: AppFrameProps) {
   const [sortMenuOpen, setSortMenuOpen] = useState(false);
   const [taskContextMenu, setTaskContextMenu] = useState<TaskContextMenuState | null>(null);
   const [projectContextMenu, setProjectContextMenu] = useState<ProjectContextMenuState | null>(null);
-  const [projectCreateMenuAnchor, setProjectCreateMenuAnchor] = useState<SidebarMenuAnchor | null>(null);
   const [inlineRename, setInlineRename] = useState<SidebarInlineRename | null>(null);
   const [inlineRenameDraft, setInlineRenameDraft] = useState("");
   const [removeProjectId, setRemoveProjectId] = useState<string | null>(null);
@@ -735,7 +727,7 @@ export function AppFrame(props: AppFrameProps) {
   useEffect(() => {
     if (
       typeof document === "undefined"
-      || (!taskListMenuAnchor && !taskContextMenu && !projectContextMenu && !projectCreateMenuAnchor && !archiveConfirmSessionKey)
+      || (!taskListMenuAnchor && !taskContextMenu && !projectContextMenu && !archiveConfirmSessionKey)
     ) {
       return;
     }
@@ -745,7 +737,6 @@ export function AppFrame(props: AppFrameProps) {
       setSortMenuOpen(false);
       setTaskContextMenu(null);
       setProjectContextMenu(null);
-      setProjectCreateMenuAnchor(null);
       setArchiveConfirmSessionKey(null);
     };
     const closeOnOutsidePointerDown = (event: PointerEvent) => {
@@ -760,7 +751,6 @@ export function AppFrame(props: AppFrameProps) {
       // must not clear archiveConfirmSessionKey before its click handler runs.
       if (
         target.closest(".app-frame-sidebar-menu")
-        || target.closest(".app-frame-workspace-picker-menu")
         || target.closest(".app-frame-task-row--confirming")
       ) {
         return;
@@ -779,7 +769,7 @@ export function AppFrame(props: AppFrameProps) {
       document.removeEventListener("pointerdown", closeOnOutsidePointerDown);
       document.removeEventListener("keydown", closeOnEscape);
     };
-  }, [archiveConfirmSessionKey, projectContextMenu, projectCreateMenuAnchor, taskContextMenu, taskListMenuAnchor]);
+  }, [archiveConfirmSessionKey, projectContextMenu, taskContextMenu, taskListMenuAnchor]);
 
   function refreshAgentTasks(): void {
     taskStateCoordinator.refreshTaskState({ reason: "manual" });
@@ -961,14 +951,8 @@ export function AppFrame(props: AppFrameProps) {
     }
   }
 
-  function selectSidebarWorkspace(projectId: string) {
-    setProjectCreateMenuAnchor(null);
-    openNewAgent({ kind: "project", projectId });
-  }
-
   /** Opens a project's board. The board is the project, so this is one click on the row's name. */
   function openProjectBoard(projectId: string) {
-    setProjectCreateMenuAnchor(null);
     setProjectContextMenu(null);
     handleFirstSidebarInteraction();
     selectCollabProject(projectId);
@@ -1027,7 +1011,6 @@ export function AppFrame(props: AppFrameProps) {
   }
 
   function joinProject() {
-    setProjectCreateMenuAnchor(null);
     handleFirstSidebarInteraction();
     setJoinProjectOpen(true);
   }
@@ -1037,7 +1020,6 @@ export function AppFrame(props: AppFrameProps) {
    * the background the person sees would change before they have decided anything.
    */
   function newProject() {
-    setProjectCreateMenuAnchor(null);
     handleFirstSidebarInteraction();
     requestCreateProject();
   }
@@ -1176,7 +1158,6 @@ export function AppFrame(props: AppFrameProps) {
     event.stopPropagation();
     setTaskListMenuAnchor(null);
     setSortMenuOpen(false);
-    setProjectCreateMenuAnchor(null);
     setTaskContextMenu(null);
     cancelInlineRename();
     const target = event.currentTarget;
@@ -1331,7 +1312,6 @@ export function AppFrame(props: AppFrameProps) {
   }
 
   function toggleTaskListMenu(anchor: SidebarMenuAnchor) {
-    setProjectCreateMenuAnchor(null);
     setTaskContextMenu(null);
     setProjectContextMenu(null);
     setArchiveConfirmSessionKey(null);
@@ -1704,32 +1684,22 @@ export function AppFrame(props: AppFrameProps) {
               onProjectContextMenu={openProjectMenu}
               onNewProjectTask={(projectId) => openNewAgent({ kind: "project", projectId })}
               headerLeadingAction={(
-                <div className="relative flex items-center">
+                <div className="flex items-center">
                   <button
                     type="button"
-                    className={`app-frame-workspace-add${projectCreateMenuAnchor ? " is-open" : ""}`}
-                    aria-label={t("appFrame.project.add")}
-                    title={t("appFrame.project.add")}
+                    className="app-frame-workspace-add"
+                    aria-label={t("appFrame.project.new")}
+                    title={t("appFrame.project.new")}
                     disabled={state.agent.projectRegistryState === "corrupt" || projectMutationId != null}
                     onClick={(event) => {
                       event.stopPropagation();
                       setTaskListMenuAnchor(null);
                       setSortMenuOpen(false);
-                      const anchor = sidebarMenuAnchorFromRect(event.currentTarget.getBoundingClientRect());
-                      setProjectCreateMenuAnchor((current) => (current ? null : anchor));
+                      newProject();
                     }}
                   >
                     <FolderPlus size={14} strokeWidth={1.75} aria-hidden="true" />
                   </button>
-                  {projectCreateMenuAnchor ? (
-                    <SidebarWorkspacePickerMenu
-                      anchor={projectCreateMenuAnchor}
-                      projects={state.agent.projects}
-                      registryState={state.agent.projectRegistryState}
-                      onSelectProject={selectSidebarWorkspace}
-                      onNewProject={newProject}
-                    />
-                  ) : null}
                 </div>
               )}
             />
@@ -3217,124 +3187,6 @@ function InlineConfirmButton(props: {
 export function sameWorkspacePath(left: string, right: string): boolean {
   const normalize = (value: string) => value.replace(/\\/g, "/").replace(/\/+$/u, "");
   return normalize(left) === normalize(right);
-}
-
-function formatSidebarCompactWorkspacePath(rootPath: string, maxWidth = 28): string {
-  const displayPath = formatWorkspacePath(rootPath).replace(/\/+$/, "");
-  if (displayPath.length <= maxWidth) return displayPath;
-  const folder = displayPath.split("/").filter(Boolean).pop() ?? displayPath;
-  const prefix = displayPath.slice(0, Math.max(4, maxWidth - folder.length - 4));
-  return `${prefix}.../${folder}`;
-}
-
-function filterSidebarWorkspaceProjects(projects: MemmyAgentProject[], query: string): MemmyAgentProject[] {
-  const normalized = query.trim().toLocaleLowerCase();
-  const sorted = [...projects].sort((left, right) =>
-    right.createdAt.localeCompare(left.createdAt) || right.id.localeCompare(left.id)
-  );
-  if (!normalized) return sorted;
-  return sorted.filter((project) => {
-    const displayPath = formatWorkspacePath(project.rootPath).toLocaleLowerCase();
-    return project.name.toLocaleLowerCase().includes(normalized)
-      || project.rootPath.toLocaleLowerCase().includes(normalized)
-      || displayPath.includes(normalized);
-  });
-}
-
-function SidebarWorkspacePickerMenu(props: {
-  anchor: SidebarMenuAnchor;
-  projects: MemmyAgentProject[];
-  registryState: "ready" | "corrupt";
-  onSelectProject: (projectId: string) => void;
-  /** Opens the one project dialog, which also switches to joining a shared project inside itself. */
-  onNewProject: () => void;
-}) {
-  const { t } = useTranslation();
-  const [query, setQuery] = useState("");
-  const searchInputRef = useRef<HTMLInputElement | null>(null);
-  const visibleProjects = props.registryState === "ready"
-    ? filterSidebarWorkspaceProjects(props.projects, query)
-    : [];
-
-  useEffect(() => {
-    searchInputRef.current?.focus();
-  }, []);
-
-  if (typeof document === "undefined" || typeof window === "undefined") {
-    return null;
-  }
-
-  const overlayStyle = resolveSidebarContextMenuOverlayStyle(
-    { kind: "anchor", anchor: props.anchor },
-    { width: window.innerWidth, height: window.innerHeight },
-    projectCreateMenuSize
-  );
-  const menu = (
-    <div
-      className="home-project-picker__menu app-frame-workspace-picker-menu"
-      style={overlayStyle}
-      onClick={(event) => event.stopPropagation()}
-    >
-      <label className="home-project-picker__search">
-        <input
-          ref={searchInputRef}
-          value={query}
-          placeholder={t("home.project.search")}
-          aria-label={t("home.project.search")}
-          onChange={(event) => setQuery(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Escape") {
-              event.preventDefault();
-              event.stopPropagation();
-            }
-          }}
-        />
-      </label>
-      <div className="home-project-picker__list" role="listbox">
-        <div className="home-project-picker__projects" role="presentation">
-          {props.registryState === "corrupt" ? (
-            <p className="home-project-picker__empty">{t("home.project.registryUnavailable")}</p>
-          ) : visibleProjects.length === 0 ? (
-            <p className="home-project-picker__empty" role="status">{t("home.project.empty")}</p>
-          ) : visibleProjects.map((project) => (
-            <button
-              key={project.id}
-              type="button"
-              role="option"
-              aria-selected="false"
-              className="home-project-picker__option"
-              title={formatWorkspacePath(project.rootPath)}
-              onClick={() => props.onSelectProject(project.id)}
-            >
-              <Folder size={13} className="shrink-0" aria-hidden="true" />
-              <span className="home-project-picker__path truncate">
-                {formatSidebarCompactWorkspacePath(project.rootPath)}
-              </span>
-            </button>
-          ))}
-        </div>
-        {props.registryState === "ready" ? (
-          <>
-            <div className="home-project-picker__divider" role="separator" />
-            <div className="home-project-picker__actions" role="presentation">
-              <button
-                type="button"
-                role="option"
-                aria-selected="false"
-                className="home-project-picker__option home-project-picker__option--action"
-                onClick={props.onNewProject}
-              >
-                <Plus size={13} strokeWidth={1.75} className="shrink-0 home-project-picker__action-icon" aria-hidden="true" />
-                <span>{t("appFrame.project.new")}</span>
-              </button>
-            </div>
-          </>
-        ) : null}
-      </div>
-    </div>
-  );
-
-  return createPortal(menu, document.body);
 }
 
 function TaskListActionsMenu(props: {

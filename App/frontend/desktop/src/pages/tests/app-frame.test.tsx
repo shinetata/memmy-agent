@@ -45,7 +45,7 @@ describe("AppFrame", () => {
     expect(html).not.toContain("置顶");
     expect(html).not.toContain("归档");
     expect(html).toContain('aria-label="任务列表操作"');
-    expect(html).toContain('aria-label="添加项目"');
+    expect(html).toContain('aria-label="新建项目"');
     expect(html).toContain('role="separator"');
     expect(html).toContain('aria-label="调整主侧边栏宽度"');
     expect(html).toContain("sidebar-resize-handle");
@@ -432,9 +432,28 @@ describe("AppFrame", () => {
       source.indexOf("function SidebarMoreMenu")
     );
 
-    expect(projectHeaderBlock).toContain('aria-label={t("appFrame.project.add")}');
+    expect(projectHeaderBlock).toContain('aria-label={t("appFrame.project.new")}');
     expect(source).toContain('label={t("appFrame.project.showArchived")}');
     expect(projectMenuBlock).toBe("");
+  });
+
+  it("opens the new-project dialog from the sidebar button without a picker in between", () => {
+    const source = readFileSync(resolve(__dirname, "..", "app-frame.tsx"), "utf8");
+    const projectHeaderBlock = source.slice(
+      source.indexOf('title={t("appFrame.projects")}'),
+      source.indexOf('title={t("appFrame.tasks")}')
+    );
+
+    // 一次点击就走新建项目：按钮直接调用 newProject()，弹窗由 createPending 打开。
+    expect(projectHeaderBlock).toContain("newProject();");
+    expect(projectHeaderBlock).not.toContain("setProjectCreateMenuAnchor");
+    expect(projectHeaderBlock).not.toContain("SidebarWorkspacePickerMenu");
+    expect(source).not.toContain("SidebarWorkspacePickerMenu");
+    expect(source).not.toContain("projectCreateMenuAnchor");
+    expect(source).not.toContain("projectCreateMenuSize");
+    expect(source).not.toContain("app-frame-workspace-picker-menu");
+    expect(source).toContain("function newProject()");
+    expect(source.match(/requestCreateProject\(\)/gu)).toHaveLength(1);
   });
 
   it("keeps top-level sidebar task menus mutually exclusive", () => {
