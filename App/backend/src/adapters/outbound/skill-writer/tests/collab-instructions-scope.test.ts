@@ -65,7 +65,9 @@ describe("collab project instructions for Codex", () => {
       directory: join(root, "ws", "packages", "app"),
       conversationId: "session-1"
     });
-    expect(hit).toEqual({ projectId: "p-1", text: "团队约定：先看 PRD。" });
+    expect(hit?.projectId).toBe("p-1");
+    expect(hit?.context).toContain("<collab_project>");
+    expect(hit?.context).toContain("团队约定：先看 PRD。");
   });
 
   it("keeps a nested Codex project out, even though its folder is inside the associated project's root", async () => {
@@ -88,7 +90,9 @@ describe("collab project instructions for Codex", () => {
       directory: join(root, "ws", "scene", "packages", "app"),
       conversationId: "session-3"
     });
-    expect(hit).toEqual({ projectId: "p-1", text: "团队约定：先看 PRD。" });
+    expect(hit?.projectId).toBe("p-1");
+    expect(hit?.context).toContain("<collab_project>");
+    expect(hit?.context).toContain("团队约定：先看 PRD。");
   });
 
   it("does not use a Codex project's root for another agent's session", async () => {

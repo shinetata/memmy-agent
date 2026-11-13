@@ -15,6 +15,7 @@ import {
   parseCollabInstructionsFile,
   parseProjectInstructionsFile,
   projectInstructionsAt,
+  renderCollabProjectContext,
 } from "@memmy/local-api-contracts";
 
 /** 协作授权状态：只有这两项与项目钩子有关。 */
@@ -66,7 +67,7 @@ export async function readCollabProjectInstructions(input: {
   directory?: string | null;
   /** 宿主 Agent 自己的会话 id：单独关联过的会话靠它命中。 */
   conversationId?: string | null;
-}): Promise<{ projectId: string; text: string } | null> {
+}): Promise<{ projectId: string; context: string } | null> {
   const sourceId = input.sourceId?.trim();
   if (!sourceId) return null;
   const directory = input.directory?.trim() ?? "";
@@ -89,8 +90,9 @@ export async function readCollabProjectInstructions(input: {
       ...(codexProjectId ? { groupId: codexProjectId, unitIsExact: true } : {}),
     });
     if (!hit) return null;
-    const value = hit.entry.text.trim();
-    return value ? { projectId: hit.projectId, text: value } : null;
+    // 没写背景与规范的项目也要注入：这一段先告诉 Agent 当前目录属于哪个协作项目、成员有谁、该先查哪里。
+    const context = renderCollabProjectContext(hit.entry).trim();
+    return context ? { projectId: hit.projectId, context } : null;
   } catch {
     // 钩子不能因为别处的文件读坏了打断宿主 Agent 的这一轮。
     return null;

@@ -45,11 +45,36 @@ describe("memmy project hook", () => {
       const context = responseContext(result.stdout);
       expect(context).toContain('<project_instructions source="memmy">');
       expect(context).toContain(LOCAL_INSTRUCTIONS);
-      expect(context).toContain('<collab_project_instructions project="p-1">');
+      expect(context).toContain('<collab_project name="MemOS">');
+      expect(context).toContain("当前工作目录属于 Memmy 协作项目「MemOS」，成员有孙起、孙落");
+      expect(context).toContain("先用 memmy-project 在本项目的任务里查");
       expect(context).toContain(COLLAB_INSTRUCTIONS);
       // 本机约定在前，团队约定在其后。
       expect(context.indexOf(LOCAL_INSTRUCTIONS)).toBeLessThan(context.indexOf(COLLAB_INSTRUCTIONS));
     }
+  }, 30000);
+
+  it("tells the agent which collab project it is in even without background and guidelines", async () => {
+    const fixture = installFixture("claude-code");
+    writeFileSync(join(fixture.memmyHome, "collab-project-instructions.json"), JSON.stringify({
+      version: 1,
+      projects: {
+        "p-2": {
+          scopes: [{ sourceId: "claude_code", groupId: tempDir, roots: [tempDir] }],
+          name: "演示",
+          members: ["孙起"],
+          text: "",
+          updatedAt: "2026-11-13T02:00:00.000Z"
+        }
+      }
+    }));
+
+    const result = await runHook(fixture.script, { hook_event_name: "SessionStart", session_id: "host-session", cwd: tempDir });
+    expect(result.status).toBe(0);
+    const context = responseContext(result.stdout);
+    expect(context).toContain('<collab_project name="演示">');
+    expect(context).toContain("当前工作目录属于 Memmy 协作项目「演示」，成员有孙起");
+    expect(context).not.toContain("所有者设定了以下背景与规范");
   }, 30000);
 
   it("gives Claude Code only this turn's project knowledge on prompt submit", async () => {
@@ -145,7 +170,7 @@ describe("memmy project hook", () => {
       });
       const context = responseContext(result.stdout);
       expect(context).toContain(LOCAL_INSTRUCTIONS);
-      expect(context).not.toContain("collab_project_instructions");
+      expect(context).not.toContain("<collab_project");
       expect(context).not.toContain("memmy_knowledge_context");
       expect(server.requests).toEqual([]);
     } finally {
@@ -168,7 +193,7 @@ describe("memmy project hook", () => {
       });
       const context = responseContext(result.stdout);
       expect(context).toContain(LOCAL_INSTRUCTIONS);
-      expect(context).not.toContain("collab_project_instructions");
+      expect(context).not.toContain("<collab_project");
     } finally {
       await server.close();
     }
@@ -183,7 +208,7 @@ describe("memmy project hook", () => {
       cwd: tempDir
     });
     const context = responseContext(result.stdout);
-    expect(context).not.toContain("collab_project_instructions");
+    expect(context).not.toContain("<collab_project");
     expect(context).not.toContain("只属于其他 Agent 的团队约定");
   }, 30000);
 
@@ -295,6 +320,8 @@ function writeCollabInstructions(fixture: ProjectHookFixture, directory: string,
     projects: {
       "p-1": {
         scopes: [{ sourceId, groupId: directory, roots: [directory] }],
+        name: "MemOS",
+        members: ["孙起", "孙落"],
         text: COLLAB_INSTRUCTIONS,
         updatedAt: "2026-10-28T12:00:00.000Z"
       }

@@ -128,20 +128,13 @@ async function collabProjectContextFor(payload) {
 }
 
 /**
- * 协作项目段唯一的渲染处。入参是 readCollabProjectInstructions 的结果 { projectId, text }，
- * 返回要注入的一段文字，空串表示这一段没有内容。以后换新的 <collab_project> 段只改这里。
+ * 协作项目段唯一的输出处。入参是 readCollabProjectInstructions 的结果 { projectId, context }：
+ * context 已由契约里的 renderCollabProjectContext 渲染成完整的 <collab_project> 段，
+ * 文字只在契约里维护一份，Memmy 自己的任务用的也是它。空串表示这一段没有内容。
  */
 function collabProjectContext(hit) {
   if (!hit) return "";
-  const text = normalizeText(hit.text);
-  if (!text) return "";
-  return [
-    '<collab_project_instructions project="' + hit.projectId + '">',
-    "本项目是一个协作项目，所有者设定了以下项目指令，在本项目中的任务里遵循：",
-    "",
-    text,
-    "</collab_project_instructions>"
-  ].join("\n");
+  return normalizeText(hit.context);
 }
 
 /**
