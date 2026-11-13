@@ -13,7 +13,7 @@ import {
 } from "../adapters/outbound/skill-writer/skill-directory.js";
 import { renderMemmyDefaultSkillManifest } from "../adapters/outbound/skill-writer/templates/memmy-default.js";
 import { renderMemmyPluginSkillManifest } from "../adapters/outbound/skill-writer/templates/memmy-plugin.js";
-import type { MemoryPluginConflict } from "../adapters/outbound/skill-writer/types.js";
+import type { MemoryPluginConflict, SkillTarget } from "../adapters/outbound/skill-writer/types.js";
 import type { SkillTargetRegistry } from "../adapters/outbound/skill-writer/target-registry.js";
 import { AgentSourceUnavailableError } from "./runtime-errors.js";
 
@@ -89,6 +89,32 @@ export function createSkillDistributionService(
   async function projectSkillAllowed(sourceId: string): Promise<boolean> {
     const permission = await options.projectSkillPermission?.() ?? PERMISSIVE;
     return permission.granted && !permission.disabledAgents.includes(sourceId);
+  }
+
+  /** 这个 Agent 的全局指令文件里有没有协作项目的块，且是这个版本。没这个能力的 Agent 当作不需要。 */
+  async function isProjectSkillBootstrapCurrent(target: SkillTarget): Promise<boolean> {
+    if (!target.isProjectSkillBootstrapCurrent) return true;
+    return target.isProjectSkillBootstrapCurrent().catch(() => false);
+  }
+
+  /**
+   * 写协作项目的全局指令块。块写不下不影响技能本身的安装，也不影响其他 Agent：这里的失败只吞掉，
+   * 下次启动的 ensureProjectSkills 会再试。
+   */
+  async function writeProjectSkillBootstrap(target: SkillTarget, sourceId: string): Promise<boolean> {
+    if (!target.writeProjectSkillBootstrap) return false;
+    if (!(await projectSkillAllowed(sourceId))) return false;
+    try {
+      await target.writeProjectSkillBootstrap();
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async function removeProjectSkillBootstrap(target: SkillTarget): Promise<void> {
+    if (!target.removeProjectSkillBootstrap) return;
+    await target.removeProjectSkillBootstrap().catch(() => undefined);
   }
 
   return {
@@ -189,8 +215,9 @@ export function createSkillDistributionService(
         : renderMemmyDefaultSkillManifest(sourceId);
       const memoryCurrent = await isMemmySkillDirectoryCurrent(root, manifest);
       const projectAllowed = await projectSkillAllowed(sourceId);
-      const projectCurrent = !projectAllowed || await isMemmyProjectSkillDirectoryCurrent(root, sourceId);
-      if (memoryCurrent && projectCurrent) return false;
+      const projectSkillCurrent = !projectAllowed || await isMemmyProjectSkillDirectoryCurrent(root, sourceId);
+      const projectBlockCurrent = !projectAllowed || await isProjectSkillBootstrapCurrent(target);
+      if (memoryCurrent && projectSkillCurrent && projectBlockCurrent) return false;
 
       if (!memoryCurrent) {
         if (kind === "plugin") await target.installPlugin!(sourceId);
@@ -199,8 +226,12 @@ export function createSkillDistributionService(
       }
       // The project skill is installed with the memory skill; an agent connected before it existed gets it here.
       // 没授权协作项目时不补装：这一份授权是单独的，不能靠记忆接入顺带写进去。
-      if (projectAllowed && !(await isMemmyProjectSkillDirectoryCurrent(root, sourceId))) {
+      if (projectAllowed && !projectSkillCurrent) {
         await replaceMemmyProjectSkillDirectory(root, sourceId);
+      }
+      // 全局指令块与技能同步：技能在而块不在、或块是旧版时补上。
+      if (projectAllowed && !projectBlockCurrent) {
+        await writeProjectSkillBootstrap(target, sourceId);
       }
       return true;
     },
@@ -213,9 +244,16 @@ export function createSkillDistributionService(
         if (permission.disabledAgents.includes(target.targetId)) continue;
         const root = await target.resolveRootDirectory();
         if (!root || !(await directoryExists(root))) continue;
-        if (await isMemmyProjectSkillDirectoryCurrent(root, target.targetId)) continue;
-        await replaceMemmyProjectSkillDirectory(root, target.targetId);
-        written.push(target.targetId);
+        let changed = false;
+        if (!(await isMemmyProjectSkillDirectoryCurrent(root, target.targetId))) {
+          await replaceMemmyProjectSkillDirectory(root, target.targetId);
+          changed = true;
+        }
+        // 技能最新的 Agent 也要看一眼指令块：块是后加的，之前装过的技能里没有它。
+        if (!(await isProjectSkillBootstrapCurrent(target))) {
+          if (await writeProjectSkillBootstrap(target, target.targetId)) changed = true;
+        }
+        if (changed) written.push(target.targetId);
       }
       return written;
     },
@@ -225,12 +263,15 @@ export function createSkillDistributionService(
       const root = await target.resolveRootDirectory();
       if (!root) throw new AgentSourceUnavailableError(target.displayName);
       await replaceMemmyProjectSkillDirectory(root, sourceId);
+      await writeProjectSkillBootstrap(target, sourceId);
     },
 
     async removeProjectSkill(sourceId) {
-      const root = await options.targetRegistry.get(sourceId)?.resolveRootDirectory();
-      if (!root) return;
+      const target = options.targetRegistry.get(sourceId);
+      const root = await target?.resolveRootDirectory();
+      if (!root || !target) return;
       await removeMemmyProjectSkillDirectory(root);
+      await removeProjectSkillBootstrap(target);
     },
 
     async removeProjectSkills() {
@@ -238,9 +279,12 @@ export function createSkillDistributionService(
       for (const target of options.targetRegistry.list()) {
         const root = await target.resolveRootDirectory().catch(() => null);
         if (!root) continue;
-        if (!(await memmyProjectSkillExists(root))) continue;
-        await removeMemmyProjectSkillDirectory(root);
-        removed.push(target.targetId);
+        if (await memmyProjectSkillExists(root)) {
+          await removeMemmyProjectSkillDirectory(root);
+          removed.push(target.targetId);
+        }
+        // 块与技能分开：技能已经被别的路径删掉时，块也不该继续留在全局指令里。
+        await removeProjectSkillBootstrap(target);
       }
       return removed;
     },
