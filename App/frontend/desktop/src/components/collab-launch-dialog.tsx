@@ -1,41 +1,29 @@
 /**
- * The one-time project-collaboration announcement: a four-page carousel with the same shell as the older feature
- * carousel (focus handling, Esc, backdrop click, Tab trap, sizes). The last page leads into the new-project dialog
- * with sharing already switched on.
+ * The one-time project-collaboration announcement: one page with the same shell and layout as the History
+ * announcement, using a CSS conversation instead of an illustration. The primary button asks for the agent
+ * authorization right here, so nobody has to go through the separate access dialog, and then opens the new-project
+ * dialog with sharing already on.
  */
-import { useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
 import { createPortal } from "react-dom";
-import { ChevronLeft, ChevronRight, X } from "lucide-react";
-import type { MessageKey } from "../i18n/messages.js";
+import { X } from "lucide-react";
+import type { CollabAgentAccessView, CollabAgentInstallResult, CollabClient } from "../api/collab-client.js";
 import { useTranslation } from "../i18n/use-translation.js";
-import boardImage from "../assets/launch/collab-launch-visual-1.png";
-import boardImageEn from "../assets/launch/collab-launch-visual-1.en.png";
-import agentsImage from "../assets/launch/collab-launch-visual-2.png";
-import agentsImageEn from "../assets/launch/collab-launch-visual-2.en.png";
-import continueImage from "../assets/launch/collab-launch-visual-3.png";
-import continueImageEn from "../assets/launch/collab-launch-visual-3.en.png";
-import assistImage from "../assets/launch/collab-launch-visual-4.png";
-import assistImageEn from "../assets/launch/collab-launch-visual-4.en.png";
+import { agentSourceDisplayName, agentSourceLogoUrl } from "../pages/agent-source-logos.js";
 import "./collab-launch-dialog.css";
 
-interface SlideCopy {
-  title: MessageKey;
-  body: MessageKey;
-  imageZh: string;
-  imageEn: string;
-}
-
-const SLIDES: SlideCopy[] = [
-  { title: "collabLaunch.board.title", body: "collabLaunch.board.body", imageZh: boardImage, imageEn: boardImageEn },
-  { title: "collabLaunch.agents.title", body: "collabLaunch.agents.body", imageZh: agentsImage, imageEn: agentsImageEn },
-  { title: "collabLaunch.continue.title", body: "collabLaunch.continue.body", imageZh: continueImage, imageEn: continueImageEn },
-  { title: "collabLaunch.assist.title", body: "collabLaunch.assist.body", imageZh: assistImage, imageEn: assistImageEn }
-];
+/** The agent the example conversation happens in. */
+const EXAMPLE_AGENT_SOURCE = "claude_code";
 
 export interface CollabLaunchDialogProps {
   onClose(): void;
-  /** The last page's primary button: close the carousel and open the new-project dialog with sharing on. */
+  /** Once authorization is settled: close the announcement and open the new-project dialog with sharing on. */
   onCreateProject(): void;
+  /**
+   * Authorizes and installs the collaboration components into the local agents. Absent in tests and previews without
+   * providers: the card then only offers the new-project button.
+   */
+  collab?: CollabClient | null;
 }
 
 export function CollabLaunchDialog(props: CollabLaunchDialogProps) {
@@ -43,10 +31,13 @@ export function CollabLaunchDialog(props: CollabLaunchDialogProps) {
   const dialogRef = useRef<HTMLElement>(null);
   const closeRef = useRef(props.onClose);
   closeRef.current = props.onClose;
-  const [index, setIndex] = useState(0);
-  const slide = SLIDES[index] ?? SLIDES[0]!;
-  const image = language === "en-US" ? slide.imageEn : slide.imageZh;
-  const last = index === SLIDES.length - 1;
+  const collab = props.collab ?? null;
+
+  const [access, setAccess] = useState<CollabAgentAccessView | null>(null);
+  const [loading, setLoading] = useState(collab !== null);
+  const [installing, setInstalling] = useState(false);
+  const [results, setResults] = useState<CollabAgentInstallResult[]>([]);
+  const [error, setError] = useState<string | null>(null);
 
   useLayoutEffect(() => {
     const previous = document.activeElement as HTMLElement | null;
@@ -67,7 +58,89 @@ export function CollabLaunchDialog(props: CollabLaunchDialogProps) {
     };
   }, []);
 
+  // Reads the current authorization once: it decides whether the card offers the authorization or the project.
+  useEffect(() => {
+    if (!collab) {
+      setLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setLoading(true);
+    collab.getAgentAccess()
+      .then((view) => {
+        if (cancelled) return;
+        setAccess(view);
+        setLoading(false);
+      })
+      .catch(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [collab]);
+
+  const granted = access?.granted === true;
+  const canAuthorize = collab !== null;
+  const failed = results.filter((item) => !item.ok);
+  const doneCount = results.filter((item) => item.ok).length;
+  const nameSeparator = language === "en-US" ? ", " : "、";
+
+  async function grant() {
+    if (!collab || installing) return;
+    setInstalling(true);
+    setError(null);
+    try {
+      const result = await collab.setAgentAccess(true);
+      setAccess(result.view);
+      setResults(result.results);
+    } catch {
+      setError(t("collabLaunch.failed"));
+    } finally {
+      setInstalling(false);
+    }
+  }
+
+  async function retry() {
+    if (!collab || installing) return;
+    const pending = failed.map((item) => item.sourceId);
+    setInstalling(true);
+    setError(null);
+    try {
+      const result = await collab.installAgentAccess(pending);
+      setResults((current) => [...current.filter((item) => !pending.includes(item.sourceId)), ...result.results]);
+      setAccess(result.view);
+    } catch {
+      setError(t("collabLaunch.failed"));
+    } finally {
+      setInstalling(false);
+    }
+  }
+
+  /** The agents the authorization currently covers: enabled and available on this computer. */
+  const names = (access?.agents ?? [])
+    .filter((agent) => agent.available && agent.enabled)
+    .map((agent) => agent.name);
+  const nameList = names.join(nameSeparator);
+
+  const primaryLabel = !granted && canAuthorize
+    ? installing ? t("collabLaunch.authorizing") : t("collabLaunch.authorize")
+    : t("collabLaunch.create");
+
+  const footnote = granted
+    ? nameList
+      ? t("collabLaunch.footnoteGranted", { names: nameList })
+      : t("collabLaunch.footnoteGrantedPlain")
+    : access !== null && names.length === 0
+      ? t("collabLaunch.footnoteEmpty")
+      : nameList
+        ? t("collabLaunch.footnoteAgents", { names: nameList })
+        : t("collabLaunch.footnotePlain");
+
   if (typeof document === "undefined") return null;
+
+  const logo = agentSourceLogoUrl(EXAMPLE_AGENT_SOURCE);
+  const exampleAgent = agentSourceDisplayName(EXAMPLE_AGENT_SOURCE);
 
   return createPortal(
     <div
@@ -82,7 +155,7 @@ export function CollabLaunchDialog(props: CollabLaunchDialogProps) {
         role="dialog"
         aria-modal="true"
         aria-labelledby="collab-launch-title"
-        aria-describedby="collab-launch-body"
+        aria-describedby="collab-launch-footnote"
         tabIndex={-1}
         onKeyDown={trapFocus}
       >
@@ -90,54 +163,64 @@ export function CollabLaunchDialog(props: CollabLaunchDialogProps) {
           <X size={18} aria-hidden="true" />
         </button>
         <p className="collab-launch-eyebrow">{t("collabLaunch.eyebrow")}</p>
-        <div className="collab-launch-stage" aria-live="polite">
-          {/* A new key remounts the page, which is what replays the enter animation. */}
-          <div key={`copy-${index}`} className="collab-launch-copy collab-launch-enter">
-            <h3 id="collab-launch-title">{t(slide.title)}</h3>
-            <p id="collab-launch-body">{t(slide.body)}</p>
+        <h2 id="collab-launch-title">{t("collabLaunch.title")}</h2>
+        <div className="collab-launch-card">
+          <div className="collab-launch-copy">
+            <h3>{t("collabLaunch.subtitle")}</h3>
+            <p id="collab-launch-body" className="collab-launch-text">{t("collabLaunch.description")}</p>
+            <p className="collab-launch-text">{t("collabLaunch.benefit")}</p>
+            <div className="collab-launch-actions">
+              <button
+                className="collab-launch-primary"
+                type="button"
+                disabled={installing || (canAuthorize && loading)}
+                onClick={() => {
+                  if (!granted && canAuthorize) {
+                    void grant();
+                    return;
+                  }
+                  props.onCreateProject();
+                }}
+              >
+                {primaryLabel}
+              </button>
+              {failed.length && !installing ? (
+                <button className="collab-launch-retry" type="button" onClick={() => void retry()}>
+                  {t("collabLaunch.retry")}
+                </button>
+              ) : null}
+            </div>
+            {error ? (
+              <p className="collab-launch-status collab-launch-status--error" role="alert">{error}</p>
+            ) : granted && results.length ? (
+              <p className="collab-launch-status" role="status">
+                {failed.length
+                  ? t("collabLaunch.partial", { done: String(doneCount), names: failed.map((item) => item.name).join(nameSeparator) })
+                  : t("collabLaunch.installed", { count: String(doneCount) })}
+              </p>
+            ) : null}
           </div>
-          <div key={`visual-${index}`} className="collab-launch-visual collab-launch-enter" aria-hidden="true">
-            <img src={image} alt="" />
+          <div className="collab-launch-visual" aria-hidden="true">
+            <div className="collab-launch-visual__glow" />
+            <div className="collab-launch-example">
+              <div className="collab-launch-example__head">
+                {logo ? <img className="collab-launch-example__logo" src={logo} alt="" /> : null}
+                <span>{exampleAgent}</span>
+              </div>
+              <p className="collab-launch-chat__user">{t("collabLaunch.visualUser")}</p>
+              <p className="collab-launch-chat__agent">{t("collabLaunch.visualAgent")}</p>
+            </div>
+            <div className="collab-launch-visual__caption">{t("collabLaunch.visualCaption")}</div>
           </div>
         </div>
-        <nav className="collab-launch-nav" aria-label={t("collabLaunch.pages")}>
-          <span className="collab-launch-count">{index + 1} / {SLIDES.length}</span>
-          <div className="collab-launch-dots" aria-hidden="true">
-            {SLIDES.map((_, step) => <span key={step} className={step === index ? "active" : undefined} />)}
-          </div>
-          <div className="collab-launch-page-buttons">
-            <button
-              type="button"
-              className="collab-launch-prev"
-              disabled={index === 0}
-              aria-label={t("collabLaunch.previous")}
-              onClick={() => setIndex((current) => Math.max(current - 1, 0))}
-            >
-              <ChevronLeft size={18} aria-hidden="true" />
-            </button>
-            <button
-              type="button"
-              className="collab-launch-primary"
-              onClick={() => {
-                if (!last) {
-                  setIndex((current) => current + 1);
-                  return;
-                }
-                props.onCreateProject();
-              }}
-            >
-              {t(last ? "collabLaunch.create" : "collabLaunch.next")}
-              {last ? null : <ChevronRight size={17} aria-hidden="true" />}
-            </button>
-          </div>
-        </nav>
+        <p id="collab-launch-footnote" className="collab-launch-footnote">{footnote}</p>
       </section>
     </div>,
     document.body
   );
 }
 
-/** Keeps Tab and Shift+Tab inside the dialog, the same way the 1.2.5 carousel does. */
+/** Keeps Tab and Shift+Tab inside the dialog, the same way the History announcement does. */
 function trapFocus(event: KeyboardEvent<HTMLElement>) {
   if (event.key !== "Tab") return;
   const items = Array.from(event.currentTarget.querySelectorAll<HTMLElement>('button:not(:disabled), a[href], [tabindex="0"]'));
@@ -145,13 +228,10 @@ function trapFocus(event: KeyboardEvent<HTMLElement>) {
   const last = items.at(-1);
   if (!first || !last) {
     event.preventDefault();
-    return;
-  }
-  if (event.shiftKey && (document.activeElement === first || document.activeElement === event.currentTarget)) {
+  } else if (event.shiftKey && (document.activeElement === first || document.activeElement === event.currentTarget)) {
     event.preventDefault();
     last.focus();
-  } else if (!event.shiftKey && document.activeElement === last) {
-    event.preventDefault();
+  } else if (!event.shiftKey && (document.activeElement === last || document.activeElement === event.currentTarget)) {
     first.focus();
   }
 }

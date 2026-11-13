@@ -1,8 +1,8 @@
 /*
- * Shell for the one-time project-collaboration announcement carousel.
+ * The one-time project-collaboration announcement.
  *
- * Its own `collab-launch-*` names on purpose: the 1.2.5 history launch styles in this branch are the old ones and
- * will be replaced when the release branch merges, so nothing here may depend on them.
+ * Same shell as the History announcement (width, padding, radius, eyebrow, card grid, focus ring, Enter animation), kept
+ * under its own `collab-launch-*` names so the two cards can change independently.
  */
 
 .collab-launch-backdrop {
@@ -30,6 +30,7 @@
   box-shadow: 0 25px 100px color-mix(in srgb, var(--color-text-ink) 22%, transparent);
   outline: none;
   font-family: var(--font-sans);
+  animation: collab-launch-dialog-enter 180ms ease-out both;
 }
 
 .collab-launch-close {
@@ -60,10 +61,17 @@
   letter-spacing: 0.06em;
 }
 
-.collab-launch-stage {
+.collab-launch-dialog h2 {
+  margin: 0 0 18px;
+  font-size: clamp(25px, 3vw, 32px);
+  font-weight: 760;
+  line-height: 1.2;
+  letter-spacing: -0.025em;
+}
+
+.collab-launch-card {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 480px);
-  height: 400px;
   min-height: 400px;
   overflow: hidden;
 }
@@ -73,7 +81,7 @@
   flex-direction: column;
   align-items: flex-start;
   justify-content: center;
-  padding: 42px 38px 42px 0;
+  padding: 38px 38px 38px 0;
   background: color-mix(in srgb, var(--color-accent-peach) 6%, var(--color-background-paper));
 }
 
@@ -84,97 +92,26 @@
   line-height: 1.35;
 }
 
-.collab-launch-copy p {
-  max-width: 360px;
+.collab-launch-text {
+  max-width: 372px;
   margin: 0;
   color: color-mix(in srgb, var(--color-text-ink) 72%, var(--color-background-paper));
   font-size: 16px;
   line-height: 1.8;
 }
 
-.collab-launch-visual {
-  display: block;
-  min-height: 0;
-  padding: 0;
-  border-radius: 20px;
-  overflow: hidden;
-  background: transparent;
+.collab-launch-text + .collab-launch-text {
+  margin-top: 8px;
 }
 
-.collab-launch-visual img {
-  display: block;
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
-  border-radius: 20px;
-}
-
-.collab-launch-nav {
+.collab-launch-actions {
   display: flex;
   align-items: center;
-  gap: 12px;
-  min-height: 66px;
-  margin-top: 11px;
-}
-
-.collab-launch-count {
-  min-width: 42px;
-  color: color-mix(in srgb, var(--color-text-ink) 56%, transparent);
-  font-size: 13px;
-  font-variant-numeric: tabular-nums;
-}
-
-.collab-launch-dots {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-}
-
-.collab-launch-dots span {
-  display: block;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: color-mix(in srgb, var(--color-text-ink) 22%, transparent);
-  transition: width 0.18s;
-}
-
-.collab-launch-dots span.active {
-  width: 20px;
-  border-radius: 6px;
-  background: var(--color-action-sky);
-}
-
-.collab-launch-page-buttons {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  margin-left: auto;
-}
-
-.collab-launch-prev {
-  display: grid;
-  place-items: center;
-  width: 39px;
-  height: 39px;
-  padding: 0;
-  border: 1px solid color-mix(in srgb, var(--color-border-stone) 70%, transparent);
-  border-radius: 10px;
-  background: var(--color-background-paper);
-  color: var(--color-text-ink);
-  cursor: pointer;
-}
-
-.collab-launch-prev:disabled {
-  opacity: 0.35;
-  cursor: default;
+  gap: 10px;
+  margin-top: 18px;
 }
 
 .collab-launch-primary {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
   min-width: 100px;
   min-height: 39px;
   padding: 8px 16px;
@@ -188,30 +125,130 @@
   cursor: pointer;
 }
 
-.collab-launch-primary:hover {
+.collab-launch-primary:hover:not(:disabled) {
   background: var(--color-action-sky);
   color: #fff;
 }
 
-.collab-launch-enter {
-  animation: collab-launch-enter 180ms ease-out both;
+.collab-launch-primary:disabled {
+  opacity: 0.55;
+  cursor: default;
 }
 
-@keyframes collab-launch-enter {
-  from {
-    opacity: 0.45;
-    transform: translateX(7px);
-  }
-  to {
-    opacity: 1;
-    transform: translateX(0);
-  }
+.collab-launch-retry {
+  min-height: 34px;
+  padding: 6px 14px;
+  border: 1px solid color-mix(in srgb, var(--color-border-stone) 82%, transparent);
+  border-radius: 9px;
+  background: var(--color-background-paper);
+  color: var(--color-text-ink);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .collab-launch-enter {
-    animation: none;
-  }
+.collab-launch-retry:hover {
+  border-color: var(--color-action-sky);
+  color: var(--color-action-sky-hover);
+}
+
+.collab-launch-status {
+  max-width: 372px;
+  margin: 10px 0 0;
+  color: color-mix(in srgb, var(--color-text-ink) 62%, var(--color-background-paper));
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.collab-launch-status--error {
+  color: color-mix(in srgb, var(--color-status-error) 82%, var(--color-text-ink));
+}
+
+.collab-launch-visual {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  gap: 18px;
+  min-width: 0;
+  padding: 26px 0;
+  border-radius: 20px;
+  overflow: hidden;
+  isolation: isolate;
+  background: linear-gradient(145deg, #7fe3cf 0%, #4fc0ae 44%, #3f93a8 100%);
+}
+
+.collab-launch-visual__glow {
+  position: absolute;
+  z-index: -1;
+  inset: 0;
+  background: radial-gradient(circle at 86% 10%, rgba(255, 255, 255, .44), transparent 32%),
+    radial-gradient(circle at 6% 92%, rgba(200, 240, 224, .62), transparent 44%);
+}
+
+.collab-launch-example {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 14px;
+  width: min(100%, 352px);
+  box-sizing: border-box;
+  padding: 20px;
+  border: 1px solid rgba(255, 255, 255, .72);
+  border-radius: 20px;
+  background: color-mix(in srgb, var(--color-background-paper) 95%, transparent);
+  box-shadow: 0 20px 38px rgba(19, 74, 78, .18);
+  color: var(--color-text-ink);
+}
+
+.collab-launch-example__head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: color-mix(in srgb, var(--color-text-ink) 58%, var(--color-background-paper));
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.collab-launch-example__logo {
+  width: 15px;
+  height: 15px;
+  object-fit: contain;
+}
+
+.collab-launch-chat__user {
+  align-self: flex-end;
+  max-width: 88%;
+  margin: 0;
+  padding: 9px 13px;
+  border-radius: 15px;
+  background: color-mix(in srgb, var(--color-accent-mint) 62%, white);
+  color: var(--color-text-ink);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.collab-launch-chat__agent {
+  margin: 0;
+  color: var(--color-text-ink);
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+.collab-launch-visual__caption {
+  color: #fff;
+  font-size: 12px;
+  font-weight: 650;
+  text-shadow: 0 1px 3px rgba(16, 62, 66, .32);
+}
+
+.collab-launch-footnote {
+  margin: 18px 1px 0;
+  color: color-mix(in srgb, var(--color-text-ink) 64%, var(--color-background-paper));
+  font-size: 13px;
+  line-height: 1.65;
 }
 
 .collab-launch-dialog button:focus-visible {
@@ -219,20 +256,45 @@
   outline-offset: 3px;
 }
 
-@media (max-width: 760px) {
+@keyframes collab-launch-dialog-enter {
+  from {
+    opacity: 0.6;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .collab-launch-dialog {
+    animation: none;
+  }
+}
+
+@media (max-width: 700px) {
   .collab-launch-dialog {
     padding: 26px 22px 18px;
     border-radius: 20px;
   }
 
-  .collab-launch-eyebrow {
+  .collab-launch-dialog .collab-launch-eyebrow {
     margin-bottom: 14px;
   }
 
-  .collab-launch-stage {
+  .collab-launch-dialog h2 {
+    margin-bottom: 14px;
+  }
+
+  .collab-launch-close {
+    top: 18px;
+    right: 18px;
+  }
+
+  .collab-launch-card {
     display: flex;
     flex-direction: column;
-    height: auto;
     min-height: 0;
   }
 
@@ -250,12 +312,13 @@
   }
 
   .collab-launch-visual {
-    width: 100%;
-    height: auto;
+    min-height: 225px;
+    padding: 22px 0;
   }
 
-  .collab-launch-visual img {
-    height: auto;
-    aspect-ratio: 6 / 5;
+  .collab-launch-example {
+    width: min(100%, 310px);
+    padding: 16px;
+    gap: 12px;
   }
 }

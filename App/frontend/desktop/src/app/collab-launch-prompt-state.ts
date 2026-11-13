@@ -1,7 +1,7 @@
 /**
  * The one-time project-collaboration announcement.
  *
- * The record lives on this computer instead of comparing versions: every computer shows the carousel once the
+ * The record lives on this computer instead of comparing versions: every computer shows the announcement once the
  * conditions first hold, whichever version happens to ship it, and never again after that. A single run shows at
  * most one large prompt, and this announcement goes first.
  */
@@ -12,7 +12,7 @@ export const COLLAB_LAUNCH_PROMPT_STORAGE_KEY = "memmy.featureAnnouncement.v127-
 let promptOpen = false;
 let claimedThisRun = false;
 
-/** Whether the announcement carousel is on screen right now. */
+/** Whether the announcement is on screen right now. */
 export function isCollabLaunchPromptOpen(): boolean {
   return promptOpen;
 }
@@ -27,7 +27,7 @@ export function claimCollabLaunchPrompt(): void {
   claimedThisRun = true;
 }
 
-/** Records whether the carousel is currently rendered. */
+/** Records whether the announcement is currently rendered. */
 export function setCollabLaunchPromptOpen(open: boolean): void {
   promptOpen = open;
 }
