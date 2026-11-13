@@ -479,6 +479,11 @@ interface AssistLocalSafety {
   approval?: "deny" | "allow";
   /** 执行方那次审查的时间：同一请求只审一次，避免每次轮询重复调用模型。 */
   reviewedAt?: string;
+  /**
+   * 那次审查的结论允不允许自动执行：自动开始的那一下偶尔失败时，下一轮照这个结论再试，
+   * 不要当成「要她确认」——云端记的是 auto，她的看板不会提示，请求会一直停在收件箱里。
+   */
+  autoRun?: boolean;
   /** 第二次审查识别出的敏感操作：她点允许时列进执行边界。 */
   allowed?: string[];
 }
@@ -1052,7 +1057,7 @@ export function createCollabAssistService(options: CollabAssistServiceOptions): 
     if (!options.reviewer) return null;
     const current = await loadState();
     const known = current.safety?.[request.id];
-    if (known?.reviewedAt) return { autoRun: false, allowed: known.allowed ?? [] };
+    if (known?.reviewedAt) return { autoRun: known.autoRun === true, allowed: known.allowed ?? [] };
     // 附件正文只有读详情才带；读不到时按收件箱里能看到的部分审（请求仍然会被审成「需要确认」）。
     const detail = await readRequest(request.id, { withAttachments: true }).catch(() => null);
     const content = detail ?? request;
@@ -1082,7 +1087,7 @@ export function createCollabAssistService(options: CollabAssistServiceOptions): 
       method: "POST",
       body: { executor: decision.safety }
     }).catch(() => undefined);
-    await patchLocalSafety(request.id, { reviewedAt: now().toISOString(), allowed });
+    await patchLocalSafety(request.id, { reviewedAt: now().toISOString(), allowed, autoRun: decision.autoRun });
     return { autoRun: decision.autoRun, allowed };
   }
 

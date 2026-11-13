@@ -347,6 +347,42 @@ describe("the executor's check decides whether it still runs directly", () => {
     expect(exec.executorInputs).toHaveLength(1);
   });
 
+  it("tries the direct run again on the next poll when the first decision did not go through", async () => {
+    const exec = reviewer({ executor: { sensitive: [], undeclared: [], injected: false, reason: "" } });
+    let failDecision = true;
+    const calls: Array<{ path: string; method: string }> = [];
+    const created = createCollabAssistService({
+      cloud: async (path: string, init?: { method?: string; body?: unknown }) => {
+        calls.push({ path, method: init?.method ?? "GET" });
+        if (path === "/assist/inbox") return { requests: [granted()] };
+        if (path === "/assist/outbox") return { requests: [] };
+        if (path.endsWith("/review")) return { request: request() };
+        if (path.endsWith("/decision")) {
+          if (failDecision) {
+            failDecision = false;
+            throw new Error("network");
+          }
+          return { request: request({ status: "running", agent: "codex" }) };
+        }
+        if (path.includes("/assist/requests/")) return { request: request({ status: "pending", agent: "codex" }) };
+        return {};
+      },
+      homeDirectory: home(),
+      projectDirectory: async () => null,
+      agents: async () => [],
+      runner: recordingRunner(),
+      reviewer: exec,
+      agentAsksForApproval: () => true
+    });
+
+    await created.pollNow();
+    await created.pollNow();
+
+    // 只问了一次模型，第二轮照记下的结论再试一次自动执行，而不是永远停在收件箱里。
+    expect(exec.executorInputs).toHaveLength(1);
+    expect(calls.filter((call) => call.path.endsWith("/decision"))).toHaveLength(2);
+  });
+
   it("never runs directly when the selected Agent does not ask for approval", async () => {
     const { service: created, calls } = service({
       inbox: [granted()],
