@@ -16,6 +16,7 @@ import type {
 import type { MessageKey } from "../i18n/messages.js";
 import { useTranslation } from "../i18n/use-translation.js";
 import { agentSourceLogoUrl } from "./agent-source-logos.js";
+import { SKIPPED_PREFIX } from "./collab-assist-protocol.js";
 import grantStyles from "./collab-assist-grant.module.css";
 
 type Translate = (key: MessageKey, values?: Record<string, string>) => string;
@@ -211,9 +212,6 @@ export function assistReviewLine(
   if (reason.startsWith(SKIPPED_PREFIX)) return reason;
   return t("collab.assist.reviewConfirm", { reason });
 }
-
-/** 后端「上次跳过了：{标题}」这句话的开头：界面对上它就不再套一层前缀。 */
-export const SKIPPED_PREFIX = "上次跳过了：";
 
 /** 请求还没结束：等待授权、执行中、等待确认。 */
 export function assistIsOpen(status: AssistStatus): boolean {
