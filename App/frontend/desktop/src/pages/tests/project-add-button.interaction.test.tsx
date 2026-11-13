@@ -81,8 +81,8 @@ describe("sidebar new-project button", () => {
   }
 
   it.each([
-    ["zh-CN", "新建项目", "新建项目"],
-    ["en-US", "New project", "New project"]
+    ["zh-CN", "新建项目", "创建项目"],
+    ["en-US", "New project", "Create project"]
   ] as const)("opens the create dialog in one click (%s)", async (language, label, dialogTitle) => {
     await renderFrame(language);
     const button = container.querySelector<HTMLButtonElement>("button.app-frame-workspace-add");
