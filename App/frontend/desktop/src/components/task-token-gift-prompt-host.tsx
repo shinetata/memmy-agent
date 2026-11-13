@@ -2,7 +2,7 @@ import type { TaskTokenGiftNotice } from "@memmy/local-api-contracts";
 import { useEffect, useRef, useState } from "react";
 import { isWorkspacePromptSurfaceReady } from "../app/workspace-prompt-readiness.js";
 import { hasCollabLaunchPromptClaimedThisRun, isCollabLaunchPromptOpen } from "../app/collab-launch-prompt-state.js";
-import { featureAnnouncementSeenKey, resolveLaunchGiftPrompt } from "../app/task-token-gift-prompt.js";
+import { resolveLaunchGiftPrompt } from "../app/task-token-gift-prompt.js";
 import { useGuidanceDone } from "../app/use-guidance-progress.js";
 import { useOptionalApiClients } from "../app/providers.js";
 import { appActions } from "../state/app-actions.js";
@@ -10,7 +10,7 @@ import { useAppState } from "../state/app-state.js";
 import { TaskTokenGiftDialog } from "./task-token-gift-dialog.js";
 
 type CreditedGift = Extract<TaskTokenGiftNotice, { hasGift: true }>;
-type Offer = { userId: string; gift?: CreditedGift; showFeatures: boolean; ackGrantId?: string };
+type Offer = { userId: string; gift: CreditedGift };
 let promptOpen = false;
 export function isTaskTokenGiftPromptOpen(): boolean { return promptOpen; }
 
@@ -52,8 +52,7 @@ export function TaskTokenGiftPromptHost() {
       if (requestRef.current?.userId === userId) return;
       const request = clients.account.ensureTaskTokenGift().then((notice) => {
         if (accountRef.current !== userId) return;
-        const seen = window.localStorage.getItem(featureAnnouncementSeenKey(userId)) === "1";
-        const plan = resolveLaunchGiftPrompt(notice, seen);
+        const plan = resolveLaunchGiftPrompt(notice);
         if (notice.hasGift && notice.tokenAmount !== 20_000_000) console.warn("[task-gift] unexpected grant amount:", notice.tokenAmount);
         const refreshBalance = () => {
           void clients.bootstrap.getBootstrap().then((bootstrap) => {
@@ -73,11 +72,10 @@ export function TaskTokenGiftPromptHost() {
           if (notice.hasGift) refreshBalance();
           return;
         }
-        if (!plan.showGift && !plan.showFeatures) return;
+        if (!plan.showGift || !notice.hasGift) return;
         offeredForRef.current = userId;
-        const gift = plan.showGift && notice.hasGift ? notice : undefined;
-        setOffer({ userId, showFeatures: plan.showFeatures, ...(gift ? { gift } : {}), ...(notice.hasGift ? { ackGrantId: notice.grantId } : {}) });
-        if (notice.hasGift) refreshBalance();
+        setOffer({ userId, gift: notice });
+        refreshBalance();
       }).catch((error: unknown) => console.warn("[task-gift] status check failed:", error))
         .finally(() => { if (requestRef.current?.request === request) requestRef.current = null; });
       requestRef.current = { userId, request };
@@ -88,15 +86,10 @@ export function TaskTokenGiftPromptHost() {
   }, [clients, dispatch, offer, ready, state.account.userId]);
 
   if (!offer || offer.userId !== state.account.userId) return null;
-  return <TaskTokenGiftDialog gift={offer.gift} showFeatures={offer.showFeatures}
+  return <TaskTokenGiftDialog gift={offer.gift}
     onClose={() => {
       setOffer(null);
-      if (offer.showFeatures) window.localStorage.setItem(featureAnnouncementSeenKey(offer.userId), "1");
-      const grantId = offer.gift?.grantId ?? offer.ackGrantId;
-      if (grantId) {
-        void clients?.account.ackTaskTokenGift({ grantId })
-          .catch((error: unknown) => console.warn("[task-gift] acknowledgement failed:", error));
-      }
-    }}
-    onFeaturesCompleted={() => window.localStorage.setItem(featureAnnouncementSeenKey(offer.userId), "1")} />;
+      void clients?.account.ackTaskTokenGift({ grantId: offer.gift.grantId })
+        .catch((error: unknown) => console.warn("[task-gift] acknowledgement failed:", error));
+    }} />;
 }
