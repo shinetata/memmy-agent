@@ -437,6 +437,31 @@ describe("memmy resume hook stop capture", () => {
       await close(server);
     }
   }, 30000);
+
+  it("starts a session within the lifecycle budget when the memory service does not answer", async () => {
+    tempDir = mkdtempSync(join(tmpdir(), "memmy-slow-memory-hook-"));
+    // The memory service accepts the request and never answers: the hook must give up after its budget.
+    const server = createServer(() => undefined);
+    await listen(server);
+    try {
+      const port = (server.address() as { port: number }).port;
+      const hookScriptPath = installHookFixture(tempDir, "claude_code", "claude-code", `http://127.0.0.1:${port}`, runtimeAsset);
+      const startedAt = Date.now();
+      const result = await runHook(hookScriptPath, {
+        hook_event_name: "SessionStart",
+        session_id: "host-session",
+        cwd: tempDir,
+      });
+      const elapsedMs = Date.now() - startedAt;
+
+      expect(result.status).toBe(0);
+      expect(result.stderr).toBe("");
+      // Within the 10s kill timer of runHook, and well under the 45s request timeout.
+      expect(elapsedMs).toBeLessThan(8_000);
+    } finally {
+      await close(server);
+    }
+  }, 30000);
 });
 
 function installHookFixture(
