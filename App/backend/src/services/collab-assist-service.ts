@@ -23,7 +23,19 @@ import type { AssistStep } from "./assist/acp-client.js";
 import { AcpError } from "./assist/acp-client.js";
 import { assistAgentName, MEMMY_SOURCE_ID } from "./assist/recipes.js";
 import { ASSIST_RESULT_FORMAT, assistPrompt, parseResultItems, replyWithoutItems } from "./assist/prompt.js";
+import { redactSecrets, redactSteps, redactTranscript, type RedactableTranscriptItem } from "./assist/redact.js";
 import { readRequesterRecord, sliceRequesterRecord, type RequesterSource } from "./assist/requester-record.js";
+import type { AssistReviewer } from "./assist/review.js";
+import {
+  assistBoundaryPrompt,
+  executorReviewDecision,
+  requesterReviewDecision,
+  toAssistSafety,
+  type AssistSafety,
+  type ExecutorCheck,
+  type RequesterCheck,
+  type SkippedOperation
+} from "./assist/safety.js";
 import {
   ASSIST_DELIVERY_BYTES,
   ASSIST_PROMPT_BYTES,
@@ -155,6 +167,11 @@ export interface AssistRequest {
   decidedMinutes: number | null;
   /** 发起方第一次收到结果的时间。 */
   deliveredAt: string | null;
+  /**
+   * 安全检查：发起方发出前那次（requester）、执行方收到后那次（executor）、执行时跳过的操作（skipped）
+   * 与回传前隐藏的密钥处数（redacted）。旧请求没有它，按 null 读。
+   */
+  safety?: AssistSafety | null;
   /**
    * 执行方此刻不在线（她的 Memmy 没有运行或没有登录）：只在请求还在等她处理时可能为 true。
    * 旧云端不给在线状态时为 false，按在线处理。
@@ -310,7 +327,20 @@ export interface AssistRunner {
     /** Memmy 执行时，这一轮实际注入系统提示词的格式要求。 */
     onPromptContext?: (context: string) => void;
     onSession: (sessionId: string) => void;
-  }): Promise<{ reply: string; steps: AssistStep[]; transcript?: AssistTranscriptItem[]; sessionId: string | null }>;
+    /**
+     * 这次执行对敏感操作的策略：`deny` 是限时授权自动开始的（一律不执行），`allow` 是她在弹窗里点过允许的。
+     * 外部 Agent 按它回答批准请求，Memmy 自己按它在工具执行前拦下这一步。
+     */
+    approval?: "deny" | "allow";
+    /** 按规则跳过、没有执行的操作：边发生边记，随结果回传。 */
+    onSkipped?: (skipped: SkippedOperation) => void;
+  }): Promise<{
+    reply: string;
+    steps: AssistStep[];
+    transcript?: AssistTranscriptItem[];
+    skipped?: SkippedOperation[];
+    sessionId: string | null;
+  }>;
 }
 
 /** 打开一次协助：完整会话，加上双方在这台电脑上能打开的任务。 */
@@ -367,6 +397,13 @@ export interface CollabAssistServiceOptions {
   pollIntervalMs?: number;
   /** 每一步向云端追加的最小间隔，默认 1.5 秒：步骤是给人看的摘要，不必逐字同步。 */
   progressIntervalMs?: number;
+  /**
+   * 两次审查（见 ./assist/review）：发起方发出前一次、执行方收到后一次，都用本机账号的 Agent 任务模型。
+   * 不给时视为「没能检查」——发起方照常发送，执行方那边改成要她看过再决定。
+   */
+  reviewer?: AssistReviewer | null;
+  /** 某个执行方在协助执行时会不会对危险操作发批准请求（见 ./assist/recipes 的 assistAsksForApproval）。 */
+  agentAsksForApproval?: (sourceId: string) => boolean;
 }
 
 const DEFAULT_POLL_MS = 5_000;
@@ -424,6 +461,21 @@ interface LocalState {
    * 结果回来、而 Agent 还没取走时，由 Memmy 通知用户。Memmy 任务里发出的由 {@link origins} 送回任务，不在这里。
    */
   notices?: Record<string, AssistNotice>;
+  /** 本机做过的安全检查与执行策略：请求 id → 结论。只留最近的一些，早已结束的不必一直留着。 */
+  safety?: Record<string, AssistLocalSafety>;
+}
+
+/**
+ * 本机记下的协助检查与执行策略：请求 id → 执行方那次审查的结论与这次执行怎么开始的。
+ * 策略只在执行时读一次；续跑、重启后取不到时按 `deny` 处理（见 execute）。
+ */
+interface AssistLocalSafety {
+  /** 这次执行是怎么开始的：限时授权自动开始是 deny，她在弹窗里点允许是 allow。 */
+  approval?: "deny" | "allow";
+  /** 执行方那次审查的时间：同一请求只审一次，避免每次轮询重复调用模型。 */
+  reviewedAt?: string;
+  /** 第二次审查识别出的敏感操作：她点允许时列进执行边界。 */
+  allowed?: string[];
 }
 
 interface AssistNotice {
@@ -539,7 +591,12 @@ export interface CollabAssistService {
 }
 
 export class AssistError extends Error {
-  constructor(readonly code: "unauthorized" | "not_found" | "invalid_argument" | "conflict" | "forbidden" | "internal", message: string) {
+  constructor(
+    readonly code:
+      | "unauthorized" | "not_found" | "invalid_argument" | "conflict" | "forbidden" | "internal"
+      | "collab_assist_safety_rejected",
+    message: string
+  ) {
     super(message);
     this.name = "AssistError";
   }
@@ -642,6 +699,7 @@ export function toAssistRequest(value: unknown): AssistRequest {
     autoRun: raw.autoRun === true,
     decidedMinutes: typeof raw.decidedMinutes === "number" ? raw.decidedMinutes : null,
     deliveredAt: nullableText(raw.deliveredAt),
+    safety: toAssistSafety(raw.safety),
     executorOffline: raw.executorOnline === false,
     waitingSeconds: typeof raw.waitingSeconds === "number" ? raw.waitingSeconds : null,
     // 会话内容只在打开一次协助时返回；列表里没有这些键，不补空值，免得界面以为「有过但是空的」。
@@ -850,7 +908,8 @@ export function createCollabAssistService(options: CollabAssistServiceOptions): 
         ...(parsed.origins && typeof parsed.origins === "object" ? { origins: { ...parsed.origins } } : {}),
         ...(parsed.tasks && typeof parsed.tasks === "object" ? { tasks: { ...parsed.tasks } } : {}),
         ...(parsed.records && typeof parsed.records === "object" ? { records: { ...parsed.records } } : {}),
-        ...(parsed.notices && typeof parsed.notices === "object" ? { notices: { ...parsed.notices } } : {})
+        ...(parsed.notices && typeof parsed.notices === "object" ? { notices: { ...parsed.notices } } : {}),
+        ...(parsed.safety && typeof parsed.safety === "object" ? { safety: { ...parsed.safety } } : {})
       };
     } catch {
       state = { ...EMPTY_STATE, sessions: {} };
@@ -900,6 +959,8 @@ export function createCollabAssistService(options: CollabAssistServiceOptions): 
     const projectId = await projectIdOf(input.project);
     // 续跑时给的是上一次请求的 id：Agent 手里多半是命令行显示的短 id，先换成完整 id。
     const previous = input.thread ? await resolveRequestId(input.thread) : undefined;
+    // 发起方在自己电脑上做的那次审查：请求写清楚了才发出去，没写清楚直接告诉 Agent 要怎么改。
+    const requesterSafety = await reviewBeforeSending(input);
     const data = await cloud(`/projects/${encodeURIComponent(projectId)}/assist/requests`, {
       method: "POST",
       body: {
@@ -910,7 +971,8 @@ export function createCollabAssistService(options: CollabAssistServiceOptions): 
         ...(input.attachments?.length ? { attachments: input.attachments } : {}),
         ...(previous ? { thread: previous } : {}),
         ...(input.via ? { via: input.via } : {}),
-        ...(input.sourceTask ? { sourceTask: input.sourceTask } : {})
+        ...(input.sourceTask ? { sourceTask: input.sourceTask } : {}),
+        ...(requesterSafety ? { safety: { requester: requesterSafety } } : {})
       }
     });
     const request = toAssistRequest(data);
@@ -946,6 +1008,99 @@ export function createCollabAssistService(options: CollabAssistServiceOptions): 
       ? `请告诉用户：这一轮里你与 Agent 的对话、工具调用与输出，${executor}也能在协助会话里看到。`
       : "";
     return { request, threadId: request.threadId, text: `${sent}${visible}${next}`, activeGrant };
+  }
+
+  /**
+   * 发起方发出前的那次审查：替发起人确认请求写清楚了。
+   *
+   * <p>有没写清楚的敏感操作、或请求里有疑似密钥时不发送：把「怎么改」直接告诉发起方的 Agent，它改完再发。
+   * 模型不可用、超时、返回解析不了时照常发送，带 `{status:"unavailable"}`——执行方不依赖这次结论。</p>
+   */
+  async function reviewBeforeSending(input: {
+    title: string;
+    reason?: string;
+    items: string[];
+    attachments?: Array<{ name: string; content: string }>;
+  }): Promise<RequesterCheck | null> {
+    if (!options.reviewer) return null;
+    const result = await options.reviewer.reviewRequester({
+      // 请求正文里称呼的是发起人本人：这次审查跑在发起人自己的电脑上。
+      requesterName: "发起人本人",
+      title: input.title,
+      reason: input.reason ?? "",
+      items: input.items,
+      attachments: (input.attachments ?? []).map((item) => ({ name: item.name, content: item.content }))
+    }).catch(() => null);
+    if (!result) return { status: "unavailable" };
+    const decision = requesterReviewDecision(result);
+    if (decision.refusal) throw new AssistError("collab_assist_safety_rejected", decision.refusal);
+    return decision.safety;
+  }
+
+  /**
+   * 执行方收到请求后的那次审查：替执行人把关。同一请求只审一次（结论记在本机），轮询不会重复调用模型。
+   *
+   * <p>结论写回云端 `…/review`，弹窗与看板据此说明为什么需要她看过。返回「这次能不能自动执行」
+   * 与它识别出的敏感操作（她在弹窗里点允许后列进执行边界）。</p>
+   */
+  async function reviewIncoming(request: AssistInboxItem): Promise<{ autoRun: boolean; allowed: string[] } | null> {
+    if (!options.reviewer) return null;
+    const current = await loadState();
+    const known = current.safety?.[request.id];
+    if (known?.reviewedAt) return { autoRun: false, allowed: known.allowed ?? [] };
+    // 附件正文只有读详情才带；读不到时按收件箱里能看到的部分审（请求仍然会被审成「需要确认」）。
+    const detail = await readRequest(request.id, { withAttachments: true }).catch(() => null);
+    const content = detail ?? request;
+    const previousSkipped = await earlierSkipped(content);
+    const review = await options.reviewer.reviewExecutor({
+      requesterName: request.requester.name,
+      projectName: request.projectName,
+      title: content.title,
+      reason: content.reason,
+      items: content.items,
+      attachments: (content.attachments ?? [])
+        .filter((item) => typeof item.content === "string")
+        .map((item) => ({ name: item.name, content: item.content! })),
+      ...(content.safety?.requester?.declared ? { declared: content.safety.requester.declared } : {}),
+      ...(previousSkipped.length ? { previousSkipped } : {})
+    }).catch(() => null);
+    const agent = request.grantAgent ?? request.lastAgent ?? MEMMY_SOURCE_ID;
+    const decision = executorReviewDecision({
+      review,
+      previousSkipped,
+      agentName: assistAgentName(agent),
+      asksForApproval: options.agentAsksForApproval?.(agent) ?? agent === MEMMY_SOURCE_ID,
+      granted: request.granted
+    });
+    const allowed = (review?.sensitive ?? []).map((item) => item.action);
+    await cloud(`/projects/${encodeURIComponent(request.projectId)}/assist/requests/${encodeURIComponent(request.id)}/review`, {
+      method: "POST",
+      body: { executor: decision.safety }
+    }).catch(() => undefined);
+    await patchLocalSafety(request.id, { reviewedAt: now().toISOString(), allowed });
+    return { autoRun: decision.autoRun, allowed };
+  }
+
+  /** 同一次排查里前几次请求被跳过的操作：执行边界与「上次跳过了什么」都用它。取不到时为空。 */
+  async function earlierSkipped(request: AssistRequest): Promise<SkippedOperation[]> {
+    if (request.attempt <= 1 || !request.threadId) return [];
+    const data = await cloud(
+      `/projects/${encodeURIComponent(request.projectId)}/assist/threads/${encodeURIComponent(request.threadId)}`
+    ).catch(() => null);
+    if (!data) return [];
+    return toAssistThread(data.thread).requests
+      .filter((item) => item.attempt < request.attempt)
+      .flatMap((item) => item.safety?.skipped ?? []);
+  }
+
+  /** 本机记下的检查与执行策略：请求 id → 结论，只留最近的 500 条。 */
+  async function patchLocalSafety(requestId: string, update: AssistLocalSafety): Promise<void> {
+    const current = await loadState();
+    const safety = { ...(current.safety ?? {}) };
+    safety[requestId] = { ...(safety[requestId] ?? {}), ...update };
+    const keys = Object.keys(safety);
+    for (const key of keys.slice(0, Math.max(0, keys.length - MAX_LOCAL_SAFETY))) delete safety[key];
+    await saveState({ ...current, safety });
   }
 
   /**
@@ -1151,7 +1306,28 @@ export function createCollabAssistService(options: CollabAssistServiceOptions): 
     };
   }
 
-  async function decide(input: { requestId: string; action: "allow" | "reject"; agent?: string; scope?: AssistScope; minutes?: number }): Promise<AssistRequest> {
+  /**
+   * 她在授权弹窗里点了允许：这次执行对 Agent 的批准请求回答「允许」，并把第二次审查识别出的敏感操作
+   * 列进执行边界。拒绝时不需要记策略。
+   */
+  async function decide(input: {
+    requestId: string;
+    action: "allow" | "reject";
+    agent?: string;
+    scope?: AssistScope;
+    minutes?: number;
+  }): Promise<AssistRequest> {
+    return decideWithApproval(input, "allow");
+  }
+
+  /**
+   * 决定的实际落点。`approval` 记在本机：`deny` 是限时授权自动开始的那次（Agent 请求批准时一律不允许），
+   * `allow` 是她点过允许的那次。续跑与重启取不到时按 `deny` 处理。
+   */
+  async function decideWithApproval(
+    input: { requestId: string; action: "allow" | "reject"; agent?: string; scope?: AssistScope; minutes?: number },
+    approval: "deny" | "allow"
+  ): Promise<AssistRequest> {
     const request = await readRequest(input.requestId);
     const data = await cloud(`/projects/${encodeURIComponent(request.projectId)}/assist/requests/${encodeURIComponent(input.requestId)}/decision`, {
       method: "POST",
@@ -1167,7 +1343,10 @@ export function createCollabAssistService(options: CollabAssistServiceOptions): 
       ? toAssistRequest(data.request)
       : { ...request, status: "running" as AssistStatus, agent: input.agent ?? request.agent, scope: input.scope ?? request.scope };
     // 允许之后立刻开跑：界面点完「允许」就看到执行过程，不必等下一个轮询周期。
-    if (input.action === "allow") void startExecution(decided);
+    if (input.action === "allow") {
+      await patchLocalSafety(request.id, { approval });
+      void startExecution(decided);
+    }
     return decided;
   }
 
@@ -1623,6 +1802,17 @@ export function createCollabAssistService(options: CollabAssistServiceOptions): 
       .map((item) => `第 ${item.attempt} 次：${item.reply.slice(0, 200)}`);
   }
 
+  /** 上传前隐藏执行过程里的密钥；返回替换后的过程与替换处数。 */
+  function cleanTranscript(items: AssistTranscriptItem[]): { items: AssistTranscriptItem[]; count: number } {
+    const result = redactTranscript(items as unknown as RedactableTranscriptItem[]);
+    return { items: result.items as unknown as AssistTranscriptItem[], count: result.count };
+  }
+
+  /** 摘要步骤同样过一遍：它常带着命令与一行输出。 */
+  function cleanSteps(items: AssistStep[]): { steps: AssistStep[]; count: number } {
+    return redactSteps(items);
+  }
+
   async function execute(requestId: string): Promise<void> {
     const state_ = await loadState();
     const execution = executions.get(requestId);
@@ -1644,6 +1834,16 @@ export function createCollabAssistService(options: CollabAssistServiceOptions): 
       .catch(() => null)
       ?? home;
 
+    // 这次执行怎么开始的：限时授权自动开始是 deny，她点过允许是 allow；取不到（续跑、重启）按 deny。
+    const localSafety = (await loadState()).safety?.[requestId] ?? null;
+    const approval: "deny" | "allow" = localSafety?.approval === "allow" ? "allow" : "deny";
+    // 执行边界里允许的敏感操作：她点允许时列出第二次审查识别出的那些，自动执行时写「无」。
+    const allowedOperations = approval === "allow" ? localSafety?.allowed ?? [] : [];
+    // 按规则跳过、没有执行的操作：边发生边记，随结果回传；连接里没有对应条目的也记。
+    const skipped: SkippedOperation[] = [];
+    /** 回传前隐藏了几处疑似密钥：每一次替换都累加，已经替换过的地方不会再计。 */
+    let redactedCount = 0;
+
     const progressPath = `/projects/${encodeURIComponent(request.projectId)}/assist/requests/${encodeURIComponent(requestId)}/progress`;
     let lastPush = 0;
     let pushedTranscript = "";
@@ -1662,6 +1862,13 @@ export function createCollabAssistService(options: CollabAssistServiceOptions): 
         return;
       }
       lastPush = at;
+      // 上传前先隐藏密钥：执行过程与摘要是执行方 Agent 的原始输出，里面可能有她的令牌与密码。
+      const cleaned = cleanTranscript(execution.transcript);
+      execution.transcript = cleaned.items;
+      redactedCount += cleaned.count;
+      const cleanedSteps = cleanSteps(execution.steps);
+      execution.steps = cleanedSteps.steps;
+      redactedCount += cleanedSteps.count;
       const transcript = fitTranscript(execution.transcript);
       const key = JSON.stringify(transcript);
       const body: Record<string, unknown> = { steps: execution.steps };
@@ -1688,7 +1895,9 @@ export function createCollabAssistService(options: CollabAssistServiceOptions): 
         items: request.items,
         ...(earlier.length ? { earlier } : {}),
         ...(prepared.files.length ? { attachments: prepared.files } : {}),
-        ...(prepared.dir ? { attachmentsDirectory: prepared.dir } : {})
+        ...(prepared.dir ? { attachmentsDirectory: prepared.dir } : {}),
+        // 执行边界：请求正文保持原样，这段追加在正文之后、结果写法之前。
+        boundary: assistBoundaryPrompt(allowedOperations)
       }, agent === MEMMY_SOURCE_ID ? { envelope: { requestId: request.id, via: request.via, attempt: request.attempt } } : {});
     } catch (error) {
       // 附件没准备好就不开始执行：直接告诉发起方原因，不让请求停在「执行中」。
@@ -1724,6 +1933,10 @@ export function createCollabAssistService(options: CollabAssistServiceOptions): 
         request,
         ...(previousSession ? { sessionId: previousSession } : {}),
         signal: controller.signal,
+        approval,
+        onSkipped: (item) => {
+          if (!skipped.some((existing) => existing.title === item.title && existing.detail === item.detail)) skipped.push(item);
+        },
         onStep: (step) => {
           execution.steps.push(step);
           void pushProgress();
@@ -1752,16 +1965,22 @@ export function createCollabAssistService(options: CollabAssistServiceOptions): 
         }
       });
       execution.steps = result.steps.length ? result.steps : execution.steps;
+      for (const item of result.skipped ?? []) {
+        if (!skipped.some((existing) => existing.title === item.title && existing.detail === item.detail)) skipped.push(item);
+      }
       // 回复另有一段展示：过程末尾那段与回复相同的回答不再列进过程。
       execution.transcript = withoutFinalReply(result.transcript ?? execution.transcript, result.reply);
       await pushProgress(true);
       const items = parseResultItems(result.reply);
       await finish(request, {
         status: "done",
-        reply: replyWithoutItems(result.reply) || result.reply,
+        // 回复同样要过一遍：它常带着命令输出，里面可能有令牌。
+        reply: redactSecrets(replyWithoutItems(result.reply) || result.reply).text,
         items,
         failure: null,
-        transcript: execution.transcript
+        transcript: execution.transcript,
+        skipped,
+        redacted: redactedCount
       }).catch((error: unknown) => {
         // 发起方刚好在这一刻停了：云端已经结束这次请求，安静收尾，过程由 finally 照常上传，不重试。
         if (!alreadyEnded(error)) throw error;
@@ -1783,7 +2002,15 @@ export function createCollabAssistService(options: CollabAssistServiceOptions): 
           .catch(() => undefined);
       }
       // 停止由云端那一步写成 STOPPED；其余失败在这里回传原因，双方都能看到。
-      await finish(request, { status: stopped ? null : "failed", reply: "", items: [], failure, transcript: execution.transcript }).catch(() => undefined);
+      await finish(request, {
+        status: stopped ? null : "failed",
+        reply: "",
+        items: [],
+        failure,
+        transcript: execution.transcript,
+        skipped,
+        redacted: redactedCount
+      }).catch(() => undefined);
     } finally {
       if (pushTimer) clearTimeout(pushTimer);
       // 外部 Agent 只认自己的 cwd：执行结束就把附件目录删掉，不论成功或失败。
@@ -1814,6 +2041,10 @@ export function createCollabAssistService(options: CollabAssistServiceOptions): 
       items: Array<{ key: string; value: string }>;
       failure: string | null;
       transcript?: AssistTranscriptItem[];
+      /** 按协助规则跳过、没有执行的操作：与结果一起上传，双方都能看到。 */
+      skipped?: SkippedOperation[];
+      /** 回传前隐藏了几处疑似密钥。 */
+      redacted?: number;
     }
   ): Promise<void> {
     if (!result.status) return;
@@ -1824,7 +2055,9 @@ export function createCollabAssistService(options: CollabAssistServiceOptions): 
         ...(result.reply ? { reply: result.reply } : {}),
         ...(result.items.length ? { items: result.items } : {}),
         ...(result.failure ? { failure: result.failure } : {}),
-        ...(result.transcript?.length ? { transcript: fitTranscript(result.transcript) } : {})
+        ...(result.transcript?.length ? { transcript: fitTranscript(result.transcript) } : {}),
+        ...(result.skipped?.length ? { skipped: result.skipped } : {}),
+        ...(result.redacted ? { redacted: result.redacted } : {})
       }
     });
   }
@@ -1869,10 +2102,23 @@ export function createCollabAssistService(options: CollabAssistServiceOptions): 
         controller.abort();
       }
       for (const request of requests) {
-        // 限时授权还在：不必再问她，直接由她选定的 Agent 执行。不带时长，云端按原来的到期时间计，不顺延；
-        // 恰好在这一刻到期时云端拒绝，请求留在收件箱里等她确认。
+        // 限时授权还在：先由她的 Memmy 独立检查一次（同一请求只审一次），结论允许自动执行才直接跑。
+        // 检查要求她先看过、或没能完成时留在收件箱，等她在授权弹窗里决定。
         if (request.status === "pending" && request.granted && request.grantAgent) {
-          await decide({ requestId: request.id, action: "allow", agent: request.grantAgent, scope: "timed" }).catch(() => undefined);
+          if (options.reviewer) {
+            const review = await reviewIncoming(request).catch(() => null);
+            if (!review?.autoRun) continue;
+          }
+          // 自动开始的这次：Agent 请求批准时一律不允许，跳过的操作随结果回传。
+          await decideWithApproval(
+            { requestId: request.id, action: "allow", agent: request.grantAgent, scope: "timed" },
+            "deny"
+          ).catch(() => undefined);
+          continue;
+        }
+        if (request.status === "pending") {
+          // 没有限时授权的请求同样审一次：授权弹窗里要用这次结论说明为什么需要她确认。
+          await reviewIncoming(request).catch(() => undefined);
           continue;
         }
         if (request.status === "running") await startExecution(request);
@@ -2007,6 +2253,9 @@ function latestOf(left: string | null, right: string | null): string | null {
   return left > right ? left : right;
 }
 
+/** 本机最多记这么多条协助检查与执行策略：早已结束的不必一直留着。 */
+const MAX_LOCAL_SAFETY = 500;
+
 /** 本机最多留这么多条发起方记录绑定：早已传完的不必一直留着。 */
 const MAX_RECORD_BINDINGS = 200;
 
@@ -2112,6 +2361,8 @@ export function resultText(request: AssistRequest, at: Date = new Date()): strin
       for (const item of request.resultItems) lines.push(`${item.key}：${item.value}`);
     }
     for (const file of request.files) lines.push(`文件：${file.name}（${file.size}）`);
+    const skipped = skippedLines(request);
+    if (skipped) lines.push("", skipped);
     lines.push("", `同一次排查需要追问时，用 memmy-project assist ask --continue ${shortId(request.id)} 发出，${executor}会在同一个会话里接着做。`);
     return lines.join("\n");
   }
@@ -2126,6 +2377,37 @@ export function resultText(request: AssistRequest, at: Date = new Date()): strin
   return statusText(request);
 }
 
+/**
+ * 执行方检查过之后要她确认时的一句话：说明为什么需要她看过。`autoRun` 仍为 true（检查结论是「可以自动执行」）、
+ * 或根本没有这次结论时不返回，界面与命令行按原来说明。
+ */
+export function reviewConfirmText(request: AssistRequest): string | null {
+  const executor = request.safety?.executor;
+  if (!executor || executor.status === "auto" || request.autoRun) return null;
+  if (request.status !== "pending") return null;
+  const name = request.executor.name;
+  const reason = executor.reason
+    || (executor.status === "unavailable" ? "未能完成安全检查" : "涉及需要你看过的操作");
+  return `${name}的 Memmy 检查后，这次请求需要${name}确认：${reason}。等待${name}授权。`;
+}
+
+/**
+ * 结果里「按协助规则没有执行」的那一段：列出被跳过的操作，并说明确实需要时怎么再发一次。
+ * 没有跳过的操作时返回空字符串。
+ */
+export function skippedLines(request: AssistRequest): string {
+  const skipped = request.safety?.skipped ?? [];
+  if (!skipped.length) return "";
+  const executor = request.executor.name;
+  const lines = ["以下操作按协助规则没有执行："];
+  for (const item of skipped) lines.push(`- ${item.title}${item.detail ? `（${item.detail}）` : ""}`);
+  lines.push(
+    `如果确实需要，先告诉用户，征得同意后用 memmy-project assist ask --continue ${shortId(request.id)} 再发一次，`
+      + `并在要做的事里写明这项操作；${executor}授权后才会执行。`
+  );
+  return lines.join("\n");
+}
+
 /** 还没结束时的一句话：谁在做、第几次。 */
 export function statusText(request: AssistRequest, at: Date = new Date()): string {
   const name = request.agent ? assistAgentName(request.agent) : "Agent";
@@ -2136,6 +2418,9 @@ export function statusText(request: AssistRequest, at: Date = new Date()): strin
         const agent = request.grant?.agent ? assistAgentName(request.grant.agent) : "Agent";
         return `按${request.executor.name}给你的限时授权，等待${request.executor.name}的 ${agent} 开始执行（第 ${request.attempt} 次）${offlineNote(request)}`;
       }
+      // 她的 Memmy 检查过之后认为要她确认：说明为什么，别让发起方以为还在等普通授权。
+      const review = reviewConfirmText(request);
+      if (review) return `${review}（第 ${request.attempt} 次）${offlineNote(request)}`;
       return `等待${request.executor.name}选择执行的 Agent 并授权（第 ${request.attempt} 次）${offlineNote(request)}`;
     case "confirm":
       return `等待${request.executor.name}确认这次请求（第 ${request.attempt} 次）${offlineNote(request)}`;
@@ -2215,6 +2500,8 @@ export function assistResultMessage(request: AssistRequest, at: Date = new Date(
     if (request.resultItems.length || request.files.length) body.push("", "逐项：");
     for (const item of request.resultItems) body.push(`- ${item.key}：${item.value}`);
     for (const file of request.files) body.push(`- 文件：${file.name}（${file.size}）`);
+    const skipped = skippedLines(request);
+    if (skipped) body.push("", skipped);
     body.push("", `请结合这份结果，接着分析这条任务里的问题，回复时注明信息来自${executor}的电脑。需要再查时，用 memmy-project assist ask --continue ${shortId(request.id)} 追问一次。`);
   } else {
     body.push(`协助请求「${request.title}」没有完成：${resultText(request, at)}`);
