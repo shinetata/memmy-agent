@@ -37,6 +37,11 @@ import {
   sharedProjectFor,
   subscribeCollabProjects
 } from "../app/collab-projects-store.js";
+import {
+  getLaunchAuthorizationState,
+  retryLaunchAuthorization,
+  subscribeLaunchAuthorization
+} from "../app/collab-launch-authorization.js";
 import type { MemmyAgentProject } from "../api/memmy-agent-client.js";
 import { openAgentTaskInChat } from "../app/open-agent-task.js";
 import { Memmy } from "../components/mascot/memmy.js";
@@ -526,6 +531,15 @@ const CollabBoard = memo(function CollabBoard(props: {
    */
   const [agentAccess, setAgentAccess] = useState<CollabAgentAccessView | null>(null);
   const [accessOpen, setAccessOpen] = useState(false);
+  /**
+   * 大卡上的「新建项目」会在后台发起授权：进行中、或已经下发过（哪怕个别 Agent 没装上），看板都不再问一次。
+   * 这里订阅的是模块里的状态，大卡卸载之后它还在继续。
+   */
+  const launchAuthorization = useSyncExternalStore(
+    subscribeLaunchAuthorization,
+    getLaunchAuthorizationState,
+    getLaunchAuthorizationState
+  );
   /** 开启共享回到看板时手动触发一次状态重读。 */
   const [accessCheckKey, setAccessCheckKey] = useState(0);
   /** 同一次进入看板只主动问一次，弹窗关掉后靠设置或点「关联任务」再授权。 */
@@ -679,6 +693,21 @@ const CollabBoard = memo(function CollabBoard(props: {
     void refreshAgentAccess();
   }, [refreshAgentAccess, sharedId, accessCheckKey]);
 
+  /** 后台授权有结果时重读一次：它决定「关联任务」是列任务还是给授权说明。 */
+  useEffect(() => {
+    if (launchAuthorization.inFlight) return;
+    if (!launchAuthorization.granted && launchAuthorization.failure === null) return;
+    void refreshAgentAccess();
+  }, [launchAuthorization, refreshAgentAccess]);
+
+  /**
+   * 后台授权已经发起：进行中视为已授权，下发之后（无论个别成败）也不再问，装失败的由下面的提示条负责重试。
+   * 大卡自己已经拿到过一次授权，再弹这个询问只会让人以为刚才那一下没生效。
+   */
+  const launchAuthorizationSettled = launchAuthorization.inFlight
+    || launchAuthorization.granted
+    || launchAuthorization.failure !== null;
+
   /**
    * 两个询问时机：刚开启共享后回到看板（创建者），以及加入他人项目的人第一次打开这个项目的看板。
    * 只要还没授权、也没在这里问过，就弹一次；选「暂不安装」之后不再弹。
@@ -686,6 +715,7 @@ const CollabBoard = memo(function CollabBoard(props: {
    */
   useEffect(() => {
     if (!agentAccess || agentAccess.granted || agentAccess.askedInProject) return;
+    if (launchAuthorizationSettled) return;
     if (accessAskedRef.current) return;
     if (accessPromptHeld) return;
     const joined = shared !== null && shared.role !== "owner";
@@ -693,7 +723,7 @@ const CollabBoard = memo(function CollabBoard(props: {
     accessAskedRef.current = true;
     askAccessAfterShareRef.current = false;
     setAccessOpen(true);
-  }, [agentAccess, shared, accessPromptHeld]);
+  }, [agentAccess, launchAuthorizationSettled, shared, accessPromptHeld]);
 
   /** 关掉授权弹窗：选了「暂不安装」也记下已询问，之后只从设置里授权。 */
   const closeAccessDialog = useCallback((granted: boolean) => {
@@ -1464,6 +1494,23 @@ const CollabBoard = memo(function CollabBoard(props: {
                 {notice !== null ? (
                   <div className={styles.cloudNotice} role="alert">
                     <span>{notice}</span>
+                  </div>
+                ) : null}
+                {/* 大卡打开项目时在后台做的授权有 Agent 没装上：留一条可重试的提示，成功后自己消失。 */}
+                {launchAuthorization.failure !== null ? (
+                  <div className={styles.cloudNotice} role="alert">
+                    <span>
+                      {launchAuthorization.failure.count === null
+                        ? t("collab.notice.agentAccessSome")
+                        : t("collab.notice.agentAccessPartial", { count: String(launchAuthorization.failure.count) })}
+                    </span>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => collab && retryLaunchAuthorization(collab)}
+                    >
+                      {t("collab.retry")}
+                    </Button>
                   </div>
                 ) : null}
                 {/* 只有已共享的项目才依赖云端；本地项目不提示云端异常，等开启共享时再报错。 */}

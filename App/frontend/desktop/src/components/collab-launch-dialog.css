@@ -21,9 +21,10 @@
   position: relative;
   width: min(1000px, calc(100vw - 36px));
   max-height: calc(100dvh - 36px);
-  overflow-y: auto;
+  /* 授权说明浮层从按钮右侧弹出，需要越过卡片边界：这里不能裁切。 */
+  overflow: visible;
   box-sizing: border-box;
-  padding: 34px 36px 26px;
+  padding: 34px 36px 34px;
   border-radius: 26px;
   background: var(--color-background-paper);
   color: var(--color-text-ink);
@@ -73,7 +74,6 @@
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 480px);
   min-height: 400px;
-  overflow: hidden;
 }
 
 .collab-launch-copy {
@@ -93,28 +93,34 @@
 }
 
 .collab-launch-text {
-  max-width: 372px;
+  max-width: 404px;
   margin: 0;
   color: color-mix(in srgb, var(--color-text-ink) 72%, var(--color-background-paper));
   font-size: 16px;
   line-height: 1.8;
 }
 
-.collab-launch-text + .collab-launch-text {
-  margin-top: 8px;
+/*
+ * 中文两端对齐：中英混排时每行宽度不同，左对齐会让右边缘参差；最后一行仍靠左。
+ * 英文保持左对齐，避免词间距被拉大。界面上方是应用自己的 `lang="en"`，所以看这一节自己的语言。
+ */
+.collab-launch-dialog[lang="zh-CN"] .collab-launch-text {
+  text-align: justify;
+  text-justify: inter-character;
 }
 
 .collab-launch-actions {
+  position: relative;
   display: flex;
   align-items: center;
-  gap: 10px;
-  margin-top: 18px;
+  gap: 8px;
+  margin-top: 22px;
 }
 
 .collab-launch-primary {
   min-width: 100px;
   min-height: 39px;
-  padding: 8px 16px;
+  padding: 8px 18px;
   border: 0;
   border-radius: 10px;
   background: var(--color-text-ink);
@@ -125,44 +131,76 @@
   cursor: pointer;
 }
 
-.collab-launch-primary:hover:not(:disabled) {
+.collab-launch-primary:hover {
   background: var(--color-action-sky);
   color: #fff;
 }
 
-.collab-launch-primary:disabled {
-  opacity: 0.55;
-  cursor: default;
+/* 按钮右侧的小问号与它的授权说明浮层 */
+.collab-launch-help-wrap {
+  position: relative;
+  display: inline-flex;
 }
 
-.collab-launch-retry {
-  min-height: 34px;
-  padding: 6px 14px;
-  border: 1px solid color-mix(in srgb, var(--color-border-stone) 82%, transparent);
-  border-radius: 9px;
-  background: var(--color-background-paper);
-  color: var(--color-text-ink);
-  font-family: inherit;
-  font-size: 13px;
-  font-weight: 600;
+.collab-launch-help {
+  display: inline-grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: color-mix(in srgb, var(--color-text-ink) 42%, var(--color-background-paper));
   cursor: pointer;
 }
 
-.collab-launch-retry:hover {
-  border-color: var(--color-action-sky);
+.collab-launch-help:hover,
+.collab-launch-help[aria-expanded="true"] {
   color: var(--color-action-sky-hover);
+  background: color-mix(in srgb, var(--color-accent-mint) 55%, var(--color-background-paper));
 }
 
-.collab-launch-status {
-  max-width: 372px;
-  margin: 10px 0 0;
-  color: color-mix(in srgb, var(--color-text-ink) 62%, var(--color-background-paper));
-  font-size: 13px;
+.collab-launch-popover {
+  position: absolute;
+  left: calc(100% + 10px);
+  top: -20px;
+  z-index: 2;
+  width: 350px;
+  box-sizing: border-box;
+  padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--color-border-stone) 80%, var(--color-background-paper));
+  border-radius: 12px;
+  background: var(--color-background-paper);
+  box-shadow: 0 12px 30px rgba(17, 29, 28, .13);
+  color: color-mix(in srgb, var(--color-text-ink) 70%, var(--color-background-paper));
+  font-size: 12.5px;
   line-height: 1.6;
 }
 
-.collab-launch-status--error {
-  color: color-mix(in srgb, var(--color-status-error) 82%, var(--color-text-ink));
+.collab-launch-popover b {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--color-text-ink);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.collab-launch-popover ul {
+  margin: 0;
+  padding-left: 16px;
+  list-style: disc;
+}
+
+.collab-launch-popover li {
+  margin: 1px 0;
+}
+
+.collab-launch-popover__note {
+  margin: 8px 0 0;
+  padding-top: 8px;
+  border-top: 1px solid #eef3f2;
+  color: color-mix(in srgb, var(--color-text-ink) 55%, var(--color-background-paper));
 }
 
 .collab-launch-visual {
@@ -193,7 +231,7 @@
   flex-direction: column;
   align-items: stretch;
   gap: 14px;
-  width: min(100%, 352px);
+  width: min(100%, 360px);
   box-sizing: border-box;
   padding: 20px;
   border: 1px solid rgba(255, 255, 255, .72);
@@ -234,7 +272,21 @@
   margin: 0;
   color: var(--color-text-ink);
   font-size: 13px;
-  line-height: 1.65;
+  line-height: 1.7;
+}
+
+.collab-launch-chat__lead {
+  margin: 0;
+}
+
+.collab-launch-chat__agent ul {
+  margin: 6px 0 0;
+  padding-left: 16px;
+  list-style: disc;
+}
+
+.collab-launch-chat__agent li {
+  margin: 2px 0;
 }
 
 .collab-launch-visual__caption {
@@ -242,13 +294,6 @@
   font-size: 12px;
   font-weight: 650;
   text-shadow: 0 1px 3px rgba(16, 62, 66, .32);
-}
-
-.collab-launch-footnote {
-  margin: 18px 1px 0;
-  color: color-mix(in srgb, var(--color-text-ink) 64%, var(--color-background-paper));
-  font-size: 13px;
-  line-height: 1.65;
 }
 
 .collab-launch-dialog button:focus-visible {
@@ -307,8 +352,13 @@
     font-size: 22px;
   }
 
-  .collab-launch-copy p {
+  .collab-launch-text {
     font-size: 14px;
+  }
+
+  /* 窄窗口里浮层不能比窗口还宽，否则右侧被推出屏幕。 */
+  .collab-launch-popover {
+    width: min(350px, calc(100vw - 96px));
   }
 
   .collab-launch-visual {

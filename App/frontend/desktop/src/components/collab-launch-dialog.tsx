@@ -1,13 +1,16 @@
 /**
  * The one-time project-collaboration announcement: one page with the same shell and layout as the History
- * announcement, using a CSS conversation instead of an illustration. The primary button asks for the agent
- * authorization right here, so nobody has to go through the separate access dialog, and then opens the new-project
- * dialog with sharing already on.
+ * announcement, using a CSS conversation instead of an illustration.
+ *
+ * The button only opens the new-project dialog with sharing already on. On a computer that has not authorized yet, the
+ * same click also starts the authorization in the background (see `app/collab-launch-authorization.ts`): the card shows
+ * no progress and reports nothing, so all it keeps is a small question mark explaining what that click authorizes.
  */
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
 import { createPortal } from "react-dom";
-import { X } from "lucide-react";
-import type { CollabAgentAccessView, CollabAgentInstallResult, CollabClient } from "../api/collab-client.js";
+import { CircleHelp, X } from "lucide-react";
+import type { CollabClient } from "../api/collab-client.js";
+import { startLaunchAuthorization } from "../app/collab-launch-authorization.js";
 import { useTranslation } from "../i18n/use-translation.js";
 import { agentSourceDisplayName, agentSourceLogoUrl } from "../pages/agent-source-logos.js";
 import "./collab-launch-dialog.css";
@@ -17,11 +20,11 @@ const EXAMPLE_AGENT_SOURCE = "claude_code";
 
 export interface CollabLaunchDialogProps {
   onClose(): void;
-  /** Once authorization is settled: close the announcement and open the new-project dialog with sharing on. */
+  /** Close the announcement and open the new-project dialog with sharing on. */
   onCreateProject(): void;
   /**
-   * Authorizes and installs the collaboration components into the local agents. Absent in tests and previews without
-   * providers: the card then only offers the new-project button.
+   * The collaboration client. Absent in tests and previews without providers: the card then only opens the project,
+   * without the question mark and without authorizing anything.
    */
   collab?: CollabClient | null;
 }
@@ -29,15 +32,15 @@ export interface CollabLaunchDialogProps {
 export function CollabLaunchDialog(props: CollabLaunchDialogProps) {
   const { t, language } = useTranslation();
   const dialogRef = useRef<HTMLElement>(null);
+  const helpRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef(props.onClose);
   closeRef.current = props.onClose;
   const collab = props.collab ?? null;
 
-  const [access, setAccess] = useState<CollabAgentAccessView | null>(null);
-  const [loading, setLoading] = useState(collab !== null);
-  const [installing, setInstalling] = useState(false);
-  const [results, setResults] = useState<CollabAgentInstallResult[]>([]);
-  const [error, setError] = useState<string | null>(null);
+  const [granted, setGranted] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
+  const helpOpenRef = useRef(helpOpen);
+  helpOpenRef.current = helpOpen;
 
   useLayoutEffect(() => {
     const previous = document.activeElement as HTMLElement | null;
@@ -48,6 +51,12 @@ export function CollabLaunchDialog(props: CollabLaunchDialogProps) {
       if (event.key !== "Escape") return;
       event.preventDefault();
       event.stopPropagation();
+      // A capture-phase listener on the card closes it; the explanation on top of it goes first, so one Escape only
+      // closes the explanation and the next one closes the card.
+      if (helpOpenRef.current) {
+        setHelpOpen(false);
+        return;
+      }
       closeRef.current();
     };
     document.addEventListener("keydown", onKey, true);
@@ -58,89 +67,38 @@ export function CollabLaunchDialog(props: CollabLaunchDialogProps) {
     };
   }, []);
 
-  // Reads the current authorization once: it decides whether the card offers the authorization or the project.
+  // Reads the current authorization once: it decides whether the card explains the click that is about to authorize.
+  // Still reading, or unable to read, shows the question mark as well; authorizing twice does no harm.
   useEffect(() => {
-    if (!collab) {
-      setLoading(false);
-      return;
-    }
+    if (!collab) return;
     let cancelled = false;
-    setLoading(true);
     collab.getAgentAccess()
       .then((view) => {
-        if (cancelled) return;
-        setAccess(view);
-        setLoading(false);
+        if (!cancelled) setGranted(view.granted);
       })
-      .catch(() => {
-        if (!cancelled) setLoading(false);
-      });
+      .catch(() => undefined);
     return () => {
       cancelled = true;
     };
   }, [collab]);
 
-  const granted = access?.granted === true;
-  const canAuthorize = collab !== null;
-  const failed = results.filter((item) => !item.ok);
-  const doneCount = results.filter((item) => item.ok).length;
-  const nameSeparator = language === "en-US" ? ", " : "、";
-
-  async function grant() {
-    if (!collab || installing) return;
-    setInstalling(true);
-    setError(null);
-    try {
-      const result = await collab.setAgentAccess(true);
-      setAccess(result.view);
-      setResults(result.results);
-    } catch {
-      setError(t("collabLaunch.failed"));
-    } finally {
-      setInstalling(false);
-    }
-  }
-
-  async function retry() {
-    if (!collab || installing) return;
-    const pending = failed.map((item) => item.sourceId);
-    setInstalling(true);
-    setError(null);
-    try {
-      const result = await collab.installAgentAccess(pending);
-      setResults((current) => [...current.filter((item) => !pending.includes(item.sourceId)), ...result.results]);
-      setAccess(result.view);
-    } catch {
-      setError(t("collabLaunch.failed"));
-    } finally {
-      setInstalling(false);
-    }
-  }
-
-  /** The agents the authorization currently covers: enabled and available on this computer. */
-  const names = (access?.agents ?? [])
-    .filter((agent) => agent.available && agent.enabled)
-    .map((agent) => agent.name);
-  const nameList = names.join(nameSeparator);
-
-  const primaryLabel = !granted && canAuthorize
-    ? installing ? t("collabLaunch.authorizing") : t("collabLaunch.authorize")
-    : t("collabLaunch.create");
-
-  const footnote = granted
-    ? nameList
-      ? t("collabLaunch.footnoteGranted", { names: nameList })
-      : t("collabLaunch.footnoteGrantedPlain")
-    : access !== null && names.length === 0
-      ? t("collabLaunch.footnoteEmpty")
-      : nameList
-        ? t("collabLaunch.footnoteAgents", { names: nameList })
-        : t("collabLaunch.footnotePlain");
+  // Clicking anywhere outside the question mark and its explanation closes the explanation, the button included: the
+  // button toggles itself, so it must stay out of this.
+  useEffect(() => {
+    if (!helpOpen) return;
+    const onDown = (event: MouseEvent) => {
+      if (helpRef.current?.contains(event.target as Node)) return;
+      setHelpOpen(false);
+    };
+    document.addEventListener("click", onDown);
+    return () => document.removeEventListener("click", onDown);
+  }, [helpOpen]);
 
   if (typeof document === "undefined") return null;
 
   const logo = agentSourceLogoUrl(EXAMPLE_AGENT_SOURCE);
   const exampleAgent = agentSourceDisplayName(EXAMPLE_AGENT_SOURCE);
+  const explainAuthorization = collab !== null && !granted;
 
   return createPortal(
     <div
@@ -152,10 +110,12 @@ export function CollabLaunchDialog(props: CollabLaunchDialogProps) {
       <section
         ref={dialogRef}
         className="collab-launch-dialog"
+        // The app always runs under `lang="en"`: the card says which language it is written in, so the browser can
+        // space Chinese text and break English words correctly.
+        lang={language === "en-US" ? "en" : "zh-CN"}
         role="dialog"
         aria-modal="true"
         aria-labelledby="collab-launch-title"
-        aria-describedby="collab-launch-footnote"
         tabIndex={-1}
         onKeyDown={trapFocus}
       >
@@ -167,38 +127,43 @@ export function CollabLaunchDialog(props: CollabLaunchDialogProps) {
         <div className="collab-launch-card">
           <div className="collab-launch-copy">
             <h3>{t("collabLaunch.subtitle")}</h3>
-            <p id="collab-launch-body" className="collab-launch-text">{t("collabLaunch.description")}</p>
-            <p className="collab-launch-text">{t("collabLaunch.benefit")}</p>
+            <p className="collab-launch-text">{t("collabLaunch.description")}</p>
             <div className="collab-launch-actions">
               <button
                 className="collab-launch-primary"
                 type="button"
-                disabled={installing || (canAuthorize && loading)}
                 onClick={() => {
-                  if (!granted && canAuthorize) {
-                    void grant();
-                    return;
-                  }
+                  // Started before the card closes: nobody watches the installs, and the board reports what failed.
+                  if (explainAuthorization) startLaunchAuthorization(collab);
                   props.onCreateProject();
                 }}
               >
-                {primaryLabel}
+                {t("collabLaunch.create")}
               </button>
-              {failed.length && !installing ? (
-                <button className="collab-launch-retry" type="button" onClick={() => void retry()}>
-                  {t("collabLaunch.retry")}
-                </button>
+              {explainAuthorization ? (
+                <div className="collab-launch-help-wrap" ref={helpRef}>
+                  <button
+                    className="collab-launch-help"
+                    type="button"
+                    aria-label={t("collabLaunch.help")}
+                    aria-expanded={helpOpen}
+                    onClick={() => setHelpOpen((open) => !open)}
+                  >
+                    <CircleHelp size={16} aria-hidden="true" />
+                  </button>
+                  {helpOpen ? (
+                    <div className="collab-launch-popover" role="note">
+                      <b>{t("collabLaunch.helpTitle")}</b>
+                      <ul>
+                        <li>{t("collabLaunch.helpItem1")}</li>
+                        <li>{t("collabLaunch.helpItem2")}</li>
+                      </ul>
+                      <p className="collab-launch-popover__note">{t("collabLaunch.helpNote")}</p>
+                    </div>
+                  ) : null}
+                </div>
               ) : null}
             </div>
-            {error ? (
-              <p className="collab-launch-status collab-launch-status--error" role="alert">{error}</p>
-            ) : granted && results.length ? (
-              <p className="collab-launch-status" role="status">
-                {failed.length
-                  ? t("collabLaunch.partial", { done: String(doneCount), names: failed.map((item) => item.name).join(nameSeparator) })
-                  : t("collabLaunch.installed", { count: String(doneCount) })}
-              </p>
-            ) : null}
           </div>
           <div className="collab-launch-visual" aria-hidden="true">
             <div className="collab-launch-visual__glow" />
@@ -207,13 +172,19 @@ export function CollabLaunchDialog(props: CollabLaunchDialogProps) {
                 {logo ? <img className="collab-launch-example__logo" src={logo} alt="" /> : null}
                 <span>{exampleAgent}</span>
               </div>
-              <p className="collab-launch-chat__user">{t("collabLaunch.visualUser")}</p>
-              <p className="collab-launch-chat__agent">{t("collabLaunch.visualAgent")}</p>
+              <p className="collab-launch-chat__user">{t("collabLaunch.visualAsk")}</p>
+              <div className="collab-launch-chat__agent">
+                <p className="collab-launch-chat__lead">{t("collabLaunch.visualAnswer")}</p>
+                <ul>
+                  <li>{t("collabLaunch.visualAnswer1")}</li>
+                  <li>{t("collabLaunch.visualAnswer2")}</li>
+                  <li>{t("collabLaunch.visualAnswer3")}</li>
+                </ul>
+              </div>
             </div>
             <div className="collab-launch-visual__caption">{t("collabLaunch.visualCaption")}</div>
           </div>
         </div>
-        <p id="collab-launch-footnote" className="collab-launch-footnote">{footnote}</p>
       </section>
     </div>,
     document.body
