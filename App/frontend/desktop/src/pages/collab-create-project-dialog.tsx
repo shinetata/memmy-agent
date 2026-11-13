@@ -1,4 +1,4 @@
-import { Cloud, Folder, X } from "lucide-react";
+import { CircleHelp, Folder, FolderPlus, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createHttpCollabClient, type CollabClient, type CollabProject } from "../api/collab-client.js";
 import { ApiRequestError } from "../api/http.js";
@@ -82,7 +82,8 @@ export function CreateProjectModal(props: {
   /** API Key 模式没有云端账号可共享：整个共享入口（含加入项目）都不出现。 */
   const shareAvailable = props.shareAvailable !== false;
   const trimmed = name.trim();
-  const valid = trimmed.length > 0 && Array.from(trimmed).length <= MAX_PROJECT_NAME_CHARS;
+  const nameLength = Array.from(trimmed).length;
+  const valid = nameLength > 0 && nameLength <= MAX_PROJECT_NAME_CHARS;
   /**
    * 本人名下的协作项目有几个、最多能有几个：达到上限时先说清这次只建在本机。
    * 上限由云端随列表给出，所以数字不在前端写死。
@@ -90,6 +91,8 @@ export function CreateProjectModal(props: {
   const projectsStore = useSyncExternalStore(subscribeCollabProjects, getCollabProjectsSnapshot, getCollabProjectsSnapshot);
   const ownedCount = (projectsStore.projects ?? []).filter((project) => project.role === "owner").length;
   const ownedLimit = projectsStore.maxOwnedProjects;
+  /** 额度用完只在准备共享时才值得提：不开共享的话，这一行与自己无关。 */
+  const overQuota = share && ownedLimit !== null && ownedCount >= ownedLimit;
 
   /**
    * 打开那一刻的默认勾选：用 ref 带上，effect 只在打开时读一次，弹窗开着时这个值变化不会重置人的选择。
@@ -184,16 +187,21 @@ export function CreateProjectModal(props: {
     <Modal
       open={props.open}
       title={t("collab.create.title")}
-      subtitle={t("collab.create.subtitle")}
       onClose={props.onClose}
       closeLabel={t("common.close")}
       closeContent={<X size={16} aria-hidden="true" />}
       initialFocusRef={inputRef}
-      className={styles.createModal}
+      className={`${styles.createModal} ${styles.simpleCreateModal}`}
       backdropClassName={styles.backdrop}
+      bodyClassName={styles.simpleCreateBody}
+      footerClassName={styles.simpleCreateFooter}
       footer={(
         <>
-          <span />
+          {shareAvailable && props.onJoinProject ? (
+            <Button variant="secondary" size="sm" onClick={props.onJoinProject}>
+              {t("collab.create.joinEntry")}
+            </Button>
+          ) : <span />}
           <span className={styles.footerButtons}>
             <Button variant="ghost" onClick={props.onClose}>{t("collab.cancel")}</Button>
             <Button variant="primary" disabled={!valid || busy} onClick={() => void submit()}>
@@ -203,76 +211,81 @@ export function CreateProjectModal(props: {
         </>
       )}
     >
-      {/* 两种模式的分段标签：只有「加入协作项目」可用时才值得出现。
-          API Key 模式与未登录时只剩一种模式，孤零零一个标签会被当成长在弹窗里的按钮，所以整条不渲染。 */}
-      {shareAvailable ? (
-        <div className={styles.projectTabs} role="tablist">
-          <button type="button" role="tab" aria-selected="true" className={`${styles.projectTab} ${styles.projectTabOn}`}>
-            {t("collab.create.title")}
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected="false"
-            className={styles.projectTab}
-            onClick={props.onJoinProject}
-          >
-            {t("collab.join.pasteTitle")}
-          </button>
-        </div>
+      {/* 名称占满一行：图标与竖线在框内左侧，其余都交给输入本身，不放常驻说明 */}
+      <div className={styles.simpleNameField}>
+        <span className={styles.simpleNameIcon} aria-hidden="true"><Folder size={16} /></span>
+        <span className={styles.simpleNameDivider} aria-hidden="true" />
+        <input
+          ref={inputRef}
+          className={styles.simpleNameInput}
+          value={name}
+          maxLength={40}
+          aria-label={t("collab.create.name")}
+          placeholder={t("collab.create.name")}
+          onChange={(event) => setName(event.target.value)}
+          onKeyDown={(event) => {
+            // 中文等输入法用回车确认候选词（组词上屏），那不是提交意图：否则半成品拼音会被当成项目名。
+            if (event.key !== "Enter" || isComposingKeyboardEvent(event)) return;
+            void submit();
+          }}
+        />
+      </div>
+      {/* 超出上限才出现一行提示；平时不显示字数规则 */}
+      {nameLength > MAX_PROJECT_NAME_CHARS ? (
+        <p className={styles.simpleNameHint} role="alert">
+          {t("collab.create.nameTooLong", { max: MAX_PROJECT_NAME_CHARS })}
+        </p>
       ) : null}
-      {/* 与项目配置同一套行式排布：左侧标题与说明，右侧输入框 / 按钮 / 开关 */}
-      <div className={styles.settingsRows}>
-        <div className={styles.settingsRow}>
-          <div className={styles.settingsRowText}>
-            {/* 字数限制写在输入框的占位里，说明位置不再重复一句 */}
-            <div className={styles.settingsRowTitle}>{t("collab.create.name")}</div>
-          </div>
-          <div className={styles.settingsRowControl}>
-            <input
-              ref={inputRef}
-              className={styles.settingsRowInput}
-              value={name}
-              maxLength={40}
-              placeholder={t("collab.create.namePlaceholder")}
-              onChange={(event) => setName(event.target.value)}
-              onKeyDown={(event) => {
-                // 中文等输入法用回车确认候选词（组词上屏），那不是提交意图：否则半成品拼音会被当成项目名。
-                if (event.key !== "Enter" || isComposingKeyboardEvent(event)) return;
-                void submit();
-              }}
-            />
-          </div>
-        </div>
 
-        <div className={styles.settingsRow}>
-          <div className={styles.settingsRowText}>
-            <div className={styles.settingsRowTitle}>{t("collab.create.dirOptional")}</div>
-            {/* 选过目录就把路径显示在说明位置，不再另占一行 */}
-            <div className={`${styles.settingsRowDesc}${directory ? ` ${styles.settingsRowPath}` : ""}`} title={directory ?? undefined}>
-              {directory ?? t("collab.create.dirHint")}
-            </div>
+      <div className={styles.simpleSectionLabel}>
+        <span>{t("collab.create.folder")}</span>
+        <InfoHint label={t("collab.create.folderHelpLabel")} text={t("collab.create.dirHint")} />
+      </div>
+      {/* 只支持一个目录：选了就把那一行显示出来，没选时给一个大框放「添加」 */}
+      <div className={styles.simpleFolderBox}>
+        {directory ? (
+          <div className={styles.simpleFolderRow}>
+            <Folder size={15} aria-hidden="true" className={styles.simpleFolderIcon} />
+            <button
+              type="button"
+              className={styles.simpleFolderName}
+              title={directory}
+              aria-label={t("collab.create.folderChange")}
+              onClick={() => void chooseDirectory()}
+            >
+              {folderNameOf(directory)}
+            </button>
+            <button
+              type="button"
+              className={styles.simpleFolderRemove}
+              aria-label={t("collab.create.folderRemove")}
+              onClick={() => setDirectory(null)}
+            >
+              <X size={14} aria-hidden="true" />
+            </button>
           </div>
-          <div className={styles.settingsRowControl}>
-            <Button size="sm" onClick={() => void chooseDirectory()}>
-              {directory ? t("collab.create.dirChange") : t("collab.create.dirPick")}
+        ) : (
+          <div className={styles.simpleFolderEmpty}>
+            <span>{t("collab.create.folderEmpty")}</span>
+            <Button size="sm" variant="secondary" className={styles.simpleFolderAdd} onClick={() => void chooseDirectory()}>
+              <FolderPlus size={14} aria-hidden="true" />
+              {t("collab.create.folderAdd")}
             </Button>
           </div>
-        </div>
+        )}
+      </div>
 
-        {shareAvailable ? (
-        <div className={styles.settingsRow}>
-          <div className={styles.settingsRowText}>
-            <div className={styles.settingsRowTitle}>{t("collab.create.share")}</div>
-            <div className={styles.settingsRowDesc}>{t("collab.create.shareHint")}</div>
-            {/* 已达上限时先说清：仍然可以建，只是这次只建在本机 */}
-            {share && ownedLimit !== null && ownedCount >= ownedLimit ? (
-              <div className={styles.settingsRowQuota}>
-                {t("collab.create.shareQuotaHint", { limit: ownedLimit })}
-              </div>
-            ) : null}
-          </div>
-          <div className={styles.settingsRowControl}>
+      {shareAvailable ? (
+        <>
+          <div className={styles.simpleShareRow}>
+            <span className={styles.simpleShareLabel}>
+              <span>{t("collab.create.share")}</span>
+              <InfoHint
+                placement="above"
+                label={t("collab.create.shareHelpLabel")}
+                text={t("collab.create.shareHint")}
+              />
+            </span>
             <button
               type="button"
               role="switch"
@@ -282,12 +295,72 @@ export function CreateProjectModal(props: {
               className={`${styles.settingsSwitch}${share ? ` ${styles.settingsSwitchOn}` : ""}`}
             />
           </div>
-        </div>
-        ) : null}
-      </div>
+          {/* 已达上限时先说清：仍然可以建，只是这次只建在本机 */}
+          {overQuota ? (
+            <p className={styles.simpleQuotaHint}>{t("collab.create.shareQuotaHint", { limit: ownedLimit })}</p>
+          ) : null}
+        </>
+      ) : null}
       {error ? <p className={styles.error} role="alert">{error}</p> : null}
     </Modal>
   );
+}
+
+/**
+ * 行尾的小问号：说明放在点击之后出现的小浮层里，平时不占版面。
+ * 打开时用捕获阶段监听，Escape 只关这一层说明，不连带关掉整个弹窗。
+ */
+function InfoHint(props: { label: string; text: string; placement?: "below" | "above" }) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLSpanElement | null>(null);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    function handlePointerDown(event: PointerEvent) {
+      if (event.target instanceof Node && !rootRef.current?.contains(event.target)) setOpen(false);
+    }
+    function handleKeyDown(event: globalThis.KeyboardEvent) {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      // 停在这一层：弹窗自己的 Escape 关掉整屏，说明应该先关、弹窗留着。
+      event.stopPropagation();
+      setOpen(false);
+    }
+    document.addEventListener("pointerdown", handlePointerDown, true);
+    document.addEventListener("keydown", handleKeyDown, true);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown, true);
+      document.removeEventListener("keydown", handleKeyDown, true);
+    };
+  }, [open]);
+
+  return (
+    <span ref={rootRef} className={styles.simpleHintRoot}>
+      <button
+        type="button"
+        className={styles.simpleHintButton}
+        aria-label={props.label}
+        aria-expanded={open}
+        onClick={() => setOpen(!open)}
+      >
+        <CircleHelp size={14} aria-hidden="true" />
+      </button>
+      {open ? (
+        <span
+          role="note"
+          className={`${styles.simpleHintPopover}${props.placement === "above" ? ` ${styles.simpleHintPopoverAbove}` : ""}`}
+        >
+          {props.text}
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
+/** 只显示末级目录名，完整路径留到悬停提示里。 */
+function folderNameOf(path: string): string {
+  const parts = path.split(/[\\/]/u).filter(Boolean);
+  return parts[parts.length - 1] ?? path;
 }
 
 function messageOf(cause: unknown): string {

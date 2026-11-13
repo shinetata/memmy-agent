@@ -49,6 +49,8 @@ describe("new project dialog", () => {
   const onCreated = vi.fn();
   const onShareFailed = vi.fn();
   const onShareLimitReached = vi.fn();
+  const onClose = vi.fn();
+  const onJoinProject = vi.fn();
 
   function collab() {
     return {
@@ -76,13 +78,14 @@ describe("new project dialog", () => {
           <CreateProjectModal
             open
             collab={collab()}
-            onClose={vi.fn()}
+            onClose={onClose}
             onCreated={onCreated}
             onShared={vi.fn()}
             onBound={vi.fn()}
             onBindFailed={vi.fn()}
             onShareFailed={onShareFailed}
             onShareLimitReached={onShareLimitReached}
+            onJoinProject={onJoinProject}
           />
         </I18nProvider>
       );
@@ -116,16 +119,34 @@ describe("new project dialog", () => {
     return control!;
   }
 
+  function buttonByText(label: string): HTMLElement | undefined {
+    return Array.from(document.querySelectorAll<HTMLElement>("button"))
+      .find((button) => button.textContent?.trim() === label);
+  }
+
+  /** 小问号：只有点开才出现说明，按可访问名找到它。 */
+  function hintButton(label: string): HTMLElement {
+    const target = document.querySelector<HTMLElement>(`button[aria-label='${label}']`);
+    expect(target, `${label}小问号应已渲染`).toBeTruthy();
+    return target!;
+  }
+
+  function popover(): HTMLElement | null {
+    return document.querySelector<HTMLElement>(".modal-body [role='note']");
+  }
+
   function submitButton(): HTMLElement {
     const buttons = Array.from(document.querySelectorAll<HTMLElement>("button"));
-    const target = buttons.find((button) => button.textContent?.trim() === "创建");
-    expect(target, "创建按钮应已渲染").toBeTruthy();
+    const target = buttons.find((button) => button.textContent?.trim() === "创建项目");
+    expect(target, "创建项目按钮应已渲染").toBeTruthy();
     return target!;
   }
 
   it("creates only the local project while sharing is off", async () => {
-    // 有人能加入时，两段模式标签才留着（新建 / 加入协作项目）。
-    expect(document.querySelector(".modal-body [role='tablist']")).not.toBeNull();
+    // 顶部不再有「新建项目 | 加入协作项目」标签：加入项目是页脚左侧的一个次要按钮。
+    expect(document.querySelector("[role='tablist']")).toBeNull();
+    expect(document.querySelector(".modal-subtitle")).toBeNull();
+    expect(buttonByText("加入项目")).toBeTruthy();
     expect(shareSwitch().getAttribute("aria-checked")).toBe("false");
     await act(async () => type(nameInput(), "demo"));
     await act(async () => submitButton().click());
@@ -215,7 +236,7 @@ describe("new project dialog", () => {
     await flush();
 
     // 上限由云端给出（这里是 5），弹窗不写死数字，只在开启共享时就说明这次只会建在本机。
-    expect(document.body.textContent).toContain("协作项目数已达上限（5 个）");
+    expect(document.body.textContent).toContain("协作项目已达上限（5 个），本次仅创建在本机");
   });
 
   it("keeps the project local and reports the limit instead of a service outage", async () => {
@@ -264,11 +285,10 @@ describe("new project dialog", () => {
     expect(document.querySelector(".modal-body [role='switch']")).toBeNull();
     expect(document.body.textContent).not.toContain("与成员共享");
     expect(document.body.textContent).not.toContain("加入项目");
-    // 只剩一种模式：那排分段标签整条不渲染，否则孤零零一个「新建项目」会被读成弹窗里的按钮。
-    expect(document.querySelector(".modal-body [role='tablist']")).toBeNull();
-    // 项目不一定是协作项目，副标题只讲项目本身，不把成员与协作当时前提。
-    expect(document.body.textContent).not.toContain("成员协作");
-    expect(document.body.textContent).toContain("项目把相关任务归在一起，任务与对话都保存在项目里");
+    // 没有云端账号就没有「加入项目」，页脚左侧只剩占位，不在弹窗里留一个走不通的按钮。
+    expect(document.querySelector("[role='tablist']")).toBeNull();
+    // 极简版不再有副标题：说明只放在小问号里。
+    expect(document.querySelector(".modal-subtitle")).toBeNull();
 
     await act(async () => type(nameInput(), "demo"));
     await act(async () => submitButton().click());
@@ -353,5 +373,96 @@ describe("new project dialog", () => {
     // API Key 模式没有云端账号：默认共享不成立，那一行整行不出现。
     expect(document.querySelector(".modal-body [role='switch']")).toBeNull();
     await act(async () => bareRoot.unmount());
+  });
+
+  it("keeps the explanation inside a question mark and closes it on Escape without closing the dialog", async () => {
+    // 说明常驻会撑开版面：点开小问号才出现，Escape 只收这一层。
+    expect(popover()).toBeNull();
+    expect(document.body.textContent).not.toContain("成员可以查看和引用项目中的任务");
+
+    await act(async () => hintButton("共享说明").click());
+    expect(hintButton("共享说明").getAttribute("aria-expanded")).toBe("true");
+    expect(popover()?.textContent).toContain("成员可以查看和引用项目中的任务，本机文件不会上传。");
+
+    // 焦点在问号上按 Escape：只关说明，整个弹窗留着。
+    await act(async () => {
+      hintButton("共享说明").dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    });
+    expect(popover()).toBeNull();
+    expect(onClose).not.toHaveBeenCalled();
+
+    // 再点一次也能收起。
+    await act(async () => hintButton("共享说明").click());
+    expect(popover()).not.toBeNull();
+    await act(async () => hintButton("共享说明").click());
+    expect(popover()).toBeNull();
+  });
+
+  it("closes the explanation when pressing outside it", async () => {
+    await act(async () => hintButton("共享说明").click());
+    expect(popover()).not.toBeNull();
+    await act(async () => {
+      document.body.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    });
+    expect(popover()).toBeNull();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("only mentions the name limit once the name is too long", async () => {
+    // 平时不显示字数说明，超了才在输入框下面出现一行。
+    expect(document.body.textContent).not.toContain("项目名称最多 20 个字");
+    await act(async () => type(nameInput(), "这是一个超过二十个字的项目名称示例文本内容"));
+    expect(document.body.textContent).toContain("项目名称最多 20 个字");
+    expect(submitButton().hasAttribute("disabled")).toBe(true);
+  });
+
+  it("picks one folder, shows its last segment and removes it again", async () => {
+    const selectProjectDirectory = vi.fn(async () => ({ canceled: false, path: "/Users/me/Documents/设计稿" }));
+    (window as unknown as { memmy?: unknown }).memmy = { selectProjectDirectory };
+
+    // 没选目录时是一个大框加「添加」，不占整行说明。
+    expect(buttonByText("在此电脑上添加文件夹")).toBeFalsy();
+    expect(document.body.textContent).toContain("在此电脑上添加文件夹");
+    await act(async () => buttonByText("添加")!.click());
+    expect(selectProjectDirectory).toHaveBeenCalled();
+
+    // 选好以后只留一行：末级名称 + 移除，完整路径放在悬停提示里。
+    const row = document.querySelector<HTMLElement>(`button[aria-label='更换文件夹']`);
+    expect(row).toBeTruthy();
+    expect(row?.textContent?.trim()).toBe("设计稿");
+    expect(row?.getAttribute("title")).toBe("/Users/me/Documents/设计稿");
+    expect(document.body.textContent).not.toContain("在此电脑上添加文件夹");
+
+    await act(async () => document.querySelector<HTMLElement>(`button[aria-label='移除文件夹']`)!.click());
+    expect(document.querySelector(`button[aria-label='更换文件夹']`)).toBeNull();
+    expect(document.body.textContent).toContain("在此电脑上添加文件夹");
+    delete (window as unknown as { memmy?: unknown }).memmy;
+  });
+
+  it("creates the project inside the picked folder instead of a managed one", async () => {
+    const selectProjectDirectory = vi.fn(async () => ({ canceled: false, path: "/Users/me/Documents/设计稿" }));
+    (window as unknown as { memmy?: unknown }).memmy = { selectProjectDirectory };
+
+    await act(async () => buttonByText("添加")!.click());
+    await act(async () => type(nameInput(), "demo"));
+    await act(async () => submitButton().click());
+    await flush();
+
+    expect(mocks.prepareDirectory).not.toHaveBeenCalled();
+    expect(mocks.mutateProject).toHaveBeenCalledWith({
+      kind: "create",
+      input: {
+        mode: "existing",
+        path: "/Users/me/Documents/设计稿",
+        name: "demo",
+        allowShared: true
+      }
+    });
+    delete (window as unknown as { memmy?: unknown }).memmy;
+  });
+
+  it("switches to the join dialog from the footer button", async () => {
+    await act(async () => buttonByText("加入项目")!.click());
+    expect(onJoinProject).toHaveBeenCalledTimes(1);
   });
 });

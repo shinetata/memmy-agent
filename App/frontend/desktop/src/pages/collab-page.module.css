@@ -1831,129 +1831,265 @@
   color: var(--collab-muted);
 }
 
-/* 新建 / 加入项目：同一个弹窗的两种模式，顶部用一组分段标签切换 */
-.projectTabs {
-  display: flex;
-  gap: 4px;
-  margin-bottom: 14px;
-  padding: 3px;
-  border-radius: 10px;
-  background: color-mix(in srgb, var(--collab-ter) 14%, transparent);
+/* 新建项目：一屏只放必须做的三件事，说明收进小问号，正文不做逐行解释 */
+:global(.modal).simpleCreateModal {
+  width: min(520px, calc(100vw - 32px));
 }
 
-.projectTab {
+:global(.modal).simpleCreateModal :global(.modal-header) {
+  padding: 22px 24px 16px;
+}
+
+:global(.modal).simpleCreateModal :global(.modal-header) h2 {
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+:global(.modal-body).simpleCreateBody {
+  padding: 0 24px 4px;
+  gap: 0;
+}
+
+/* 页脚：左侧「加入项目」，右侧「取消 / 创建项目」 */
+:global(.modal-footer).simpleCreateFooter {
+  align-items: center;
+  gap: 12px;
+  padding: 16px 24px 20px;
+}
+
+/* 名称：整行输入框，图标与竖线在框内左侧，聚焦时整框描主题色 */
+.simpleNameField {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 44px;
+  padding: 0 12px;
+  border: 1px solid var(--collab-line);
+  border-radius: 10px;
+  background: var(--color-background-paper, #fff);
+  transition: border-color var(--duration-fast) ease, box-shadow var(--duration-fast) ease;
+}
+
+.simpleNameField:focus-within {
+  border-color: var(--collab-accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--collab-accent) 18%, transparent);
+}
+
+.simpleNameIcon {
+  display: inline-flex;
+  flex: none;
+  color: var(--collab-ter);
+}
+
+.simpleNameDivider {
+  flex: none;
+  width: 1px;
+  height: 18px;
+  background: var(--collab-line);
+}
+
+.simpleNameInput {
   flex: 1;
-  padding: 7px 10px;
+  min-width: 0;
+  height: 100%;
   border: 0;
-  border-radius: 8px;
   background: transparent;
-  color: var(--collab-muted);
+  color: inherit;
   font: inherit;
+  font-size: 13.5px;
+}
+
+.simpleNameInput:focus {
+  outline: none;
+}
+
+.simpleNameInput::placeholder {
+  color: var(--collab-ter);
+}
+
+.simpleNameHint {
+  margin: 6px 0 0;
+  color: var(--color-status-error, #c4413b);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+/* 小节标题：字号比正文小一档，靠上方留白分组 */
+.simpleSectionLabel {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 20px 0 8px;
+  color: var(--collab-muted);
   font-size: 12.5px;
   font-weight: 700;
+}
+
+/* 文件夹：没选时是一个居中的大框，选了以后变成一行 */
+.simpleFolderBox {
+  border: 1px solid var(--collab-line);
+  border-radius: 12px;
+  background: var(--color-background-paper, #fff);
+}
+
+.simpleFolderEmpty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 20px 16px 18px;
+  color: var(--collab-muted);
+  font-size: 12.5px;
+}
+
+/* 「添加」是小按钮，图标与文字之间留 6px，默认按钮没有间距 */
+:global(.button).simpleFolderAdd {
+  gap: 6px;
+}
+
+.simpleFolderRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 10px 9px 12px;
+}
+
+.simpleFolderIcon {
+  flex: none;
+  color: var(--collab-ter);
+}
+
+/* 名称本身就是按钮：再点一次换目录，完整路径放在悬停提示里 */
+.simpleFolderName {
+  flex: 1;
+  min-width: 0;
+  padding: 2px 0;
+  overflow: hidden;
+  border: 0;
+  background: transparent;
+  color: var(--collab-ink-2);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.simpleFolderName:hover {
+  color: var(--collab-accent-deep);
+}
+
+.simpleFolderName:focus-visible {
+  border-radius: 6px;
+  outline: 2px solid color-mix(in srgb, var(--collab-accent) 60%, transparent);
+  outline-offset: 2px;
+}
+
+.simpleFolderRemove {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--collab-ter);
   cursor: pointer;
   transition: background-color var(--duration-fast) ease, color var(--duration-fast) ease;
 }
 
-.projectTabOn {
-  background: var(--color-background-paper, #fff);
+.simpleFolderRemove:hover {
+  background: color-mix(in srgb, var(--collab-ink) 6%, transparent);
   color: var(--collab-ink-2);
-  box-shadow: 0 1px 2px rgba(17, 29, 28, 0.08);
 }
 
-/* 标签下面紧跟字段时，字段自己那 18px 上边距会显得空，收掉 */
-.projectTabs + .field {
-  margin-top: 0;
-}
-
-/* 项目配置：行式列表，左侧标题与说明、右侧控件，行间细线（与设置页同一套排布） */
-.settingsRows {
-  margin-top: 2px;
-}
-
-.settingsRow {
+/* 共享：一行标题加右侧开关，说明在小问号里 */
+.simpleShareRow {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 18px;
-  padding: 15px 2px;
-  border-bottom: 1px solid var(--collab-line-soft);
+  gap: 16px;
+  margin-top: 20px;
+  padding-top: 18px;
+  border-top: 1px solid var(--collab-line-soft);
 }
 
-.settingsRow:first-child {
-  border-top: 1px solid var(--collab-line);
-}
-
-/* 末行不再画线，避免页脚上方出现一条像空行的分隔 */
-.settingsRow:last-child {
-  border-bottom: 0;
-}
-
-.settingsRowText {
+.simpleShareLabel {
   display: flex;
-  min-width: 0;
-  flex: 1;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.settingsRowTitle {
+  align-items: center;
+  gap: 6px;
   color: var(--collab-ink-2);
-  font-size: 13.5px;
-  font-weight: 700;
-  line-height: 1.4;
+  font-size: 13px;
+  font-weight: 600;
 }
 
-.settingsRowDesc {
-  color: var(--collab-ter);
-  font-size: 12px;
-  line-height: 1.6;
-}
-
-/* 额度提示：这次仍会建成本机项目，只是共享不会开始，用次级文字色，不当成错误 */
-.settingsRowQuota {
+.simpleQuotaHint {
+  margin: 8px 0 0;
   color: var(--collab-muted);
   font-size: 12px;
   line-height: 1.6;
 }
 
-/* 本机目录这类路径用等宽字，长短一眼可比 */
-.settingsRowPath {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 11.5px;
+/* 小问号与它的浮层：浮层贴着图标出现，点击外部或 Escape 收起 */
+.simpleHintRoot {
+  position: relative;
+  display: inline-flex;
 }
 
-.settingsRowControl {
-  display: flex;
-  flex: none;
-  align-items: center;
-  gap: 8px;
-}
-
-/* 行内的输入框：与右侧按钮同高，不把行撑开 */
-.settingsRowInput {
-  width: 220px;
-  height: 32px;
-  padding: 0 10px;
-  border: 1px solid var(--collab-line);
-  border-radius: 9px;
-  background: var(--color-background-paper, #fff);
-  color: inherit;
-  font: inherit;
-  font-size: 13px;
-}
-
-.settingsRowInput::placeholder {
+.simpleHintButton {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
   color: var(--collab-ter);
+  cursor: pointer;
+  transition: background-color var(--duration-fast) ease, color var(--duration-fast) ease;
 }
 
-.settingsRowInput:focus {
-  outline: none;
-  border-color: var(--collab-accent);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--collab-accent) 18%, transparent);
+.simpleHintButton:hover,
+.simpleHintButton[aria-expanded="true"] {
+  background: color-mix(in srgb, var(--collab-accent) 14%, transparent);
+  color: var(--collab-accent-deep);
+}
+
+.simpleHintButton:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--collab-accent) 60%, transparent);
+  outline-offset: 2px;
+}
+
+.simpleHintPopover {
+  position: absolute;
+  z-index: 2;
+  top: calc(100% + 8px);
+  left: -8px;
+  width: max-content;
+  max-width: min(280px, calc(100vw - 96px));
+  padding: 9px 11px;
+  border: 1px solid var(--collab-line);
+  border-radius: 10px;
+  background: var(--color-background-paper, #fff);
+  /* 小浮层用比弹窗更紧的投影：52px 的大光圈压在白色卡片上会显脏 */
+  box-shadow: 0 6px 20px rgba(17, 29, 28, 0.12);
+  color: var(--collab-muted);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.65;
+  text-align: left;
+}
+
+/* 共享那一行贴着页脚：说明向上展开，不盖住下面的按钮 */
+.simpleHintPopoverAbove {
+  top: auto;
+  bottom: calc(100% + 8px);
 }
 
 /* 开关：36×20 的圆角滑块，和设置页一致 */
