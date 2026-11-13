@@ -1,4 +1,4 @@
-import { AtSign, BookOpen, ChevronDown, ChevronRight, Cloud, Folder, Inbox, Layers, LifeBuoy, Link2, ListChecks, MessageSquarePlus, MoreHorizontal, PanelRight, PanelRightClose, Pencil, Plug, RefreshCw, Search, Settings, Trash2, User, UserPlus, Users, X } from "lucide-react";
+import { ArrowUpRight, AtSign, BookOpen, ChevronDown, ChevronRight, Cloud, Folder, Inbox, Layers, LifeBuoy, Loader2, Link2, ListChecks, MessageSquarePlus, MoreHorizontal, PanelRight, PanelRightClose, Pencil, Plug, RefreshCw, Search, Settings, Trash2, User, UserPlus, Users, X } from "lucide-react";
 import { memo, useCallback, useDeferredValue, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import {
@@ -84,6 +84,7 @@ import { consumeAssistFocus, getAssistFocus, subscribeAssistFocus } from "../app
 import { CollabAssistConversation } from "./collab-assist-conversation.js";
 import { READER_PANEL_WIDTH_STORAGE_KEY, useReaderPanelWidth } from "./collab-reader-resize.js";
 import { CollabAssistProjectSettings } from "./collab-assist-settings.js";
+import { InfoHint } from "./collab-info-hint.js";
 import { assistAgentName, assistIsOpen, assistStatusKey } from "./collab-assist-view.js";
 
 export { memberColor };
@@ -2804,10 +2805,10 @@ function ProjectInstructionsDialog(props: {
 }
 
 /**
- * The board's settings: three cards read top to bottom — who the project is shared with, whether this computer
- * answers assist requests, and where the folder lives. Every row is a title, one line of description and a
- * switch or a button on the right. Stopping sharing (or leaving, for a member) is one danger button at the
- * bottom rather than a switch: it removes the cloud project, which cannot be undone.
+ * The board's settings, built like the create-project dialog: one field per line — the folder, the project's
+ * collaboration and, once shared, assist requests. Each field is an icon and a name with its value, switch or
+ * arrow on the right; explanations sit behind a question mark. Stopping sharing (or leaving, for a member) is one
+ * danger button at the bottom rather than a switch: it removes the cloud project, which cannot be undone.
  */
 export function ProjectBoardSettingsDialog(props: {
   open: boolean;
@@ -2943,12 +2944,15 @@ export function ProjectBoardSettingsDialog(props: {
     }
   }
 
-  // 加载中不显示值，读完后是「暂无任务」或「已同步 x / y」。
+  // 加载中只转圈，读完后是「暂无」或「x / y」。
   const sessionsValue = taskStats === null
     ? null
     : taskStats.total === 0
       ? t("collab.settings.sessionsNone")
-      : t("collab.settings.sessionsSynced", { synced: String(taskStats.synced), total: String(taskStats.total) });
+      : t("collab.settings.sessionsRatio", { synced: String(taskStats.synced), total: String(taskStats.total) });
+  const revealProject = clients?.memmyAgent
+    ? () => void clients.memmyAgent?.revealProject(props.project.id, { timeoutMs: 15_000 })
+    : null;
   const canLeave = Boolean(sharedId) && props.shareAvailable;
   const dangerLabel = isOwner ? t("appFrame.project.stopSharing") : t("appFrame.project.leave");
   const confirmTitle = confirm === "leave" ? t("collab.leave.title") : t("collab.settings.stopTitle");
@@ -3013,101 +3017,94 @@ export function ProjectBoardSettingsDialog(props: {
       onClose={props.onClose}
       closeLabel={t("common.close")}
       closeContent={<X size={16} aria-hidden="true" />}
-      className={`${styles.createModal} ${styles.settingsModal}`}
+      className={`${styles.createModal} ${styles.simpleCreateModal} ${styles.settingsModal}`}
       backdropClassName={styles.backdrop}
-      // 正文与页脚按这一屏自己的排布：卡片之间 12px，页脚只在需要右下角按钮时出现。
+      // 和创建项目同一套留白：字段之间 10px，页脚只在需要右下角按钮时出现。
       bodyClassName={`${styles.settingsBody}${showFooter ? "" : ` ${styles.settingsBodyLast}`}`}
       footer={showFooter ? footer : undefined}
       footerClassName={styles.settingsFooter}
     >
-      <section className={styles.settingsCard}>
-        <div className={styles.settingsCardHead}>
-          <span className={styles.settingsCardChip}><Users size={14} aria-hidden="true" /></span>
-          <h3 className={styles.settingsCardTitle}>{t("collab.settings.groupSharing")}</h3>
-        </div>
-        {!props.shareAvailable ? (
-          // API Key 模式没有云端账号：这一行只说清原因，右侧没有控件。
-          <div className={styles.settingsCardRow}>
-            <div className={styles.settingsCardText}>
-              <span className={styles.settingsCardRowTitle}>{t("collab.create.share")}</span>
-              <span className={styles.settingsCardRowDesc}>{t("collab.settings.shareByokHint")}</span>
-            </div>
-          </div>
-        ) : sharedId ? (
-          // 已共享之后开关会让整个云端项目消失，不适合放在这里：只报同步了多少任务。
-          <div className={styles.settingsCardRow}>
-            <div className={styles.settingsCardText}>
-              <span className={styles.settingsCardRowTitle}>{t("collab.settings.sessionsRow")}</span>
-              <span className={styles.settingsCardRowDesc}>{sessionsValue ?? t("collab.loading")}</span>
-            </div>
-            <div className={styles.settingsCardControl}>
-              <Button
-                size="sm"
-                variant="secondary"
-                className={styles.settingsButton}
-                onClick={props.onPickSessions}
-              >
-                {t("collab.settings.pickSessions")}
-              </Button>
-            </div>
-          </div>
-        ) : (
-          <div className={styles.settingsCardRow}>
-            <div className={styles.settingsCardText}>
-              <span className={styles.settingsCardRowTitle}>{t("collab.create.share")}</span>
-              <span className={styles.settingsCardRowDesc}>{t("collab.settings.shareOffHint")}</span>
-            </div>
-            <div className={styles.settingsCardControl}>
-              <button
-                type="button"
-                role="switch"
-                aria-checked={false}
-                aria-label={t("collab.create.share")}
-                disabled={busy || !props.collab}
-                onClick={() => void startSharing()}
-                className={styles.settingsSwitch}
-              />
-            </div>
-          </div>
-        )}
-      </section>
+      {/* 文件夹：只显示末级目录名，完整路径在悬停提示里；点整行在系统文件管理器中打开 */}
+      <button
+        type="button"
+        className={`${styles.settingsField} ${styles.settingsFieldButton}`}
+        title={props.project.rootPath}
+        aria-label={`${t("collab.settings.reveal")}：${formatWorkspacePath(props.project.rootPath)}`}
+        disabled={!revealProject}
+        onClick={() => revealProject?.()}
+      >
+        <Folder size={16} aria-hidden="true" className={styles.settingsFieldIcon} />
+        <span className={styles.settingsFieldLabel}>{t("collab.settings.folder")}</span>
+        <span className={styles.settingsFieldValue}>{folderNameOf(props.project.rootPath)}</span>
+        <ArrowUpRight size={15} aria-hidden="true" className={styles.settingsFieldTrail} />
+      </button>
 
-      {/* 成员协助：本人在这个项目里是否接收协助请求（默认关闭），开启时列出她给出的限时授权。
-          只在账号模式、已共享的项目里出现；组件自己带「协助」这张卡片。 */}
+      {!props.shareAvailable ? (
+        // API Key 模式没有云端账号：只写明需要登录，原因收进问号，不给开关。
+        <div className={`${styles.settingsField} ${styles.settingsFieldMuted}`}>
+          <Users size={16} aria-hidden="true" className={styles.settingsFieldIcon} />
+          <span className={styles.settingsFieldLabel}>{t("collab.create.shareToggle")}</span>
+          <InfoHint
+            placement="above"
+            label={t("collab.create.shareHelpLabel")}
+            text={t("collab.settings.shareByokHint")}
+          />
+          <span className={styles.settingsFieldValue}>{t("collab.settings.shareNeedsAccount")}</span>
+        </div>
+      ) : sharedId ? (
+        // 已共享：报共享了几个任务，点整行去选择。停止共享不是开关，在右下角。
+        <button
+          type="button"
+          className={`${styles.settingsField} ${styles.settingsFieldButton}`}
+          onClick={props.onPickSessions}
+        >
+          <Users size={16} aria-hidden="true" className={styles.settingsFieldIcon} />
+          <span className={styles.settingsFieldLabel}>{t("collab.settings.sessionsRow")}</span>
+          {sessionsValue === null ? (
+            <span className={styles.settingsFieldValue} role="status" aria-label={t("collab.loading")}>
+              <Loader2 size={13} aria-hidden="true" className={styles.settingsSpinner} />
+            </span>
+          ) : (
+            <span className={styles.settingsFieldValue}>{sessionsValue}</span>
+          )}
+          <ChevronRight size={15} aria-hidden="true" className={styles.settingsFieldTrail} />
+        </button>
+      ) : (
+        // 未共享：与创建项目里的「开启项目协作」同一个字段，点整框任意位置都能开启（问号除外）。
+        <div
+          className={`${styles.settingsField} ${styles.settingsFieldToggle}`}
+          onClick={() => void startSharing()}
+        >
+          <Users size={16} aria-hidden="true" className={styles.settingsFieldIcon} />
+          <span className={styles.settingsFieldLabel}>{t("collab.create.shareToggle")}</span>
+          <span className={styles.settingsFieldHint} onClick={(event) => event.stopPropagation()}>
+            <InfoHint placement="above" label={t("collab.create.shareHelpLabel")} text={t("collab.settings.shareOffHint")} />
+          </span>
+          {/* 开关自己不处理点击：点击冒泡到整框只触发一次，键盘的空格 / 回车同样产生点击 */}
+          <button
+            type="button"
+            role="switch"
+            aria-checked={false}
+            aria-label={t("collab.create.shareToggle")}
+            disabled={busy || !props.collab}
+            className={`${styles.settingsSwitch} ${styles.settingsFieldControl}`}
+          />
+        </div>
+      )}
+
+      {/* 成员协助：本人在这个项目里是否接收协助请求（默认关闭），开启且有限时授权时在同一个字段里列出。
+          只在账号模式、已共享的项目里出现。 */}
       {sharedId && props.shareAvailable ? (
         <CollabAssistProjectSettings client={props.collab} projectId={sharedId} />
       ) : null}
-
-      <section className={styles.settingsCard}>
-        <div className={styles.settingsCardHead}>
-          <span className={styles.settingsCardChip}><Folder size={14} aria-hidden="true" /></span>
-          <h3 className={styles.settingsCardTitle}>{t("collab.settings.groupProject")}</h3>
-        </div>
-        <div className={styles.settingsCardRow}>
-          <div className={styles.settingsCardText}>
-            <span className={styles.settingsCardRowTitle}>{t("collab.settings.folder")}</span>
-            <span
-              className={`${styles.settingsCardRowDesc} ${styles.settingsCardPath}`}
-              title={props.project.rootPath}
-            >
-              {formatWorkspacePath(props.project.rootPath)}
-            </span>
-          </div>
-          <div className={styles.settingsCardControl}>
-            <Button
-              size="sm"
-              variant="secondary"
-              className={styles.settingsButton}
-              disabled={!clients?.memmyAgent}
-              onClick={() => void clients?.memmyAgent?.revealProject(props.project.id, { timeoutMs: 15_000 })}
-            >
-              {t("collab.settings.reveal")}
-            </Button>
-          </div>
-        </div>
-      </section>
     </Modal>
   );
+}
+
+/** 只显示末级目录名，完整路径留到悬停提示里。 */
+function folderNameOf(path: string): string {
+  const parts = path.split(/[\\/]/u).filter(Boolean);
+  return parts[parts.length - 1] ?? path;
 }
 
 /**

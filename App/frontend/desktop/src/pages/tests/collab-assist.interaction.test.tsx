@@ -1048,7 +1048,7 @@ describe("成员协助的宿主", () => {
 });
 
 describe("项目设置的成员协助", () => {
-  it("接收协助请求默认关闭，关闭时不列限时授权；打开后列出剩余时间", async () => {
+  it("接收协助请求默认关闭，说明收在问号里；打开后在同一个字段里列出剩余时间", async () => {
     const expiresAt = new Date(Date.now() + 42 * 60_000 + 20_000).toISOString();
     const collab = client({
       assistReceiving: vi.fn().mockResolvedValue({ projectId: "p1", enabled: false }),
@@ -1076,14 +1076,21 @@ describe("项目设置的成员协助", () => {
 
     const toggle = document.querySelector<HTMLButtonElement>("[role=switch]");
     expect(document.body.textContent).toContain("接收协助请求");
-    expect(document.body.textContent).toContain("成员可以请你电脑上的 Agent 执行任务，每次都会先问你");
+    // 说明不常驻：点问号才出现。
+    expect(document.body.textContent).not.toContain("成员可以请你电脑上的 Agent 执行任务");
+    const help = document.querySelector<HTMLButtonElement>("button[aria-label='协助说明']")!;
+    await act(async () => help.click());
+    expect(document.querySelector("[role='note']")?.textContent).toContain("成员可以请你电脑上的 Agent 执行任务，每次都会先问你");
+    // 点问号只看说明，不切换开关。
+    expect(collab.setAssistReceiving).not.toHaveBeenCalled();
     expect(toggle?.getAttribute("aria-checked")).toBe("false");
-    expect(document.body.textContent).not.toContain("限时授权");
+    expect(document.querySelector("[aria-label='限时授权']")).toBeNull();
 
     await act(async () => toggle?.click());
+    expect(collab.setAssistReceiving).toHaveBeenCalledTimes(1);
     expect(collab.setAssistReceiving).toHaveBeenCalledWith("p1", true);
-    expect(document.body.textContent).toContain("限时授权");
-    expect(document.body.textContent).toContain("由 Claude Code 执行 · 还剩 43 分钟");
+    expect(document.querySelector("[aria-label='限时授权']")).toBeTruthy();
+    expect(document.body.textContent).toContain("· 还剩 43 分钟");
     // 每日次数上限已经取消：不再说「今天已执行」与「每天最多 20 次」。
     expect(document.body.textContent).not.toContain("今天已执行");
     expect(document.body.textContent).not.toContain("20 次");
@@ -1121,18 +1128,21 @@ describe("项目设置的成员协助", () => {
     ));
     await flush();
 
-    // 整张卡片自带「协助」标题，不依赖外面的弹窗。
-    expect(document.body.textContent).toContain("协助");
+    // 字段自带「接收协助请求」，不依赖外面的弹窗。
+    expect(document.body.textContent).toContain("接收协助请求");
     expect(document.body.textContent).toContain("孙起");
     // 头像上只有首字，名字单独一行。
     expect(document.body.textContent).toContain("孙");
-    expect(document.querySelector("select[aria-label='孙起的请求由哪个 Agent 执行']")).toBeTruthy();
+    // 由哪个 Agent 执行就是下拉本身，文字里不再重复「由 … 执行」。
+    const select = document.querySelector<HTMLSelectElement>("select[aria-label='孙起的请求由哪个 Agent 执行']");
+    expect(select?.value).toBe("claude_code");
+    expect(document.body.textContent).not.toContain("由 Claude Code 执行");
     const revoke = button("结束授权")!;
     expect(revoke.tagName).toBe("BUTTON");
     expect(revoke.className).toContain("settingsDangerButton");
   });
 
-  it("读取协助设置失败时，错误贴在卡片内那一行下面", async () => {
+  it("读取协助设置失败时，错误贴在字段里那一行下面", async () => {
     const collab = client({
       assistReceiving: vi.fn().mockRejectedValue(new Error("boom")),
       assistGrants: vi.fn().mockResolvedValue({ grants: [], dailyLimit: 20 }),
@@ -1147,10 +1157,10 @@ describe("项目设置的成员协助", () => {
 
     const alert = document.querySelector("[role='alert']");
     expect(alert?.textContent).toContain("读取成员协助的设置没有完成");
-    expect(alert?.className).toContain("settingsCardError");
+    expect(alert?.className).toContain("settingsFieldError");
   });
 
-  it("没有限时授权时只写「暂无」，不列任何授权行", async () => {
+  it("开启但没有限时授权时什么都不多写", async () => {
     const collab = client({
       assistReceiving: vi.fn().mockResolvedValue({ projectId: "p1", enabled: true }),
       assistGrants: vi.fn().mockResolvedValue({ grants: [], dailyLimit: 20 }),
@@ -1163,11 +1173,12 @@ describe("项目设置的成员协助", () => {
     ));
     await flush();
 
-    expect(document.body.textContent).toContain("限时授权");
-    expect(document.body.textContent).toContain("暂无");
+    expect(document.querySelector("[role=switch]")?.getAttribute("aria-checked")).toBe("true");
+    // 没有授权就不占位置：不写「限时授权 / 暂无」，也没有授权行。
+    expect(document.body.textContent).not.toContain("限时授权");
+    expect(document.body.textContent).not.toContain("暂无");
+    expect(document.querySelector("[aria-label='限时授权']")).toBeNull();
     expect(button("结束授权")).toBeUndefined();
-    expect(document.body.textContent).not.toContain("暂无限时授权。");
-    // 无授权时行内只给说明，右侧没有控件。
     expect(document.querySelector("select")).toBeNull();
   });
 });

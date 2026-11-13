@@ -1,4 +1,4 @@
-import { CircleHelp, Folder, FolderPlus, Users, X } from "lucide-react";
+import { Folder, FolderPlus, Users, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createHttpCollabClient, type CollabClient, type CollabProject } from "../api/collab-client.js";
 import { ApiRequestError } from "../api/http.js";
@@ -14,6 +14,7 @@ import { Button } from "../components/button.js";
 import { Modal } from "../components/modal.js";
 import { useTranslation } from "../i18n/use-translation.js";
 import { isComposingKeyboardEvent } from "../utils/keyboard.js";
+import { InfoHint } from "./collab-info-hint.js";
 import styles from "./collab-page.module.css";
 
 const MAX_PROJECT_NAME_CHARS = 20;
@@ -313,57 +314,6 @@ export function CreateProjectModal(props: {
       ) : null}
       {error ? <p className={styles.error} role="alert">{error}</p> : null}
     </Modal>
-  );
-}
-
-/**
- * 行尾的小问号：说明放在点击之后出现的小浮层里，平时不占版面。
- * 打开时用捕获阶段监听，Escape 只关这一层说明，不连带关掉整个弹窗。
- */
-function InfoHint(props: { label: string; text: string; placement?: "below" | "above" }) {
-  const [open, setOpen] = useState(false);
-  const rootRef = useRef<HTMLSpanElement | null>(null);
-
-  useEffect(() => {
-    if (!open) return undefined;
-    function handlePointerDown(event: PointerEvent) {
-      if (event.target instanceof Node && !rootRef.current?.contains(event.target)) setOpen(false);
-    }
-    function handleKeyDown(event: globalThis.KeyboardEvent) {
-      if (event.key !== "Escape") return;
-      event.preventDefault();
-      // 停在这一层：弹窗自己的 Escape 关掉整屏，说明应该先关、弹窗留着。
-      event.stopPropagation();
-      setOpen(false);
-    }
-    document.addEventListener("pointerdown", handlePointerDown, true);
-    document.addEventListener("keydown", handleKeyDown, true);
-    return () => {
-      document.removeEventListener("pointerdown", handlePointerDown, true);
-      document.removeEventListener("keydown", handleKeyDown, true);
-    };
-  }, [open]);
-
-  return (
-    <span ref={rootRef} className={styles.simpleHintRoot}>
-      <button
-        type="button"
-        className={styles.simpleHintButton}
-        aria-label={props.label}
-        aria-expanded={open}
-        onClick={() => setOpen(!open)}
-      >
-        <CircleHelp size={14} aria-hidden="true" />
-      </button>
-      {open ? (
-        <span
-          role="note"
-          className={`${styles.simpleHintPopover}${props.placement === "above" ? ` ${styles.simpleHintPopoverAbove}` : ""}`}
-        >
-          {props.text}
-        </span>
-      ) : null}
-    </span>
   );
 }
 

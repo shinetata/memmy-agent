@@ -1345,20 +1345,15 @@
   width: min(540px, calc(100vw - 32px));
 }
 
-/* 项目设置：三张主题卡片，比别的弹窗宽一档，留出「标题 + 一行说明｜控件」一行的位置。 */
+/* 项目设置：与创建项目同宽、同一套标题（见 simpleCreateModal），正文是一列字段 */
 :global(.modal).createModal.settingsModal {
-  width: min(560px, calc(100vw - 32px));
+  width: min(520px, calc(100vw - 32px));
 }
 
-:global(.modal).settingsModal :global(.modal-header) {
-  padding: 18px 20px 6px 24px;
-}
-
-/* 标题比默认轻一档，卡片头才是这一屏的分组标题 */
-:global(.modal).settingsModal :global(.modal-header) h2 {
-  font-size: 17px;
-  font-weight: 600;
-  letter-spacing: 0.01em;
+/* 打开时焦点落在弹窗本身（没有首个输入框），整框不画焦点环；里面的控件各有自己的焦点样式 */
+:global(.modal).settingsModal:focus,
+:global(.modal).settingsModal:focus-visible {
+  outline: none;
 }
 
 :global(.modal).pickModal {
@@ -2164,103 +2159,149 @@
   outline-offset: 2px;
 }
 
-/* 项目设置：三张主题卡片（共享 / 协助 / 项目）纵向排列，卡片内每行是「标题 + 一行说明｜右侧控件」 */
+/* 项目设置：和创建项目同一套字段，一行一个，图标 + 名称｜右侧的值、开关或箭头；说明都收进问号 */
 :global(.modal-body).settingsBody {
-  padding: 12px 24px 4px;
-  gap: 12px;
+  padding: 0 24px 4px;
+  gap: 10px;
 }
 
 /* 没有页脚的弹窗（未共享的本机项目、API Key 模式）由正文自己收尾 */
 :global(.modal-body).settingsBodyLast {
-  padding-bottom: 20px;
+  padding-bottom: 22px;
 }
 
-.settingsCard {
-  border: 1px solid var(--collab-line);
-  border-radius: 12px;
-  background: var(--color-background-paper, #fff);
-}
-
-.settingsCardHead {
+/* 一个字段：与名称输入框同高、同边框 */
+.settingsField {
   display: flex;
   align-items: center;
-  gap: 9px;
-  padding: 12px 16px 10px;
+  gap: 10px;
+  width: 100%;
+  height: 44px;
+  padding: 0 12px;
+  border: 1px solid var(--collab-line);
+  border-radius: 10px;
+  background: var(--color-background-paper, #fff);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  transition: border-color var(--duration-fast) ease, background-color var(--duration-fast) ease;
 }
 
-.settingsCardChip {
-  display: grid;
-  flex: none;
-  place-items: center;
-  width: 24px;
-  height: 24px;
-  border-radius: 7px;
-  background: var(--collab-active);
+/* 整行可点的字段（打开文件夹、选择任务、切换开关）：悬停时边框带一点主题色 */
+.settingsFieldButton,
+.settingsFieldToggle {
+  cursor: pointer;
+}
+
+.settingsFieldButton:hover:not(:disabled),
+.settingsFieldToggle:hover {
+  border-color: color-mix(in srgb, var(--collab-accent) 45%, var(--collab-line));
+}
+
+.settingsFieldButton:hover:not(:disabled) .settingsFieldTrail {
   color: var(--collab-accent-deep);
 }
 
-.settingsCardTitle {
-  margin: 0;
+.settingsFieldButton:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--collab-accent) 60%, transparent);
+  outline-offset: 2px;
+}
+
+.settingsFieldButton:disabled {
+  cursor: default;
+}
+
+/* API Key 模式：字段在，但做不了，整体降一档 */
+.settingsFieldMuted .settingsFieldLabel {
+  color: var(--collab-muted);
+}
+
+.settingsFieldIcon {
+  flex: none;
+  color: var(--collab-ter);
+  transition: color var(--duration-fast) ease;
+}
+
+.settingsFieldLabel {
+  flex: none;
   color: var(--collab-ink-2);
   font-size: 13.5px;
-  font-weight: 650;
-  line-height: 1.4;
+  white-space: nowrap;
+  user-select: none;
 }
 
-/* 卡片内一行：左侧标题与说明，右侧开关或按钮；行间细线，第一行也画（贴着卡片头） */
-.settingsCardRow {
-  display: flex;
+/* 问号紧跟名称（与创建项目的 6px 一致），开关推到最右 */
+.settingsFieldHint {
+  display: inline-flex;
+  margin-left: -4px;
+  margin-right: auto;
+  cursor: default;
+}
+
+/* 右侧的值：比名称轻一档，过长时省略 */
+.settingsFieldValue {
+  display: inline-flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  margin: 0 16px;
-  padding: 12px 0;
-  border-top: 1px solid var(--collab-line-soft);
-}
-
-/* 限时授权这一行：标题在上，授权列表在下面，控件跟着每条授权走 */
-.settingsCardRowStack {
-  align-items: flex-start;
-}
-
-.settingsCardText {
-  display: flex;
   min-width: 0;
-  flex: 1;
-  flex-direction: column;
-  gap: 3px;
-}
-
-.settingsCardRowTitle {
-  color: var(--collab-ink-2);
-  font-size: 13px;
-  font-weight: 500;
-  line-height: 1.45;
-}
-
-.settingsCardRowDesc {
-  color: var(--collab-ter);
-  font-size: 12px;
-  line-height: 1.5;
-}
-
-/* 路径这类不该换行的说明：一行省略，完整值放在 title 上 */
-.settingsCardPath {
+  margin-left: auto;
   overflow: hidden;
+  color: var(--collab-muted);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.settingsCardControl {
-  display: flex;
+.settingsFieldTrail {
+  flex: none;
+  margin-left: -4px;
+  color: var(--collab-ter);
+  transition: color var(--duration-fast) ease;
+}
+
+.settingsFieldControl {
+  display: inline-flex;
   flex: none;
   align-items: center;
   gap: 8px;
+  margin-left: auto;
 }
 
-/* 卡片内某一行出错：贴着那一行下面，不把整张卡片推开 */
-.settingsCardError {
-  margin: 0 16px 10px;
+/* 带下文的字段（接收协助请求 + 限时授权）：外框在这一层，里面那一行不再画框 */
+.settingsFieldGroup {
+  border: 1px solid var(--collab-line);
+  border-radius: 10px;
+  background: var(--color-background-paper, #fff);
+  transition: border-color var(--duration-fast) ease, background-color var(--duration-fast) ease;
+}
+
+.settingsFieldGroup > .settingsField {
+  border: 0;
+  background: transparent;
+}
+
+.settingsFieldGroup:has(> .settingsFieldToggle:hover) {
+  border-color: color-mix(in srgb, var(--collab-accent) 45%, var(--collab-line));
+}
+
+/* 开启后整框铺一层浅薄荷色、图标变主题色，与创建项目里开启协作的样子一致 */
+.settingsFieldGroupOn {
+  border-color: color-mix(in srgb, var(--collab-accent) 55%, var(--collab-line));
+  background: color-mix(in srgb, var(--collab-accent) 7%, var(--color-background-paper, #fff));
+}
+
+.settingsFieldGroupOn .settingsFieldIcon {
+  color: var(--collab-accent-deep);
+}
+
+/* 字段里的限时授权：与名称左缘对齐，紧贴开关那一行 */
+.settingsFieldGroup .grantList {
+  padding: 0 12px 12px 38px;
+}
+
+/* 某个字段出错：贴在字段里那一行下面 */
+.settingsFieldError {
+  padding: 0 12px 10px 38px;
   color: var(--color-status-error, #b44c42);
   font-size: 12px;
   line-height: 1.55;
@@ -2887,10 +2928,11 @@
   text-align: center;
 }
 
-/* 限时授权：标题下每位成员一行，左侧首字头像、名字与执行它的 Agent，右侧换用与结束 */
+/* 限时授权：接收协助请求下面每位成员一行，左侧首字头像、名字与「哪个 Agent · 还剩多久」，右侧结束 */
 .grantList {
   display: flex;
   flex-direction: column;
+  gap: 10px;
 }
 
 .grantRow {
@@ -2898,11 +2940,6 @@
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding-top: 8px;
-}
-
-.grantRow + .grantRow {
-  padding-top: 10px;
 }
 
 .grantWho {
@@ -2931,7 +2968,7 @@
   display: flex;
   min-width: 0;
   flex-direction: column;
-  gap: 2px;
+  gap: 1px;
 }
 
 .grantName {
@@ -2947,6 +2984,7 @@
   color: var(--collab-ter);
   font-size: 12px;
   line-height: 1.45;
+  white-space: nowrap;
 }
 
 .grantLogo {
@@ -2956,25 +2994,32 @@
   border-radius: 3px;
 }
 
-.grantActions {
-  display: flex;
-  flex: none;
+/* 换用 Agent：下拉本身就是 Agent 名，像正文里的一个词，只多一个小箭头 */
+.grantSelectWrap {
+  position: relative;
+  display: inline-flex;
   align-items: center;
-  gap: 8px;
 }
 
-/* 换用 Agent：与按钮同高的小号下拉，细边框，不抢视线 */
 .grantSelect {
-  height: 30px;
-  min-width: 120px;
-  padding: 0 10px;
-  border: 1px solid var(--color-border-stone, #d6dfdc);
-  border-radius: 8px;
-  background: var(--color-background-paper, #fff);
-  color: color-mix(in srgb, var(--color-text-ink, #111d1c) 75%, transparent);
+  field-sizing: content;
+  height: 20px;
+  margin: 0;
+  padding: 0 16px 0 4px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--collab-muted);
   font: inherit;
   font-size: 12px;
+  appearance: none;
   cursor: pointer;
+  transition: background-color var(--duration-fast) ease, color var(--duration-fast) ease;
+}
+
+.grantSelect:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--collab-accent) 14%, transparent);
+  color: var(--collab-accent-deep);
 }
 
 .grantSelect:focus-visible {
@@ -2985,4 +3030,11 @@
 .grantSelect:disabled {
   cursor: not-allowed;
   opacity: 0.5;
+}
+
+.grantSelectChevron {
+  position: absolute;
+  right: 3px;
+  color: var(--collab-ter);
+  pointer-events: none;
 }

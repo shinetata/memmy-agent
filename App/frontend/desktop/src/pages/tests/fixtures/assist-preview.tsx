@@ -606,7 +606,7 @@ function Preview() {
   const project = { id: "p1", name: "Memmy 内测反馈" };
 
   if (view === "settings" || view === "settings-off") {
-    // 成员协助这一节单独看：它自己带「协助」的组标题，与项目设置弹窗里的是同一套排布。
+    // 接收协助请求这个字段单独看：与项目设置弹窗里的是同一个组件。
     const settingsClient = fakeClient({
       receiving: view === "settings",
       grants: view === "settings"
@@ -657,7 +657,7 @@ function Preview() {
     };
     const owner = view === "project-settings-owner";
     const member = view === "project-settings-member";
-    // 所有者开了接收协助并给出两条限时授权；成员关着接收协助，所以没有限时授权那一行。
+    // 所有者开了接收协助并给出两条限时授权；成员关着接收协助，所以没有授权列表。
     const settingsClient = fakeClient({
       receiving: owner,
       grants: owner
