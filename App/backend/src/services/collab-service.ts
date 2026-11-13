@@ -25,7 +25,7 @@ import {
   pickAddCandidates,
   type SessionPick
 } from "./collab-add-session.js";
-import { ensureDirectory, uniqueProjectDirectory } from "./project-directory.js";
+import { createProjectDirectory, ensureDirectory } from "./project-directory.js";
 import { MAX_COLLAB_INSTRUCTIONS_CHARS, collabInstructionsDirectoryKey, type CollabInstructionScope } from "@memmy/local-api-contracts";
 import { instructionScopesFrom } from "./collab-instruction-scopes.js";
 import type { CollabInstructionsService } from "./collab-instructions-service.js";
@@ -1806,7 +1806,7 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
     async createProject(name, directory) {
       const data = await cloud("/projects", { method: "POST", body: { name } });
       const project = toProject(data.project);
-      const localDirectory = await prepareWorkingDirectory(onlineWorkdirRoot, project.id, project.name, directory);
+      const localDirectory = await prepareWorkingDirectory(onlineWorkdirRoot, project.name, directory);
       const account = requireAccount();
       await exclusive(async () => {
         const stored = await readLinks(project.id, account.accountId);
@@ -1822,8 +1822,9 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
         const stored = await readLinks(projectId, account.accountId);
         // A project created earlier keeps the folder it already had, so its tasks stay where they were.
         const existing = directory ? undefined : stored.workingDirectory;
+        // Without a name (an old cloud that sent none) the id is the only label left for the folder.
         const localDirectory = existing
-          ?? await prepareWorkingDirectory(onlineWorkdirRoot, projectId, name ?? projectId, directory);
+          ?? await prepareWorkingDirectory(onlineWorkdirRoot, name?.trim() || projectId, directory);
         if (!stored.workingDirectory) {
           stored.workingDirectory = localDirectory;
           await writeLinks(stored);
@@ -2205,7 +2206,7 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
       if (!status || !projectId) {
         throw new CollabError("internal", "加入项目的结果无法识别，请稍后重试");
       }
-      const chosen = directory?.trim() ? await prepareWorkingDirectory(onlineWorkdirRoot, projectId, projectId, directory) : null;
+      const chosen = directory?.trim() ? await ensureDirectory(directory.trim()) : null;
       const stored = await exclusive(async () => {
         const latest = await readLinks(projectId, account.accountId);
         // A project this computer already runs keeps its folder; otherwise the latest choice wins, so a person who
@@ -2853,18 +2854,10 @@ function isNewer(updatedAt: string, uploadedAt: string): boolean {
  * The directory an online project's tasks run in: the folder the person picked, or a managed empty folder so a
  * task always has a working directory. Either way it is created before the local project is registered.
  */
-async function prepareWorkingDirectory(
-  root: string,
-  projectId: string,
-  name: string,
-  directory: string | undefined
-): Promise<string> {
-  // The folder name is what a task page and the project picker show, so it carries the project name and only
-  // falls back to the id when the name is already taken by another project.
-  const target = directory?.trim()
-    ? directory.trim()
-    : await uniqueProjectDirectory(root, name, projectId);
-  return ensureDirectory(target);
+async function prepareWorkingDirectory(root: string, name: string, directory: string | undefined): Promise<string> {
+  // The folder name is what a task page and the project picker show, so it carries the project name, numbered
+  // (`<name> 2`) when another project already took it.
+  return directory?.trim() ? ensureDirectory(directory.trim()) : createProjectDirectory(root, name);
 }
 
 function toApplication(raw: unknown): CollabApplication {

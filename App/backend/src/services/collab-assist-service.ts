@@ -347,8 +347,8 @@ export interface CollabAssistServiceOptions {
   userMode?: () => string;
   /** 本机状态文件所在目录，默认 ~/.memmy。 */
   homeDirectory?: string;
-  /** 项目在本机的工作目录：执行方的 Agent 在这里跑。 */
-  projectDirectory: (projectId: string) => Promise<string | null>;
+  /** 项目在本机的工作目录：执行方的 Agent 在这里跑。还没有目录时按项目名新建，所以带上请求里的项目名。 */
+  projectDirectory: (projectId: string, projectName?: string) => Promise<string | null>;
   /** 这台电脑上能运行的执行方，Memmy 在第一个；分层与默认项由这里按项目算出。 */
   agents: (projectId: string) => Promise<AssistAgentCandidate[]>;
   /** 本机关联记录里各 Agent 的使用情况：决定哪些放在第一层、同一层怎么排。 */
@@ -1640,7 +1640,7 @@ export function createCollabAssistService(options: CollabAssistServiceOptions): 
     runningAt.set(requestId, Date.now());
     const controller = running.get(requestId)!;
 
-    const cwd = await options.projectDirectory(request.projectId)
+    const cwd = await options.projectDirectory(request.projectId, request.projectName || undefined)
       .catch(() => null)
       ?? home;
 

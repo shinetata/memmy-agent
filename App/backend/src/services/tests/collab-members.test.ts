@@ -117,6 +117,18 @@ describe("collab members", () => {
     const managed = await svc.ensureWorkingDirectory("p-1", "Memmy 开发");
     expect(managed.chosen).toBe(false);
     expect(managed.localDirectory).not.toBe(chosen);
+    expect(managed.localDirectory).toBe(join(root, "online-projects", "Memmy 开发"));
+  });
+
+  it("names a managed folder after the project, numbered when another project took the name", async () => {
+    const { svc, root } = setup({});
+    mkdirSync(join(root, "online-projects", "Memmy 开发"), { recursive: true });
+
+    expect((await svc.ensureWorkingDirectory("p-1", "Memmy 开发")).localDirectory).toBe(join(root, "online-projects", "Memmy 开发 2"));
+    // Asked again, the project keeps the folder it already has.
+    expect((await svc.ensureWorkingDirectory("p-1", "Memmy 开发")).localDirectory).toBe(join(root, "online-projects", "Memmy 开发 2"));
+    // Only a caller with no name at all falls back to the id.
+    expect((await svc.ensureWorkingDirectory("p-2", "  ")).localDirectory).toBe(join(root, "online-projects", "p-2"));
   });
 
   it("refuses text that holds no invite before calling the cloud", async () => {

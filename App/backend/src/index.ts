@@ -362,8 +362,8 @@ export async function createLocalBackend(options: CreateLocalBackendOptions): Pr
     const collabAssist = createCollabAssistService({
       cloud: createCollabCloudRequest({ cloudBaseUrl: cloudConfig.baseUrl, getAccount: getCollabAccount, userMode }),
       userMode,
-      projectDirectory: async (projectId: string) =>
-        (await collab.ensureWorkingDirectory(projectId)).localDirectory ?? null,
+      projectDirectory: async (projectId: string, projectName?: string) =>
+        (await collab.ensureWorkingDirectory(projectId, projectName)).localDirectory ?? null,
       agents: async () => {
         const view = await collabAgentAccess.view();
         // 判断用的是补上登录 shell PATH 的环境：打包后的 Memmy 进程 PATH 里没有 Homebrew / nvm 的目录，

@@ -580,9 +580,9 @@ describe("collab service", () => {
     });
     const svc = service(fetcher, { projectsDir: join(root, "projects") });
 
-    // Another project already owns the plain name, so this one gets a short id suffix instead of an id-only name.
+    // Another project already owns the plain name, so this one is numbered the way a file manager would.
     const created = await svc.createProject("Memmy 开发");
-    expect(created.localDirectory).toBe(join(root, "online-projects", "Memmy 开发-p-9abcde"));
+    expect(created.localDirectory).toBe(join(root, "online-projects", "Memmy 开发 2"));
   });
 
   it("uses the folder the person picked and registers it as the local project", async () => {
