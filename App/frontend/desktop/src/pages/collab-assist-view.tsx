@@ -192,6 +192,29 @@ export function assistWaitedText(
   return t("collab.assist.agoHours", { count: String(Math.floor(seconds / 3600)) });
 }
 
+/**
+ * 执行方检查结论的那一行：需要她看过时说明为什么。
+ *
+ * <p>三种说法各司其职：上次有跳过的操作时后端已经写成「上次跳过了：…」，原样显示（不再套「需要你确认：」，
+ * 免得两个冒号；审查没能完成时换成一句完整的话；其余情况套「需要你确认：{原因}」。结论是「可以自动执行」
+ * 或根本没有这次结论时不显示。</p>
+ */
+export function assistReviewLine(
+  request: Pick<AssistRequest, "safety">,
+  t: (key: MessageKey, values?: Record<string, string>) => string
+): string | null {
+  const executor = request.safety?.executor;
+  if (!executor || executor.status === "auto") return null;
+  if (executor.status === "unavailable") return t("collab.assist.reviewUnavailable");
+  const reason = executor.reason?.trim();
+  if (!reason) return null;
+  if (reason.startsWith(SKIPPED_PREFIX)) return reason;
+  return t("collab.assist.reviewConfirm", { reason });
+}
+
+/** 后端「上次跳过了：{标题}」这句话的开头：界面对上它就不再套一层前缀。 */
+export const SKIPPED_PREFIX = "上次跳过了：";
+
 /** 请求还没结束：等待授权、执行中、等待确认。 */
 export function assistIsOpen(status: AssistStatus): boolean {
   return status === "pending" || status === "running" || status === "confirm";

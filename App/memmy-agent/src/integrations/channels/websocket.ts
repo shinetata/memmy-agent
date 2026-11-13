@@ -435,7 +435,9 @@ function assistRunMetadata(value: unknown): Record<string, string | number> | nu
     if (typeof item === "string" && item.trim()) out[key] = item.trim().slice(0, 200);
   }
   // 交给模型、不在任务里显示的要求（结果的写法）：由协助钩子放进系统提示词。
-  if (typeof raw.context === "string" && raw.context.trim()) out.context = raw.context.trim().slice(0, 2_000);
+  if (typeof raw.context === "string" && raw.context.trim()) out.context = raw.context.trim().slice(0, 4_000);
+  // 这次执行对敏感操作的策略：deny 是限时授权自动开始的（工具执行前按规则拦下），allow 是她点过允许的。
+  if (raw.approval === "deny" || raw.approval === "allow") out.approval = raw.approval;
   if (typeof raw.attempt === "number" && Number.isSafeInteger(raw.attempt) && raw.attempt > 0) out.attempt = raw.attempt;
   return out.requestId ? out : null;
 }

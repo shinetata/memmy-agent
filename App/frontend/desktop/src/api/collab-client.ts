@@ -329,7 +329,8 @@ const AssistTranscriptItemSchema = z.discriminatedUnion("kind", [
     name: z.string(),
     input: z.string().default(""),
     output: z.string().default(""),
-    status: z.enum(["running", "done", "failed"]),
+    /** skipped：按协助规则没有执行（执行方的 Memmy 拦下了这一步）。 */
+    status: z.enum(["running", "done", "failed", "skipped"]),
     truncated: z.boolean().optional(),
     delivery: z.boolean().optional()
   }),
@@ -341,6 +342,25 @@ const AssistTranscriptSchema = z.array(z.unknown()).transform((items) => items.f
   const parsed = AssistTranscriptItemSchema.safeParse(item);
   return parsed.success ? [parsed.data] : [];
 }));
+
+/**
+ * 安全检查：发起方发出前那次（requester）、执行方收到后那次（executor）、执行时跳过的操作（skipped）
+ * 与回传前隐藏的密钥处数（redacted）。旧请求没有这一段，按 null 读。
+ */
+const AssistSafetySchema = z.object({
+  requester: z.object({
+    status: z.enum(["passed", "unavailable"]),
+    summary: z.string().optional(),
+    declared: z.array(z.object({ action: z.string(), reason: z.string().optional() })).optional()
+  }).optional(),
+  executor: z.object({
+    status: z.enum(["auto", "confirm", "unavailable"]),
+    reason: z.string().optional(),
+    undeclared: z.array(z.string()).optional()
+  }).optional(),
+  skipped: z.array(z.object({ title: z.string(), detail: z.string().optional() })).optional(),
+  redacted: z.number().optional()
+}).nullish().transform((value) => value ?? null);
 
 const AssistRequestSchema = z.object({
   id: z.string(),
@@ -396,6 +416,8 @@ const AssistRequestSchema = z.object({
   executorOffline: z.boolean().nullish().transform((value) => value ?? false),
   /** 请求已经等了多久（秒），由云端算；旧后端不给时为 null。 */
   waitingSeconds: z.number().nullish().transform((value) => value ?? null),
+  /** 安全检查与执行时跳过的操作；旧请求没有这一段，按 null 读。 */
+  safety: AssistSafetySchema,
   // 以下是会话内容，只在打开一次协助时返回；旧请求没有时为 undefined / null，界面按已有内容显示。
   /** 执行方 Agent 收到的提示词。 */
   prompt: z.string().nullish(),
@@ -528,6 +550,8 @@ export type AssistAgent = z.infer<typeof AssistAgentSchema>;
 export type AssistGrantInfo = z.infer<typeof AssistGrantInfoSchema>;
 export type AssistReceiving = z.infer<typeof AssistReceivingSchema>;
 export type AssistTranscriptItem = z.infer<typeof AssistTranscriptItemSchema>;
+/** 一条请求的安全检查结果（发起方的检查、执行方的检查、跳过的操作、隐藏的密钥处数）。 */
+export type AssistSafety = NonNullable<z.infer<typeof AssistSafetySchema>>;
 
 /** 打开一次协助：完整会话，加上双方在这台电脑上能打开的任务。 */
 const AssistThreadDetailSchema = z.object({

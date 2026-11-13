@@ -9,7 +9,7 @@
  * 到时自动结束，也可以在项目设置里提前结束。
  */
 import { useEffect, useRef, useState } from "react";
-import { ChevronDown, ChevronRight, Folder } from "lucide-react";
+import { AlertTriangle, ChevronDown, ChevronRight, Folder } from "lucide-react";
 import type { AssistAgent, AssistGrantMinutes, AssistInboxItem, AssistRequest, AssistScope, CollabClient } from "../api/collab-client.js";
 import { Button } from "../components/button.js";
 import { Memmy } from "../components/mascot/memmy.js";
@@ -18,7 +18,7 @@ import { useTranslation } from "../i18n/use-translation.js";
 import { agentSourceLogoUrl } from "./agent-source-logos.js";
 import { AssistAttachments } from "./collab-assist-attachments.js";
 import { AssistItems } from "./collab-assist-items.js";
-import { DEFAULT_GRANT_MINUTES, GrantDurationPicker, assistWaitedText } from "./collab-assist-view.js";
+import { DEFAULT_GRANT_MINUTES, GrantDurationPicker, assistReviewLine, assistWaitedText } from "./collab-assist-view.js";
 import styles from "./collab-assist-dialog.module.css";
 
 export function CollabAssistDialog(props: {
@@ -101,6 +101,8 @@ export function CollabAssistDialog(props: {
   const chosen = agents?.find((item) => item.sourceId === agent) ?? null;
   const agentName = chosen?.name ?? t("collab.assist.executorFallback");
   const waited = assistWaitedText(request.waitingSeconds, t);
+  // 她的 Memmy 检查过之后认为需要她确认：标题下用一行说明为什么，不加块、不加边框。
+  const reviewLine = assistReviewLine(shown, t);
   const others = agents?.filter((item) => item.group === "other") ?? [];
 
   async function submit(action: "allow" | "reject") {
@@ -145,6 +147,12 @@ export function CollabAssistDialog(props: {
       <div className={styles.top}>
         <Memmy pose="shield" size={56} className={styles.mascot} />
         <h2 className={styles.title}>{t("collab.assist.title", { name: requester })}</h2>
+        {reviewLine ? (
+          <p className={styles.review}>
+            <AlertTriangle size={14} className={styles.reviewIcon} aria-hidden="true" />
+            <span>{reviewLine}</span>
+          </p>
+        ) : null}
         {/* 标题下面直接是背景：谁在请求已在标题里，为什么请求由背景说明，不再加一句复述的引导语。 */}
         {shown.reason ? (
           <p className={styles.reason}>
