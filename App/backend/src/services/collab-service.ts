@@ -1323,22 +1323,43 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
    * of the project list tries again.
    */
   /**
-   * Keeps a copy of a project's cloud instructions with the scopes they cover.
-   * A failed copy must not fail the cloud call that carried the text: the board still shows it, and the next read
-   * of the project list tries again.
+   * 缓存一个协作项目的项目名、成员、背景与规范，以及它们覆盖的会话单位。
+   *
+   * <p>没写背景与规范的项目也要缓存：它关联的目录里的 Agent 靠这条目知道「当前目录属于哪个协作项目」。
+   * 写失败不能拖垮带着这份数据的云端调用：看板上照样显示，下一次读项目列表再试。</p>
    */
-  async function rememberInstructions(
+  async function rememberInstructions(input: {
+    project: Pick<CollabProject, "id" | "name" | "instructions">;
+    scopes: readonly CollabInstructionScope[];
+    /** 手头已经有成员列表时才传；没传时保留上一次记下的成员。 */
+    members?: readonly string[] | null;
+  }): Promise<void> {
+    if (!options.collabInstructions) return;
+    // 本机没有任何关联（没有工作目录、也没选过 Agent 单位）：这个目录里本就不该注入，不必建条目。
+    if (!input.scopes.length) return;
+    try {
+      await options.collabInstructions.remember({
+        projectId: input.project.id,
+        scopes: input.scopes,
+        text: input.project.instructions,
+        name: input.project.name,
+        ...(input.members ? { members: input.members } : {})
+      });
+    } catch (error) {
+      console.warn(`Project instructions not cached for ${input.project.id}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  /** 只刷新项目名与成员：拿到成员列表这类「已经有数据」的时机用它，不重写背景与规范。 */
+  async function rememberProjectInfo(
     projectId: string,
-    instructions: string,
-    scopes: readonly CollabInstructionScope[]
+    info: { name?: string | null; members?: readonly string[] | null }
   ): Promise<void> {
     if (!options.collabInstructions) return;
-    // 还没有可生效的范围时等下一次同步；云端删除指令（空文本）不需要范围，照旧清掉。
-    if (!scopes.length && instructions.trim()) return;
     try {
-      await options.collabInstructions.remember({ projectId, scopes, text: instructions });
+      await options.collabInstructions.updateProjectInfo(projectId, info);
     } catch (error) {
-      console.warn(`Project instructions not cached for ${projectId}: ${error instanceof Error ? error.message : String(error)}`);
+      console.warn(`Project name or members not cached for ${projectId}: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
@@ -1350,7 +1371,7 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
     return instructionScopesFrom(stored, options.codexHome ? { codexHome: options.codexHome } : {});
   }
 
-  /** 关联变了就换范围：新关联的 Agent 分组立即带上已有指令，取消关联的不再带。 */
+  /** 关联变了就换范围：新关联的 Agent 分组立即带上已有指令，取消关联的不再带；还没有条目时就建一个。 */
   async function updateInstructionScopes(projectId: string, stored: StoredLinks): Promise<void> {
     if (!options.collabInstructions) return;
     const scopes = instructionScopes(stored);
@@ -1765,7 +1786,8 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
       const bound = await Promise.all(projects.map(async (project) => {
         const stored = await readLinks(project.id, account.accountId);
         // The list is read at every launch, so this is where members pick up instructions the owner changed.
-        await rememberInstructions(project.id, project.instructions, instructionScopes(stored));
+        // 项目名跟着一起缓存：名单里没有成员明细，成员只在能拿到列表时补（见 listMembers）。
+        await rememberInstructions({ project, scopes: instructionScopes(stored) });
         return { ...project, localProjectId: stored.localProjectId };
       }));
       // 旧云端没有这份列表时不填字段，桌面端就保留本机刚记下的申请，避免一次刷新把「申请中」冲掉。
@@ -1802,6 +1824,9 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
       if (!stored.workingDirectory) {
         stored.workingDirectory = localDirectory;
         await writeLinks(stored);
+        // 工作目录一就位，这个项目在本机就有了可生效的范围：立即建/更新条目，
+        // 在它下面的任务第一轮就知道自己属于哪个协作项目，不必等下次同步列表。
+        await updateInstructionScopes(projectId, stored);
       }
       return { localDirectory, chosen: Boolean(directory) || (Boolean(existing) && stored.directoryChosen) };
     },
@@ -2061,13 +2086,19 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
       const account = requireAccount();
       const data = await cloud(`/projects/${encodeURIComponent(projectId)}/members`);
       const stored = await readLinks(projectId, account.accountId);
-      return {
+      const view = {
         project: { ...toProject(data.project), localProjectId: stored.localProjectId },
         joinMode: toJoinMode(data.joinMode),
         canManage: data.canManage === true,
         members: list(data.members).map(toMember),
         requests: list(data.requests).map(toJoinRequest)
       };
+      // 成员的显示名只有这次调用能拿到（项目列表里只有人数）：顺手刷进缓存，注入时不必再问云端。
+      await rememberProjectInfo(projectId, {
+        name: view.project.name,
+        members: view.members.map((member) => member.name)
+      });
+      return view;
     },
 
     async createInvite(projectId) {
@@ -2093,7 +2124,10 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
       const account = requireAccount();
       // The binding stays as it is; only the name the board and the sidebar read comes back.
       const stored = await readLinks(projectId, account.accountId);
-      return { project: { ...toProject(record(data.project)), localProjectId: stored.localProjectId } };
+      const project = { ...toProject(record(data.project)), localProjectId: stored.localProjectId };
+      // 项目名会进注入文本：改名后同步缓存，Agent 看到的就是新名字。
+      await rememberProjectInfo(projectId, { name: project.name });
+      return { project };
     },
 
     async updateInstructions(projectId, text, directory) {
@@ -2105,7 +2139,7 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
       const account = requireAccount();
       const stored = await readLinks(projectId, account.accountId);
       const project = { ...toProject(record(data.project)), localProjectId: stored.localProjectId };
-      await rememberInstructions(projectId, project.instructions, instructionScopes(stored));
+      await rememberInstructions({ project, scopes: instructionScopes(stored) });
       return { project };
     },
 
