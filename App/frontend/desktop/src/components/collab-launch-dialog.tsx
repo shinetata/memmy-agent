@@ -232,6 +232,7 @@ function trapFocus(event: KeyboardEvent<HTMLElement>) {
     event.preventDefault();
     last.focus();
   } else if (!event.shiftKey && (document.activeElement === last || document.activeElement === event.currentTarget)) {
+    event.preventDefault();
     first.focus();
   }
 }
