@@ -50,6 +50,10 @@ function skillDistribution(options: { installed?: string[]; failFor?: string[] }
       removed.forEach((sourceId) => calls.push(`remove:${sourceId}`));
       installed.clear();
       return removed;
+    },
+    async syncProjectHooks(sourceIds?: readonly string[]) {
+      calls.push(`sync:${sourceIds ? sourceIds.join(",") : "all"}`);
+      return [];
     }
   } as unknown as SkillDistributionService;
   return { service, calls, installed };
@@ -112,7 +116,7 @@ describe("collab agent access", () => {
 
     const result = await instance.setGranted(true);
     expect(result.view.granted).toBe(true);
-    expect(calls).toEqual(["install:cursor", "install:codex"]);
+    expect(calls).toEqual(["install:cursor", "install:codex", "sync:all"]);
     expect(result.results.map((item) => [item.sourceId, item.ok])).toEqual([
       ["cursor", true],
       ["codex", false]
@@ -130,10 +134,10 @@ describe("collab agent access", () => {
     const { service, calls } = skillDistribution();
     const instance = access(dir, AGENTS, service);
     await instance.setAgentEnabled("cursor", false);
-    expect(calls).toEqual(["remove:cursor"]);
+    expect(calls).toEqual(["remove:cursor", "sync:cursor"]);
 
     await instance.setGranted(true);
-    expect(calls).toEqual(["remove:cursor", "install:codex"]);
+    expect(calls).toEqual(["remove:cursor", "sync:cursor", "install:codex", "sync:all"]);
   });
 
   it("removes every project skill on revoke and keeps the linked tasks alone", async () => {
@@ -146,7 +150,8 @@ describe("collab agent access", () => {
     const result = await instance.setGranted(false);
     expect(result.view.granted).toBe(false);
     // 组件一并移除；已关联的任务留在项目里，授权服务不碰它们。
-    expect(calls).toEqual(["remove:cursor", "remove:codex"]);
+    // 项目钩子不能一律移除：已接入记忆钩子的 Agent 还要继续拿到本机项目指令，交给同步按条件判断。
+    expect(calls).toEqual(["remove:cursor", "remove:codex", "sync:all"]);
   });
 
   it("lets no agent be read until the person authorizes it", async () => {
@@ -184,11 +189,29 @@ describe("collab agent access", () => {
     expect(view.agents.some((agent) => agent.added)).toBe(false);
 
     await instance.setGranted(true);
-    expect(calls).toEqual(["install:cursor", "install:codex"]);
+    expect(calls).toEqual(["install:cursor", "install:codex", "sync:all"]);
     // 撤销只收回内置 Agent 的组件，不去动已经手动添加的那个。
     await instance.setGranted(false);
-    expect(calls).toEqual(["install:cursor", "install:codex", "remove:cursor", "remove:codex"]);
+    expect(calls).toEqual([
+      "install:cursor", "install:codex", "sync:all",
+      "remove:cursor", "remove:codex", "sync:all"
+    ]);
     expect(existsSync(join(skills, "memmy-project", "SKILL.md"))).toBe(false);
+  });
+
+  it("syncs the project hooks for one agent when it is turned off or on", async () => {
+    const dir = home();
+    const { service, calls } = skillDistribution();
+    const instance = access(dir, AGENTS, service);
+    await instance.setGranted(true);
+    calls.length = 0;
+
+    await instance.setAgentEnabled("codex", false);
+    expect(calls).toEqual(["remove:codex", "sync:codex"]);
+
+    calls.length = 0;
+    await instance.setAgentEnabled("codex", true);
+    expect(calls).toEqual(["install:codex", "sync:codex"]);
   });
 
   it("does not write anything when asked to reinstall without an authorization", async () => {

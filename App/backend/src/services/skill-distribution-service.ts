@@ -60,6 +60,12 @@ export interface SkillDistributionService {
   removeProjectSkills(): Promise<string[]>;
   /** 这个 Agent 的技能目录里是否已经有 `memmy-project`。 */
   hasProjectSkill(sourceId: string): Promise<boolean>;
+  /**
+   * 项目钩子的安装条件：已接入记忆钩子的 Agent（以前项目指令就是记忆钩子注入的），
+   * 或已授权协作且没被关掉的 Agent。不符合条件的会移除，返回实际变更的 Agent。
+   * 单个 Agent 失败不影响其他 Agent；不传 `sourceIds` 时看全部。
+   */
+  syncProjectHooks?(sourceIds?: readonly string[]): Promise<string[]>;
 }
 
 /**
@@ -248,6 +254,52 @@ export function createSkillDistributionService(
     async hasProjectSkill(sourceId) {
       const root = await options.targetRegistry.get(sourceId)?.resolveRootDirectory().catch(() => null);
       return root ? memmyProjectSkillExists(root) : false;
+    },
+
+    async syncProjectHooks(sourceIds) {
+      const wanted = sourceIds ? new Set(sourceIds) : null;
+      const changed: string[] = [];
+      for (const target of options.targetRegistry.list()) {
+        if (!target.installProjectHook || !target.uninstallProjectHook) continue;
+        if (wanted && !wanted.has(target.targetId)) continue;
+        try {
+          const root = await target.resolveRootDirectory();
+          if (!root) continue;
+          const installed = await (target.isProjectHookInstalled?.() ?? false);
+          const memoryInstalled = await (target.isMemoryHookInstalled?.() ?? false);
+          // 旧版记忆钩子还带着项目指令逻辑：先不装，等它更新到当前版本再装，否则同一段会注入两遍。
+          if (memoryInstalled && !(await (target.isInstalledHookCurrent?.() ?? true))) {
+            if (installed) {
+              await target.uninstallProjectHook();
+              changed.push(target.targetId);
+            }
+            continue;
+          }
+          const wantedByMemoryHook = memoryInstalled;
+          const wantedByCollab = await projectSkillAllowed(target.targetId);
+          if (!wantedByMemoryHook && !wantedByCollab) {
+            if (installed) {
+              await target.uninstallProjectHook();
+              changed.push(target.targetId);
+            }
+            continue;
+          }
+          if (!installed) {
+            // 这个 Agent 不在本机时不给它新建目录：Cursor 的根目录是固定的，不会返回空。
+            if (!(await directoryExists(root))) continue;
+            await target.installProjectHook();
+            changed.push(target.targetId);
+            continue;
+          }
+          if (!(await (target.isProjectHookCurrent?.() ?? true))) {
+            await target.installProjectHook();
+            changed.push(target.targetId);
+          }
+        } catch {
+          // 单个 Agent 失败不影响其他 Agent：下一次启动或下一次切换授权时再试。
+        }
+      }
+      return changed;
     }
   };
 }
