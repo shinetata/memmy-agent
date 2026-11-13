@@ -102,7 +102,8 @@ export function CollabAssistDialog(props: {
   const agentName = chosen?.name ?? t("collab.assist.executorFallback");
   const waited = assistWaitedText(request.waitingSeconds, t);
   // 她的 Memmy 检查过之后认为需要她确认：标题下用一行说明为什么，不加块、不加边框。
-  const reviewLine = assistReviewLine(shown, t);
+  // 详情是为附件拉的，可能比收件箱里那份晚一步拿到检查结论：哪份有结论就用哪份。
+  const reviewLine = assistReviewLine(shown.safety?.executor ? shown : request, t);
   const others = agents?.filter((item) => item.group === "other") ?? [];
 
   async function submit(action: "allow" | "reject") {
