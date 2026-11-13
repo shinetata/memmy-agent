@@ -283,7 +283,7 @@ describe("new project dialog", () => {
     await flush();
 
     expect(document.querySelector(".modal-body [role='switch']")).toBeNull();
-    expect(document.body.textContent).not.toContain("与成员共享");
+    expect(document.body.textContent).not.toContain("开启项目共享");
     expect(document.body.textContent).not.toContain("加入项目");
     // 没有云端账号就没有「加入项目」，页脚左侧只剩占位，不在弹窗里留一个走不通的按钮。
     expect(document.querySelector("[role='tablist']")).toBeNull();
@@ -406,6 +406,24 @@ describe("new project dialog", () => {
     });
     expect(popover()).toBeNull();
     expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("toggles sharing from anywhere in the share field except its question mark", async () => {
+    // 共享是一个整框：点文字与点开关一样切换，点问号只看说明。
+    const label = Array.from(document.querySelectorAll<HTMLElement>(".modal-body span"))
+      .find((node) => node.textContent === "开启项目共享");
+    expect(label, "共享字段应显示「开启项目共享」").toBeTruthy();
+    expect(shareSwitch().getAttribute("aria-label")).toBe("开启项目共享");
+
+    await act(async () => label!.click());
+    expect(shareSwitch().getAttribute("aria-checked")).toBe("true");
+
+    await act(async () => shareSwitch().click());
+    expect(shareSwitch().getAttribute("aria-checked")).toBe("false");
+
+    await act(async () => hintButton("共享说明").click());
+    expect(popover()).not.toBeNull();
+    expect(shareSwitch().getAttribute("aria-checked")).toBe("false");
   });
 
   it("only mentions the name limit once the name is too long", async () => {

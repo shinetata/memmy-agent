@@ -2008,24 +2008,52 @@
   color: var(--collab-ink-2);
 }
 
-/* 共享：一行标题加右侧开关，说明在小问号里 */
-.simpleShareRow {
+/* 共享：与名称框同高、同边框的一个字段，图标与文字和名称框对齐；开启后整框铺一层浅薄荷色 */
+.simpleShareField {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  margin-top: 20px;
-  padding-top: 18px;
-  border-top: 1px solid var(--collab-line-soft);
+  gap: 10px;
+  height: 44px;
+  margin-top: 12px;
+  padding: 0 12px;
+  border: 1px solid var(--collab-line);
+  border-radius: 10px;
+  background: var(--color-background-paper, #fff);
+  cursor: pointer;
+  transition: border-color var(--duration-fast) ease, background-color var(--duration-fast) ease;
+}
+
+.simpleShareField:hover {
+  border-color: color-mix(in srgb, var(--collab-accent) 45%, var(--collab-line));
+}
+
+.simpleShareFieldOn {
+  border-color: color-mix(in srgb, var(--collab-accent) 55%, var(--collab-line));
+  background: color-mix(in srgb, var(--collab-accent) 7%, var(--color-background-paper, #fff));
+}
+
+.simpleShareIcon {
+  flex: none;
+  color: var(--collab-ter);
+  transition: color var(--duration-fast) ease;
+}
+
+.simpleShareFieldOn .simpleShareIcon {
+  color: var(--collab-accent-deep);
 }
 
 .simpleShareLabel {
-  display: flex;
-  align-items: center;
-  gap: 6px;
   color: var(--collab-ink-2);
-  font-size: 13px;
-  font-weight: 600;
+  font-size: 13.5px;
+  user-select: none;
+}
+
+/* 问号紧跟文字（与「文件夹 ?」同为 6px），开关推到最右 */
+.simpleShareHint {
+  display: inline-flex;
+  margin-left: -4px;
+  margin-right: auto;
+  cursor: default;
 }
 
 .simpleQuotaHint {

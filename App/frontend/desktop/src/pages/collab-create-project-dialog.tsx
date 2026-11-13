@@ -1,4 +1,4 @@
-import { CircleHelp, Folder, FolderPlus, X } from "lucide-react";
+import { CircleHelp, Folder, FolderPlus, Users, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createHttpCollabClient, type CollabClient, type CollabProject } from "../api/collab-client.js";
 import { ApiRequestError } from "../api/http.js";
@@ -277,21 +277,26 @@ export function CreateProjectModal(props: {
 
       {shareAvailable ? (
         <>
-          <div className={styles.simpleShareRow}>
-            <span className={styles.simpleShareLabel}>
-              <span>{t("collab.create.share")}</span>
+          {/* 共享和名称、文件夹一样是一个字段框：不用分隔线另起一段，点整框任意位置都能切换（问号除外） */}
+          <div
+            className={`${styles.simpleShareField}${share ? ` ${styles.simpleShareFieldOn}` : ""}`}
+            onClick={() => setShare((current) => !current)}
+          >
+            <Users size={16} aria-hidden="true" className={styles.simpleShareIcon} />
+            <span className={styles.simpleShareLabel}>{t("collab.create.shareToggle")}</span>
+            <span className={styles.simpleShareHint} onClick={(event) => event.stopPropagation()}>
               <InfoHint
                 placement="above"
                 label={t("collab.create.shareHelpLabel")}
                 text={t("collab.create.shareHint")}
               />
             </span>
+            {/* 开关自己不处理点击：点击会冒泡到整框只切换一次，键盘的空格 / 回车同样产生点击 */}
             <button
               type="button"
               role="switch"
               aria-checked={share}
-              aria-label={t("collab.create.share")}
-              onClick={() => setShare(!share)}
+              aria-label={t("collab.create.shareToggle")}
               className={`${styles.settingsSwitch}${share ? ` ${styles.settingsSwitchOn}` : ""}`}
             />
           </div>
