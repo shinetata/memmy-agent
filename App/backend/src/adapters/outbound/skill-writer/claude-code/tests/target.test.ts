@@ -119,6 +119,77 @@ describe("claude code skill target", () => {
     }
   });
 
+  it("installs the project hook beside the memory hook without either removing the other", async () => {
+    const { rootDirectory, memmyConfigPath } = createFixture();
+    const target = createClaudeCodeSkillTarget({ rootDirectory, memmyConfigPath });
+
+    await target.installPlugin?.("claude_code");
+    await target.installProjectHook?.();
+    // 再装一遍：条目不能翻倍，也不能把记忆钩子挤掉。
+    await target.installPlugin?.("claude_code");
+    await target.installProjectHook?.();
+
+    const settings = readSettingsFile(rootDirectory);
+    for (const event of ["UserPromptSubmit", "SessionStart", "PostCompact"]) {
+      const commands = commandsFor(settings, event);
+      expect(commands.filter((command) => command.includes("memmy-resume-hook.mjs"))).toHaveLength(1);
+      expect(commands.filter((command) => command.includes("memmy-project-hook.mjs"))).toHaveLength(1);
+    }
+    expect(existsSync(join(rootDirectory, "hooks", "memmy-project-hook.mjs"))).toBe(true);
+    expect(existsSync(join(rootDirectory, "hooks", "memmy-project-runtime.mjs"))).toBe(true);
+    expect(existsSync(join(rootDirectory, "hooks", "memmy-project-config.json"))).toBe(true);
+    // 记忆钩子自己的文件一个都不能少。
+    expect(existsSync(join(rootDirectory, "hooks", "memmy-resume-hook.mjs"))).toBe(true);
+    expect(existsSync(join(rootDirectory, "hooks", "memmy-workspace-bridge.mjs"))).toBe(true);
+    expect(existsSync(join(rootDirectory, "hooks", "memmy-memory-config.json"))).toBe(true);
+    await expect(target.isProjectHookInstalled?.()).resolves.toBe(true);
+    await expect(target.isProjectHookCurrent?.()).resolves.toBe(true);
+  });
+
+  it("removes only the project hook when asked to", async () => {
+    const { rootDirectory, memmyConfigPath } = createFixture();
+    const target = createClaudeCodeSkillTarget({ rootDirectory, memmyConfigPath });
+    await target.installPlugin?.("claude_code");
+    await target.installProjectHook?.();
+
+    await target.uninstallProjectHook?.();
+
+    const settings = readSettingsFile(rootDirectory);
+    for (const event of ["UserPromptSubmit", "SessionStart", "PostCompact"]) {
+      const commands = commandsFor(settings, event);
+      expect(commands.filter((command) => command.includes("memmy-project-hook.mjs"))).toHaveLength(0);
+      expect(commands.filter((command) => command.includes("memmy-resume-hook.mjs"))).toHaveLength(1);
+    }
+    expect(existsSync(join(rootDirectory, "hooks", "memmy-project-hook.mjs"))).toBe(false);
+    expect(existsSync(join(rootDirectory, "hooks", "memmy-resume-hook.mjs"))).toBe(true);
+    // 卸掉记忆钩子同样不碰项目钩子的条目。
+    await target.installProjectHook?.();
+    await target.uninstallPlugin?.("claude_code");
+    const afterUninstall = readSettingsFile(rootDirectory);
+    expect(commandsFor(afterUninstall, "SessionStart").filter((command) => command.includes("memmy-project-hook.mjs"))).toHaveLength(1);
+    expect(existsSync(join(rootDirectory, "hooks", "memmy-project-runtime.mjs"))).toBe(true);
+  });
+
+  it("marks the project hook stale when its stored revision or files change", async () => {
+    const { rootDirectory, memmyConfigPath } = createFixture();
+    const target = createClaudeCodeSkillTarget({ rootDirectory, memmyConfigPath });
+    await target.installProjectHook?.();
+
+    const configPath = join(rootDirectory, "hooks", "memmy-project-config.json");
+    const installed = JSON.parse(readFileSync(configPath, "utf8")) as Record<string, unknown>;
+    expect(installed.project_hook_revision).toEqual(expect.stringMatching(/^[a-f0-9]{64}$/));
+
+    writeFileSync(configPath, `${JSON.stringify({ ...installed, project_hook_revision: "stale" }, null, 2)}\n`);
+    await expect(target.isProjectHookCurrent?.()).resolves.toBe(false);
+
+    writeFileSync(join(rootDirectory, "hooks", "memmy-project-runtime.mjs"), "old runtime\n", "utf8");
+    writeFileSync(configPath, `${JSON.stringify(installed, null, 2)}\n`);
+    await expect(target.isProjectHookCurrent?.()).resolves.toBe(false);
+
+    await target.installProjectHook?.();
+    await expect(target.isProjectHookCurrent?.()).resolves.toBe(true);
+  });
+
   it("allows the session commands once and removes only its own rules", async () => {
     const { rootDirectory, memmyConfigPath } = createFixture();
     const target = createClaudeCodeSkillTarget({ rootDirectory, memmyConfigPath });
@@ -661,4 +732,19 @@ async function runNodeHook(scriptPath: string, input: string): Promise<{ status:
     stdout: Buffer.concat(stdout).toString("utf8"),
     stderr: Buffer.concat(stderr).toString("utf8")
   };
+}
+
+function readSettingsFile(rootDirectory: string): {
+  hooks: Record<string, Array<{ hooks: Array<{ command: string }> }>>;
+} {
+  return JSON.parse(readFileSync(join(rootDirectory, "settings.json"), "utf8")) as {
+    hooks: Record<string, Array<{ hooks: Array<{ command: string }> }>>;
+  };
+}
+
+function commandsFor(
+  settings: { hooks: Record<string, Array<{ hooks: Array<{ command: string }> }>> },
+  event: string
+): string[] {
+  return settings.hooks[event]?.flatMap((entry) => entry.hooks.map((hook) => hook.command)) ?? [];
 }

@@ -356,6 +356,207 @@ describe("skill distribution service", () => {
   });
 });
 
+// 项目钩子的安装条件：已接入记忆钩子，或已授权协作且没被关掉；旧版记忆钩子先跳过。
+describe("project hook synchronization", () => {
+  it("installs the project hook for an agent whose memory hook is connected", async () => {
+    const rootDirectory = mkdtempSync(join(tmpdir(), "memmy-project-hook-memory-"));
+    try {
+      const target = createFakeProjectTarget({ rootDirectory, memoryInstalled: true, memoryCurrent: true });
+      const service = createSkillDistributionService({
+        targetRegistry: createSkillTargetRegistry([target.target]),
+        projectSkillPermission: async () => ({ granted: false, disabledAgents: [] })
+      });
+
+      await expect(service.syncProjectHooks?.()).resolves.toEqual(["cursor"]);
+      expect(target.installed).toBe(true);
+
+      // 已经是当前版本：不必重复写入。
+      await expect(service.syncProjectHooks?.()).resolves.toEqual([]);
+    } finally {
+      rmSync(rootDirectory, { recursive: true, force: true });
+    }
+  });
+
+  it("installs the project hook for an authorized agent without a memory hook", async () => {
+    const rootDirectory = mkdtempSync(join(tmpdir(), "memmy-project-hook-collab-"));
+    try {
+      const target = createFakeProjectTarget({ rootDirectory, memoryInstalled: false });
+      const service = createSkillDistributionService({
+        targetRegistry: createSkillTargetRegistry([target.target]),
+        projectSkillPermission: async () => ({ granted: true, disabledAgents: [] })
+      });
+
+      await expect(service.syncProjectHooks?.()).resolves.toEqual(["cursor"]);
+      expect(target.installed).toBe(true);
+    } finally {
+      rmSync(rootDirectory, { recursive: true, force: true });
+    }
+  });
+
+  it("removes the project hook when neither condition holds", async () => {
+    const rootDirectory = mkdtempSync(join(tmpdir(), "memmy-project-hook-none-"));
+    try {
+      const target = createFakeProjectTarget({ rootDirectory, memoryInstalled: false, installed: true });
+      const service = createSkillDistributionService({
+        targetRegistry: createSkillTargetRegistry([target.target]),
+        projectSkillPermission: async () => ({ granted: false, disabledAgents: [] })
+      });
+
+      await expect(service.syncProjectHooks?.()).resolves.toEqual(["cursor"]);
+      expect(target.installed).toBe(false);
+    } finally {
+      rmSync(rootDirectory, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the project hook on revoke for an agent whose memory hook is connected", async () => {
+    const rootDirectory = mkdtempSync(join(tmpdir(), "memmy-project-hook-revoke-"));
+    try {
+      const target = createFakeProjectTarget({ rootDirectory, memoryInstalled: true, memoryCurrent: true, installed: true });
+      const service = createSkillDistributionService({
+        targetRegistry: createSkillTargetRegistry([target.target]),
+        projectSkillPermission: async () => ({ granted: false, disabledAgents: [] })
+      });
+
+      await expect(service.syncProjectHooks?.()).resolves.toEqual([]);
+      expect(target.installed).toBe(true);
+    } finally {
+      rmSync(rootDirectory, { recursive: true, force: true });
+    }
+  });
+
+  it("skips the old memory hook so project instructions are not injected twice", async () => {
+    const rootDirectory = mkdtempSync(join(tmpdir(), "memmy-project-hook-stale-memory-"));
+    try {
+      const target = createFakeProjectTarget({ rootDirectory, memoryInstalled: true, memoryCurrent: false });
+      const service = createSkillDistributionService({
+        targetRegistry: createSkillTargetRegistry([target.target]),
+        projectSkillPermission: async () => ({ granted: true, disabledAgents: [] })
+      });
+
+      await expect(service.syncProjectHooks?.()).resolves.toEqual([]);
+      expect(target.installed).toBe(false);
+
+      // 旧版记忆钩子留在磁盘上而项目钩子已经装过：移除，避免两处同时注入。
+      target.installed = true;
+      await expect(service.syncProjectHooks?.()).resolves.toEqual(["cursor"]);
+      expect(target.installed).toBe(false);
+    } finally {
+      rmSync(rootDirectory, { recursive: true, force: true });
+    }
+  });
+
+  it("refreshes a stale project hook and updates for a given agent only", async () => {
+    const rootDirectory = mkdtempSync(join(tmpdir(), "memmy-project-hook-stale-"));
+    try {
+      const target = createFakeProjectTarget({
+        rootDirectory,
+        memoryInstalled: true,
+        memoryCurrent: true,
+        installed: true,
+        current: false
+      });
+      const service = createSkillDistributionService({
+        targetRegistry: createSkillTargetRegistry([target.target])
+      });
+
+      await expect(service.syncProjectHooks?.(["other"])).resolves.toEqual([]);
+      await expect(service.syncProjectHooks?.(["cursor"])).resolves.toEqual(["cursor"]);
+      expect(target.installs).toBe(1);
+    } finally {
+      rmSync(rootDirectory, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps going when one agent fails", async () => {
+    const first = mkdtempSync(join(tmpdir(), "memmy-project-hook-fail-a-"));
+    const second = mkdtempSync(join(tmpdir(), "memmy-project-hook-fail-b-"));
+    try {
+      const failing = createFakeProjectTarget({
+        rootDirectory: first,
+        targetId: "codex",
+        memoryInstalled: true,
+        memoryCurrent: true,
+        failInstall: true
+      });
+      const working = createFakeProjectTarget({ rootDirectory: second, memoryInstalled: true, memoryCurrent: true });
+      const service = createSkillDistributionService({
+        targetRegistry: createSkillTargetRegistry([failing.target, working.target])
+      });
+
+      await expect(service.syncProjectHooks?.()).resolves.toEqual(["cursor"]);
+      expect(working.installed).toBe(true);
+    } finally {
+      rmSync(first, { recursive: true, force: true });
+      rmSync(second, { recursive: true, force: true });
+    }
+  });
+});
+
+/** 项目钩子用到的四个方法与记忆钩子状态的假目标：不碰真实用户目录。 */
+function createFakeProjectTarget(options: {
+  rootDirectory: string;
+  targetId?: string;
+  memoryInstalled: boolean;
+  memoryCurrent?: boolean;
+  installed?: boolean;
+  current?: boolean;
+  failInstall?: boolean;
+}): {
+  target: SkillTarget;
+  installed: boolean;
+  installs: number;
+} {
+  const state = {
+    installed: options.installed ?? false,
+    installs: 0
+  };
+  const target: SkillTarget = {
+    targetId: options.targetId ?? "cursor",
+    displayName: options.targetId === "codex" ? "Codex" : "Cursor",
+    async resolveRootDirectory() {
+      return options.rootDirectory;
+    },
+    async install() {},
+    async uninstall() {},
+    async isInstalled() {
+      return false;
+    },
+    async isMemoryHookInstalled() {
+      return options.memoryInstalled;
+    },
+    async isInstalledHookCurrent() {
+      return options.memoryCurrent ?? false;
+    },
+    async installProjectHook() {
+      if (options.failInstall) throw new Error("project hook install failed");
+      state.installs += 1;
+      state.installed = true;
+    },
+    async uninstallProjectHook() {
+      state.installed = false;
+    },
+    async isProjectHookInstalled() {
+      return state.installed;
+    },
+    async isProjectHookCurrent() {
+      return options.current ?? true;
+    }
+  };
+  return {
+    target,
+    get installed() {
+      return state.installed;
+    },
+    set installed(value: boolean) {
+      state.installed = value;
+    },
+    get installs() {
+      return state.installs;
+    }
+  };
+}
+
 describe("project skill authorization", () => {
   const denied = async () => ({ granted: false, disabledAgents: [] as string[] });
 

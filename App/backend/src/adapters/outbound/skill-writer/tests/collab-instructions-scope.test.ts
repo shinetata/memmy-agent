@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { readCollabProjectInstructions } from "../workspace-bridge/runtime.js";
+import { readCollabProjectInstructions } from "../project-hook/runtime.js";
 
 const PRODUCT_PROJECT = "01a17657-0cd5-7be0-a611-3fdcd387e8ae";
 const SCENE_PROJECT = "01a17c05-fa6c-7aa0-9225-3612b2a6f6a6";
