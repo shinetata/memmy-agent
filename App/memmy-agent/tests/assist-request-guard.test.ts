@@ -71,9 +71,22 @@ describe("assistSensitiveReason", () => {
   it("treats the file tools by what they do", () => {
     expect(assistSensitiveReason("delete_file", { path: "~/notes/a.md" })).toContain("删除文件");
     // 写一个已经存在的文件才算覆盖；新文件在项目里是正常产物。
-    expect(assistSensitiveReason("write_file", { path: "notes.md", exists: true })).toContain("覆盖已有文件");
+    expect(assistSensitiveReason("write_file", { path: "/Users/someone/notes.md", exists: true })).toContain("覆盖已有文件");
     expect(assistSensitiveReason("write_file", { path: "notes.md" })).toBeNull();
     expect(assistSensitiveReason("read_file", { path: "README.md" })).toBeNull();
+  });
+
+  it("lets an existing file inside the project or the attachment folder be written", () => {
+    const context = {
+      workspace: "/Users/someone/project",
+      allowedRoots: ["/Users/someone/.memmy/media/assist", "/tmp"],
+      exists: () => true
+    };
+    expect(assistSensitiveReason("write_file", { path: "/Users/someone/project/src/a.ts" }, context)).toBeNull();
+    expect(assistSensitiveReason("write_file", { path: "/Users/someone/.memmy/media/assist/run-1/a.log" }, context)).toBeNull();
+    expect(assistSensitiveReason("write_file", { path: "/tmp/probe.txt" }, context)).toBeNull();
+    // 项目外、已经存在的文件：算覆盖。
+    expect(assistSensitiveReason("write_file", { path: "/Users/someone/.zshrc" }, context)).toContain("覆盖已有文件");
   });
 });
 

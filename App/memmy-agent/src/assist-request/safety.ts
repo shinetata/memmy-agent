@@ -15,8 +15,25 @@ export const ASSIST_SKIPPED_MARKER = "按协助规则没有执行：";
 /** 协助会话的批准策略：`deny` 拦下敏感操作，`allow` 不拦。 */
 export type AssistApproval = "deny" | "allow";
 
+/**
+ * 工具调用所属的场景：项目目录、附件目录与临时目录里写文件不算敏感操作。
+ * `exists` 由调用方给（运行时这一层能直接看磁盘），判断「覆盖已有文件」用它。
+ */
+export interface AssistToolContext {
+  /** 本次协助所在的项目文件夹。 */
+  workspace?: string | null;
+  /** 额外允许写入的目录：附件目录、临时目录。 */
+  allowedRoots?: readonly string[];
+  /** 这个路径上已经有文件。 */
+  exists?: (path: string) => boolean;
+}
+
 /** 这次工具调用属于四类敏感操作里的哪一类；不是敏感操作时返回 null。 */
-export function assistSensitiveReason(toolName: string, args: Record<string, unknown>): string | null {
+export function assistSensitiveReason(
+  toolName: string,
+  args: Record<string, unknown>,
+  context: AssistToolContext = {}
+): string | null {
   const name = toolName.toLowerCase();
   if (name === "exec" || name.endsWith("bash") || name.endsWith("shell") || name === "run_command") {
     const command = readString(args, ["command", "cmd", "script"]);
@@ -25,14 +42,33 @@ export function assistSensitiveReason(toolName: string, args: Record<string, unk
   if (name === "write_file" || name === "edit_file" || name === "apply_patch" || name === "multi_edit") {
     const path = readString(args, ["path", "file_path", "filePath", "target"]);
     if (!path) return null;
-    // 写一个已经存在的文件才算覆盖；新文件在项目文件夹里是正常的工作产物。
-    const existing = args.exists === true || args.file_exists === true;
-    return existing ? `覆盖已有文件 ${path}` : null;
+    // 写一个已经存在的文件才算覆盖；新文件在项目文件夹、附件目录与临时目录里是正常的工作产物。
+    const existing = args.exists === true || args.file_exists === true || context.exists?.(expandHome(path)) === true;
+    if (!existing) return null;
+    if (insideAllowedRoot(expandHome(path), context)) return null;
+    return `覆盖已有文件 ${path}`;
   }
   if (name === "delete_file" || name === "remove_file" || name === "trash_file") {
     return `删除文件 ${readString(args, ["path", "file_path", "target"]) || ""}`.trim();
   }
   return null;
+}
+
+/** 展开 `~`：工具参数里常写成 `~/Library/...`。 */
+export function expandHome(path: string): string {
+  if (!path.startsWith("~")) return path;
+  const home = process.env.HOME ?? "";
+  return `${home}${path.slice(1)}`;
+}
+
+/** 这个路径是不是在这些目录里：项目文件夹、附件目录、临时目录。 */
+function insideAllowedRoot(path: string, context: AssistToolContext): boolean {
+  const roots = [context.workspace ?? "", ...(context.allowedRoots ?? [])].filter(Boolean);
+  const normalized = path.replace(/\/+$/u, "");
+  return roots.some((root) => {
+    const base = root.replace(/\/+$/u, "");
+    return normalized === base || normalized.startsWith(`${base}/`);
+  });
 }
 
 /** 一条命令是不是敏感操作：管道、`&&`、`;`、`sh -c` 里的子命令都要拆开看。 */

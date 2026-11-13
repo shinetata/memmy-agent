@@ -8,6 +8,10 @@
  * <p>这一层还负责协助会话的敏感操作检查：Memmy 没有 Agent 那样的「帮我批准」，工具执行前按规则判断
  * 这一步是不是四类敏感操作之一，是的话拦下它并让模型在结果里说明（见 {@link ./safety}）。</p>
  */
+import { existsSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { AgentHook, type AgentHookContext, type SystemPromptBuildContext } from "../core/agent-runtime/hook.js";
 import { ASSIST_SKIPPED_MARKER, assistSensitiveReason, type AssistApproval } from "./safety.js";
 
@@ -89,7 +93,12 @@ export function createAssistRequestHook(sessions: () => AssistRequestSessions | 
       if (assistRequestApproval(sessions(), key) === "allow") return;
       const name = String(toolCall?.name ?? "");
       const args = readArguments(toolCall?.arguments);
-      const reason = assistSensitiveReason(name, args);
+      // 写文件时要知道它是不是已经存在：项目文件夹、附件目录与临时目录里的写入不算覆盖。
+      const reason = assistSensitiveReason(name, args, {
+        workspace: ctx.workspace ?? null,
+        allowedRoots: [join(process.env.MEMMY_HOME?.trim() || join(homedir(), ".memmy"), "media", "assist"), tmpdir(), "/tmp"],
+        exists: (path) => existsSync(path)
+      });
       if (!reason) return;
       throw new Error(`${ASSIST_SKIPPED_MARKER}${reason}。在结果里写明这一步要做什么、为什么。`);
     }

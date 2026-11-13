@@ -334,6 +334,11 @@ export interface AssistRunner {
     approval?: "deny" | "allow";
     /** 按规则跳过、没有执行的操作：边发生边记，随结果回传。 */
     onSkipped?: (skipped: SkippedOperation) => void;
+    /**
+     * 执行边界：这次允许的敏感操作与其余限定。外部 Agent 拿到的是拼在提示词里的那一段；
+     * 由 Memmy 执行时它随隐藏的格式要求进系统提示词，不出现在任务页的请求卡片里。
+     */
+    boundary?: string;
   }): Promise<{
     reply: string;
     steps: AssistStep[];
@@ -1841,6 +1846,8 @@ export function createCollabAssistService(options: CollabAssistServiceOptions): 
     const allowedOperations = approval === "allow" ? localSafety?.allowed ?? [] : [];
     // 按规则跳过、没有执行的操作：边发生边记，随结果回传；连接里没有对应条目的也记。
     const skipped: SkippedOperation[] = [];
+    /** 执行边界：允许哪些敏感操作、除此之外不要做什么。 */
+    const boundary = assistBoundaryPrompt(allowedOperations);
     /** 回传前隐藏了几处疑似密钥：每一次替换都累加，已经替换过的地方不会再计。 */
     let redactedCount = 0;
 
@@ -1897,7 +1904,8 @@ export function createCollabAssistService(options: CollabAssistServiceOptions): 
         ...(prepared.files.length ? { attachments: prepared.files } : {}),
         ...(prepared.dir ? { attachmentsDirectory: prepared.dir } : {}),
         // 执行边界：请求正文保持原样，这段追加在正文之后、结果写法之前。
-        boundary: assistBoundaryPrompt(allowedOperations)
+        // 由 Memmy 执行时不放进正文（任务页会把它显示成请求的一部分），改走隐藏的上下文。
+        ...(boundary && agent !== MEMMY_SOURCE_ID ? { boundary } : {})
       }, agent === MEMMY_SOURCE_ID ? { envelope: { requestId: request.id, via: request.via, attempt: request.attempt } } : {});
     } catch (error) {
       // 附件没准备好就不开始执行：直接告诉发起方原因，不让请求停在「执行中」。
@@ -1921,7 +1929,8 @@ export function createCollabAssistService(options: CollabAssistServiceOptions): 
       method: "POST",
       body: {
         prompt: clipBytes(prompt, ASSIST_PROMPT_BYTES),
-        ...(agent === MEMMY_SOURCE_ID ? { promptContext: ASSIST_RESULT_FORMAT } : {})
+        // 由 Memmy 执行时，执行边界与结果写法一起作为隐藏的上下文交给模型。
+        ...(agent === MEMMY_SOURCE_ID ? { promptContext: [ASSIST_RESULT_FORMAT, boundary].join("\n\n") } : {})
       }
     }).catch(() => undefined);
 
@@ -1934,6 +1943,7 @@ export function createCollabAssistService(options: CollabAssistServiceOptions): 
         ...(previousSession ? { sessionId: previousSession } : {}),
         signal: controller.signal,
         approval,
+        boundary,
         onSkipped: (item) => {
           if (!skipped.some((existing) => existing.title === item.title && existing.detail === item.detail)) skipped.push(item);
         },

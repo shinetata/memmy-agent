@@ -228,6 +228,8 @@ describe("the executor's check decides whether it still runs directly", () => {
     reviewer: AssistReviewer;
     runner: AssistRunner;
     asksForApproval?: (sourceId: string) => boolean;
+    /** 详情里那条请求由谁执行：决定提示词里放不放执行边界。 */
+    detailAgent?: string;
   }) {
     const { calls, cloud } = fakeCloud((path, init) => {
       if (path === "/assist/inbox") return { requests: input.inbox };
@@ -237,7 +239,9 @@ describe("the executor's check decides whether it still runs directly", () => {
       if (path.endsWith("/progress")) return { ok: true };
       if (path.endsWith("/result")) return { request: request({ status: "done" }) };
       // 详情：已经决定执行的那条按「执行中」返回，execute 才会真正跑起来。
-      if (path.includes("/assist/requests/")) return { request: request({ status: "running", agent: "codex" }) };
+      if (path.includes("/assist/requests/")) {
+        return { request: request({ status: "running", agent: input.detailAgent ?? "codex" }) };
+      }
       if (path.startsWith("/projects/p1/assist/threads")) return { thread: { threadId: "thread-1", requests: [] } };
       return {};
     });
@@ -294,6 +298,24 @@ describe("the executor's check decides whether it still runs directly", () => {
     // 自动开始的这次：批准策略是 deny，执行边界里没有允许的敏感操作。
     expect(runner.inputs[0]?.approval).toBe("deny");
     expect(runner.inputs[0]?.prompt).toContain("这次请求允许的敏感操作：无");
+  });
+
+  it("keeps the boundary out of the request body when Memmy runs it, and puts it in the hidden context", async () => {
+    const runner = recordingRunner();
+    const { service: created } = service({
+      inbox: [request({ ...granted(), grantAgent: "memmy", agent: "memmy" })],
+      reviewer: reviewer({ executor: { sensitive: [], undeclared: [], injected: false, reason: "" } }),
+      runner,
+      asksForApproval: () => true,
+      detailAgent: "memmy"
+    });
+
+    await created.pollNow();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    // 任务页会显示消息正文：执行边界不进正文，改成随隐藏的上下文交给模型。
+    expect(runner.inputs[0]?.prompt).not.toContain("执行边界");
+    expect(runner.inputs[0]?.boundary).toContain("这次请求允许的敏感操作：无");
   });
 
   it("reviews a request without a grant just to explain the dialog", async () => {

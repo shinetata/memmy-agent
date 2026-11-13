@@ -57,8 +57,8 @@ export function createMemmyAssistRunner(options: MemmyAssistRunnerOptions): Assi
             via: request.via,
             attempt: request.attempt,
             title: request.title,
-            // 结果的写法交给模型、不出现在任务里：任务页只显示请求卡片。
-            context: ASSIST_RESULT_FORMAT,
+            // 结果的写法与执行边界交给模型、不出现在任务里：任务页只显示请求卡片。
+            context: [ASSIST_RESULT_FORMAT, input.boundary].filter(Boolean).join("\n\n"),
             // 这次执行对工具调用的策略：Memory 没有「帮我批准」，由运行时的规则检查代替（见 memmy-agent 的 assist-request）。
             approval: input.approval ?? "deny"
           }
