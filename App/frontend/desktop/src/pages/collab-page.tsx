@@ -29,7 +29,6 @@ import {
   markCollabProjectBound,
   removeCollabProject,
   replaceCollabProject,
-  requestCreateProject,
   requestTaskPicker,
   selectCollabProject,
   sharedProjectFor,
@@ -1543,19 +1542,19 @@ const CollabBoard = memo(function CollabBoard(props: {
     </div>
   ) : null;
 
+  // 没有项目时看板没有可讲的内容：不摆页面级空状态，直接回到新会话页面。
+  // 等共享列表有结果再判断，避免启动瞬间本机项目还没读出来就跳走。
+  useEffect(() => {
+    if (project || snapshot.projects === null || !dispatch) return;
+    dispatch(appActions.navigate("/main"));
+  }, [project, snapshot.projects, dispatch]);
+
   return (
     <AppFrame title={project?.name ?? t("nav.collab")}>
       <div className={styles.page} ref={pageRef} data-demo-guide="board-main">
         {!project ? (
-          snapshot.projects === null ? (
-            <p className={styles.loading}>{t("collab.loading")}</p>
-          ) : (
-            <div className={styles.empty}>
-              <b>{t("collab.empty.title")}</b>
-              <p>{t("collab.empty.body")}</p>
-              <Button variant="primary" size="sm" onClick={() => requestCreateProject()}>{t("home.project.new")}</Button>
-            </div>
-          )
+          // 没有项目时只留加载位：上面那条 effect 会把人送回新会话页面。
+          <p className={styles.loading}>{t("collab.loading")}</p>
         ) : (
           <>
             {/* 看板与右侧的项目配置并排：配置属于项目，不随任务列表滚动。 */}

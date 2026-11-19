@@ -1316,6 +1316,10 @@ export function AppFrame(props: AppFrameProps) {
         clients.memmyAgent.sessionKeyToChatId(key)
       ]));
       setRemoveProjectId(null);
+      // 删掉最后一个项目后看板上什么都讲不了：不摆空状态，直接回到新会话页面。
+      if (state.agent.projects.every((project) => project.id === projectId) && currentPathRef.current === "/collab") {
+        dispatch(appActions.navigate("/main"));
+      }
     } catch (error) {
       showProjectOperationError(error);
       void refreshAgentTasks();

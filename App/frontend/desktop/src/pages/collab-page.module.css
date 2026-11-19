@@ -43,9 +43,8 @@
   overflow-y: auto;
 }
 
-/* 没有项目时的加载与空态：横向容器里仍占满整行，居中由各自的对齐负责 */
-.page > .loading,
-.page > .empty {
+/* 没有项目时的加载位：横向容器里仍占满整行，居中由它自己的对齐负责 */
+.page > .loading {
   flex: 1;
 }
 
@@ -1418,31 +1417,9 @@
   text-align: center;
 }
 
-.empty {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 6px;
-  padding: 72px 24px;
-  text-align: center;
-}
-
-.empty b {
-  font-size: 15px;
-  font-weight: 800;
-}
-
-.empty p {
-  margin: 0 0 8px;
-  max-width: 440px;
-  color: var(--collab-muted);
-  font-size: 13px;
-  line-height: 1.6;
-}
-
 /*
  * 筛选没结果时的说明卡片：和「协助」空态同一套边框与图标，内容左对齐。
- * 单独一类，不改 .empty：没有项目时的页面级空态仍按整块居中、文字居中显示。
+ * 单独一类：内容左对齐，与列表的排布一致。
  */
 .filterEmpty {
   display: flex;
