@@ -33,6 +33,8 @@ const mocks = vi.hoisted(() => ({
   readSessionDetail: vi.fn(),
   listLocalSessions: vi.fn(),
   listMembers: vi.fn(),
+  readAssistThreads: vi.fn(),
+  assistInbox: vi.fn(),
   tasks: [] as Array<{ sessionKey: string; projectId: string | null; title: string; archived?: boolean; updatedAt?: string }>,
   dispatch: vi.fn()
 }));
@@ -109,8 +111,11 @@ function demoState(phase: DemoGuidePhase): DemoGuideState {
     memberName: "小饭团",
     copy: DEMO_GUIDE_COPY_FALLBACK,
     error: null,
-    done: { task: false },
-    skipped: { task: false },
+    done: { task: false, ask: false, help: false },
+    skipped: { task: false, ask: false, help: false },
+    askSeen: false,
+    askDelivered: false,
+    askTurnEnded: false,
     scan: { status: "idle", count: 0 },
     prefill: null,
     endReason: null,
@@ -153,6 +158,8 @@ describe("the demo guide and the read panel", () => {
       members: [],
       requests: []
     });
+    mocks.readAssistThreads.mockResolvedValue({ threads: [], maxThreads: 20 });
+    mocks.assistInbox.mockResolvedValue({ requests: [] });
 
     container = document.createElement("div");
     document.body.append(container);
