@@ -778,15 +778,11 @@ function Preview() {
               <button type="button" role="tab" aria-selected="false" className={board.boardTab}>任务</button>
               <button type="button" role="tab" aria-selected="true" className={`${board.boardTab} ${board.boardTabOn}`}>协助<span className={board.segCount}>1</span></button>
             </div>
+            {/* 「协助」没有常驻工具条：只在有在跑的或有可多选的时才出现，也不给刷新。 */}
             <div className={`${board.toolbar} ${board.assistToolbar}`}>
-              <span className={board.assistToolbarHint}>仅发起人和执行人可见</span>
               <span className={board.grow} />
               {/* 并行执行之后可能同时有多条在跑：条数就是会停的条数。 */}
               <Button size="sm" variant="ghost" className={board.dangerGhost}>全部停止（1）</Button>
-              <Button size="sm" variant="ghost" className={board.iconAction}>
-                <RefreshCw size={14} aria-hidden="true" />
-                <span className={board.actionLabel}>刷新</span>
-              </Button>
               <Button size="sm" variant="ghost" className={board.iconAction}>
                 <ListChecks size={14} aria-hidden="true" />
                 <span className={board.actionLabel}>多选</span>

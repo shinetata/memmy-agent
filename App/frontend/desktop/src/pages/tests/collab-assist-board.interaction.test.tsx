@@ -364,7 +364,9 @@ describe("assists on the project board", () => {
     clickTab("协助");
     await flush();
 
-    expect(document.body.textContent).toContain("仅发起人和执行人可见");
+    // 没有可多选、也没有在跑的：「协助」连工具条都不摆，可见范围提示与刷新都已去掉。
+    expect(document.body.textContent).not.toContain("仅发起人和执行人可见");
+    expect(document.querySelector("[aria-label='刷新']")).toBeNull();
     expect(stopAllButton()).toBeNull();
   });
 
@@ -434,7 +436,9 @@ describe("assists on the project board", () => {
     mocks.listProjects.mockResolvedValue([]);
     await renderBoard([]);
     expect(document.querySelector("[role='tablist']")).toBeNull();
-    expect(document.body.textContent).toContain("这个项目还没有任务");
+    // 本机项目的空状态与共享项目同一句话的口径，只讲新建任务。
+    expect(document.body.textContent).toContain("项目中还没有任务，可以");
+    expect(document.body.textContent).toContain("新建任务");
   });
 
   it("shows no number on the assists tab when nothing is waiting for you", async () => {
@@ -443,17 +447,19 @@ describe("assists on the project board", () => {
     expect(tabs).toEqual(["任务", "协助"]);
   });
 
-  it("gives the assists tab its own toolbar: a visibility hint, no member filter, no search, no linking", async () => {
+  it("keeps the assists tab free of the browsing toolbar: no hint, no refresh, no filter, no search, no linking", async () => {
     await renderBoard([thread(request("d1", "done"))]);
     clickTab("协助");
     await flush();
 
-    expect(document.body.textContent).toContain("仅发起人和执行人可见");
+    // 可见范围与刷新都不再出现：协助随看板轮询，这一行只在真有事可做时才渲染。
+    expect(document.body.textContent).not.toContain("仅发起人和执行人可见");
+    expect(document.querySelector("[aria-label='刷新']")).toBeNull();
     expect(document.querySelector("[aria-label='按成员筛选']")).toBeNull();
     expect(document.querySelector("input[aria-label='搜索任务标题、问题或成员']")).toBeNull();
     expect([...document.querySelectorAll("button")].some((node) => node.textContent?.trim() === "关联任务")).toBe(false);
-    // 刷新仍在。
-    expect(document.querySelector("[aria-label='刷新']")).not.toBeNull();
+    // 可多选时工具条才回来，只剩多选这一项。
+    expect(document.querySelector("[aria-label='多选']")).not.toBeNull();
   });
 
   it("orders assists waiting for you first, then open ones, then finished, newest first in each group", async () => {

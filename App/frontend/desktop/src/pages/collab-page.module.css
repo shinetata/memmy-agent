@@ -227,15 +227,6 @@
   flex-wrap: nowrap;
 }
 
-.assistToolbarHint {
-  min-width: 0;
-  overflow: hidden;
-  color: var(--collab-ter);
-  font-size: 12.5px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 /*
  * 按成员筛选收进下拉，与搜索框并排：外观按看板工具条重排，键盘操作、listbox 语义与选中勾
  * 都沿用 components/Select。
@@ -707,13 +698,10 @@
   position: relative;
 }
 
-/* 空项目：说明这个标签页收集什么、能做什么 */
+/* 空看板的那一句说明：落在页面白底上，不画边框、不加卡片底 */
 .guide {
   margin-top: 14px;
-  padding: 24px 26px 20px;
-  border: 1px solid var(--collab-line);
-  border-radius: 14px;
-  background: var(--color-background-paper, #fff);
+  padding: 20px 0 4px;
 }
 
 /* 没有标题与引导句的空状态：只有一句说明，落在看板中间 */
@@ -767,6 +755,11 @@
 }
 
 /* 空看板里的说明列表：直接落在页面白底上，与工具条左缘对齐，不套卡片 */
+/* 协助空状态的说明：没有工具条撑着，自己与上面的 tab 留出距离 */
+.assistEmpty {
+  margin-top: 18px;
+}
+
 .guideListBare {
   margin: 0;
 }
@@ -2598,13 +2591,6 @@
   to {
     transform: rotate(360deg);
   }
-}
-
-.localEmpty {
-  margin: 26px 0;
-  color: var(--collab-ter);
-  font-size: 13px;
-  line-height: 1.7;
 }
 
 /* 选择要同步的会话：项目自己的 Memmy 会话，可单选可全选 */

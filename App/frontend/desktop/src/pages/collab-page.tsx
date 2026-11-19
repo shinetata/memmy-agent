@@ -1,4 +1,4 @@
-import { ArrowUpRight, AtSign, BookOpen, ChevronDown, ChevronRight, Cloud, Folder, Inbox, Layers, LifeBuoy, Loader2, ListChecks, MoreHorizontal, PanelRight, PanelRightClose, Plug, Plus, RefreshCw, Search, Settings, Trash2, User, UserPlus, Users, X } from "lucide-react";
+import { ArrowUpRight, AtSign, BookOpen, ChevronDown, ChevronRight, Cloud, Folder, Layers, LifeBuoy, Loader2, ListChecks, MoreHorizontal, PanelRight, PanelRightClose, Plug, Plus, RefreshCw, Search, Settings, Trash2, User, UserPlus, Users, X } from "lucide-react";
 import { memo, useCallback, useDeferredValue, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import {
@@ -1668,6 +1668,11 @@ const CollabBoard = memo(function CollabBoard(props: {
                       role="tabpanel"
                       aria-label={t(boardTab === "tasks" ? "collab.tab.tasks" : "collab.tab.assists")}
                     >
+                      {/*
+                       * 「协助」不摆常驻工具条：没有可见范围提示、也没有刷新（协助随看板轮询）。
+                       * 这一行只在真有事可做时才出现——有可多选的，或有正在跑的。
+                       */}
+                      {boardTab === "assists" && !selecting && !stopAllRequests.length && !selectableIds.length ? null : (
                       <div
                         className={`${styles.toolbar} ${boardTab === "assists" ? styles.assistToolbar : ""}`}
                       >
@@ -1724,8 +1729,7 @@ const CollabBoard = memo(function CollabBoard(props: {
                           </>
                         ) : (
                           <>
-                            {/* 协助只有你和对方看得到：右上角说明一次；列表本来就短，不给成员筛选与搜索 */}
-                            <span className={styles.assistToolbarHint}>{t("collab.assist.toolbarHint")}</span>
+                            {/* 协助列表本来就短：不给成员筛选、搜索与刷新 */}
                             <span className={styles.grow} />
                             {/*
                              * 并行执行之后可能同时有多条在跑：全部停止把逐条点「停止」变成一次。
@@ -1773,19 +1777,21 @@ const CollabBoard = memo(function CollabBoard(props: {
                           </span>
                         ) : (
                           <>
-                            {/* 刷新属于浏览列表，选择态用不上，放在常态这一支 */}
-                            <Button
-                              size="sm"
-                              variant="ghost"
-                              className={styles.iconAction}
-                              aria-label={t("collab.sessions.refresh")}
-                              title={t("collab.sessions.refresh")}
-                              disabled={refreshing}
-                              onClick={() => void refreshBoard()}
-                            >
-                              <RefreshCw size={14} aria-hidden="true" />
-                              <span className={styles.actionLabel}>{t("collab.sessions.refresh")}</span>
-                            </Button>
+                            {/* 刷新只属于「任务」：协助随看板轮询，不给单独的刷新入口 */}
+                            {boardTab === "tasks" ? (
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                className={styles.iconAction}
+                                aria-label={t("collab.sessions.refresh")}
+                                title={t("collab.sessions.refresh")}
+                                disabled={refreshing}
+                                onClick={() => void refreshBoard()}
+                              >
+                                <RefreshCw size={14} aria-hidden="true" />
+                                <span className={styles.actionLabel}>{t("collab.sessions.refresh")}</span>
+                              </Button>
+                            ) : null}
                             {/* 多选只对能删的生效：本人的任务，或「协助」里已经结束的协助；一条都没有时不显示入口 */}
                             {selectableIds.length ? (
                               <Button
@@ -1823,6 +1829,7 @@ const CollabBoard = memo(function CollabBoard(props: {
                           </>
                         )}
                       </div>
+                      )}
 
                       {/* 同步进度与成员提示都是关于任务的：只在「任务」里出现 */}
                       {boardTab === "tasks" && progress?.running ? (() => {
@@ -1893,17 +1900,15 @@ const CollabBoard = memo(function CollabBoard(props: {
                         <>
                           {assistGroups.unrun.length ? null : (
                             // 一条协助都没有时把两种发起方式说清楚：从 Agent 对话请人协助，或先让自己能接收请求。
-                            <section aria-label={t("collab.assist.empty.title")}>
+                            <section className={styles.assistEmpty} aria-label={t("collab.assist.empty.title")}>
                               <ul className={`${styles.guideList} ${styles.guideListBare}`}>
                                 <li className={styles.guideItem}>
-                                  <span className={styles.guideIcon} aria-hidden="true"><LifeBuoy size={15} /></span>
                                   <div className={styles.guideText}>
                                     <b>{t("collab.assist.empty.ask.title")}</b>
                                     <span>{t("collab.assist.empty.ask.body")}</span>
                                   </div>
                                 </li>
                                 <li className={styles.guideItem}>
-                                  <span className={styles.guideIcon} aria-hidden="true"><Inbox size={15} /></span>
                                   <div className={styles.guideText}>
                                     <b>{t("collab.assist.empty.receive.title")}</b>
                                     <span>
@@ -1929,8 +1934,15 @@ const CollabBoard = memo(function CollabBoard(props: {
                           </div>
                         </div>
                       ) : boardRows.length === 0 ? (
-                        /* 空项目只留一句说明：两个操作就嵌在这句话里，不摆图标、不铺两段解释。 */
-                        <section className={`${styles.guide} ${styles.guideBare}`} aria-label={t("collab.sessions.empty.title")} data-demo-guide="board-list">
+                        /* 空项目只留一句说明：操作就嵌在这句话里，不摆图标、不加按钮。
+                         * 本机项目没有可关联的东西，只讲新建任务；共享给成员的项目两种都讲。 */
+                        <section
+                          className={`${styles.guide} ${styles.guideBare}`}
+                          aria-label={shared
+                            ? t("collab.sessions.empty.title")
+                            : `${t("collab.sessions.empty.lineLead")} ${t("collab.sessions.empty.lineStart")}`}
+                          data-demo-guide="board-list"
+                        >
                           <p className={styles.guideEmptyLine}>
                             {t("collab.sessions.empty.lineLead")}
                             {" "}
@@ -1941,16 +1953,20 @@ const CollabBoard = memo(function CollabBoard(props: {
                             >
                               {t("collab.sessions.empty.lineStart")}
                             </button>
-                            {" "}
-                            {t("collab.sessions.empty.lineJoin")}
-                            {" "}
-                            <button
-                              type="button"
-                              className={styles.guideEmptyAction}
-                              onClick={() => setPickOpen(true)}
-                            >
-                              {t("collab.sessions.empty.lineLink")}
-                            </button>
+                            {shared ? (
+                              <>
+                                {" "}
+                                {t("collab.sessions.empty.lineJoin")}
+                                {" "}
+                                <button
+                                  type="button"
+                                  className={styles.guideEmptyAction}
+                                  onClick={() => setPickOpen(true)}
+                                >
+                                  {t("collab.sessions.empty.lineLink")}
+                                </button>
+                              </>
+                            ) : null}
                           </p>
                         </section>
                       ) : (
@@ -2490,7 +2506,20 @@ function LocalProjectSessions(props: {
   return (
     <>
       {props.tasks.length === 0 ? (
-        <p className={styles.localEmpty}>{t("collab.board.noTasks")}</p>
+        /* 与共享项目同一句话的口径：只有一句说明，「新建任务」就嵌在里面、点了直接开任务。
+         * 本机项目没有可关联的东西，所以只讲新建任务。 */
+        <section
+          className={`${styles.guide} ${styles.guideBare}`}
+          aria-label={`${t("collab.sessions.empty.lineLead")} ${t("collab.sessions.empty.lineStart")}`}
+        >
+          <p className={styles.guideEmptyLine}>
+            {t("collab.sessions.empty.lineLead")}
+            {" "}
+            <button type="button" className={styles.guideEmptyAction} onClick={props.onContinueTask}>
+              {t("collab.sessions.empty.lineStart")}
+            </button>
+          </p>
+        </section>
       ) : (
         // 本机项目没有工具条，列表要自己留出与标题的间距，否则悬停行浮起的外环会贴住项目名。
         <ul className={`${styles.list} ${styles.stream} ${styles.flatStream}`}>
