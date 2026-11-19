@@ -974,9 +974,11 @@ export async function submitAgentComposerMessage(input: SubmitAgentComposerMessa
 /**
  * Renders the chat home page.
  *
+ * @param props.hiddenSurface 这个首页只是被保留挂载（当前显示的是看板等别的页面）：
+ *   应用级弹窗交给显示中的那个外壳渲染，避免同一份请求在两层外壳里各开一个。
  * @returns The chat home page node.
  */
-export function HomePage() {
+export function HomePage(props: { hiddenSurface?: boolean } = {}) {
   const { clients } = useApiClients();
   const [gatewayStartupIssue, setGatewayStartupIssue] = useState<AgentGatewayStartupIssue | undefined>(
     clients?.runtimeConfig.agentGateway?.startupIssue
@@ -1581,6 +1583,12 @@ export function HomePage() {
     environmentScope,
     environmentScope?.kind === "session" && isCurrentAgentRunning,
   );
+  const threadProjectId = state.agent.currentSessionKey
+    ? state.agent.sessions.find((session) => session.key === state.agent.currentSessionKey)?.projectId
+    : selectedDraftProject?.id;
+  const threadWorkspaceRoot = threadProjectId
+    ? state.agent.projects.find((project) => project.id === threadProjectId)?.rootPath ?? null
+    : null;
   const goalMutationPending = state.agent.currentChatId
     ? state.agent.goalMutationPendingByChatId[state.agent.currentChatId] ?? null
     : null;
@@ -2167,6 +2175,13 @@ export function HomePage() {
     || draftProjectBlocked
     || state.agent.connectionStatus !== "connected"
     || state.agent.recoveringGeneration !== null;
+  const recommendationSendDisabled = !connection
+    || isCreatingChat
+    || messageSendInFlight
+    || currentSessionProjectBlocked
+    || draftProjectBlocked
+    || state.agent.connectionStatus !== "connected"
+    || state.agent.recoveringGeneration !== null;
   const composerStopDisabled = stopInFlight || Boolean(isCurrentGoalActive && goalMutationPending);
   const composerPrimaryAction = agentComposerPrimaryAction({
     isRunning: isCurrentAgentRunning,
@@ -2304,8 +2319,11 @@ export function HomePage() {
   /**
    * Sends one round of a live Agent conversation.
    */
-  async function sendMessage() {
-    if (runExactLocalSlashCommand(input)) {
+  async function sendMessage(suggestedPrompt?: string) {
+    const fromRecommendation = suggestedPrompt !== undefined;
+    const messageInput = suggestedPrompt ?? input;
+    if (fromRecommendation && recommendationSendDisabled) return;
+    if (!fromRecommendation && runExactLocalSlashCommand(input)) {
       return;
     }
     if (resolvedConversationModel.unavailable) {
@@ -2330,12 +2348,13 @@ export function HomePage() {
     const sendScopeKey = chatScopeKey;
     if (messageSendLocksRef.current.has(sendScopeKey)) return;
     const clientRequestId = crypto.randomUUID();
-    const submittedDraft = input;
-    const submittedAttachments = [...pendingAttachments];
-    const submittedCommand = selectedComposerCommand;
-    const submittedMentions = [...pendingMentions];
+    const submittedDraft = messageInput;
+    const submittedAttachments = fromRecommendation ? [] : [...pendingAttachments];
+    const submittedCommand = fromRecommendation ? null : selectedComposerCommand;
+    const submittedMentions = fromRecommendation ? [] : [...pendingMentions];
     // A conversation feature may rewrite what the agent receives; references are added on top of that.
-    const promptedInput = features.agentPrompt(input) ?? input;
+    const agentPrompt = features.agentPrompt(messageInput);
+    const promptedInput = agentPrompt ?? messageInput;
     // The agent needs the file paths; the bubble shows only what the person wrote.
     const contentWithReferences = submittedMentions.length
       ? `${submittedMentions.map((item) => item.reference).join("\n\n")}\n\n${promptedInput}`
@@ -2368,23 +2387,25 @@ export function HomePage() {
         content: demoAssistSend.content,
         // With references, a command, a rewritten prompt or the guide's hint the wire text differs from what was typed;
         // show the typed part.
-        displayContent: (features.agentPrompt(input) || selectedComposerCommand || (submittedMentions.length && composerInput.trim()) || demoAssistSend.displayContent !== null) ? composerInput : undefined,
+        displayContent: (agentPrompt || submittedCommand || submittedMentions.length || demoAssistSend.displayContent !== null) ? messageInput : undefined,
         language,
-        pendingAttachments,
+        pendingAttachments: submittedAttachments,
         uploadAgentMedia: (attachments) => clients!.memmyAgent.uploadAgentMedia(attachments),
         dispatch,
         track,
         setCreatingChat: setIsCreatingChat,
         setComposerMediaError: (message) => setComposerMediaErrorForScope(sendScopeKey, message),
-        clearComposer: () => stageComposerForSend(sendScopeKey),
-        restoreComposer: () => restoreComposerAfterFailedSend(
-          sendScopeKey,
-          submittedDraft,
-          submittedAttachments,
-          submittedCommand,
-          submittedMentions
-        ),
-        settleComposer: () => settleComposerAfterSend(sendScopeKey, submittedAttachments),
+        clearComposer: () => { if (!fromRecommendation) stageComposerForSend(sendScopeKey); },
+        restoreComposer: () => {
+          if (!fromRecommendation) restoreComposerAfterFailedSend(
+            sendScopeKey,
+            submittedDraft,
+            submittedAttachments,
+            submittedCommand,
+            submittedMentions
+          );
+        },
+        settleComposer: () => { if (!fromRecommendation) settleComposerAfterSend(sendScopeKey, submittedAttachments); },
         chatSelectionEpoch: state.agent.chatSelectionEpoch,
         getChatSelectionEpoch: () => chatSelectionEpochRef.current,
         scopeKey: sendScopeKey,
@@ -2774,19 +2795,6 @@ export function HomePage() {
     ) {
       loadSlashCommands({ resetAttempts: true });
     }
-  }
-
-  function selectHomeStarter(prompt: string) {
-    setSelectedComposerCommandForScope(chatScopeKey, null);
-    setCurrentComposerDraft(prompt);
-    setSlashMenuDismissed(true);
-    window.requestAnimationFrame(() => {
-      const input = inputRef.current;
-      if (!input) return;
-      resizeComposerInput(input);
-      input.focus();
-      input.setSelectionRange(prompt.length, prompt.length);
-    });
   }
 
   /** Removes the selected command token while preserving the typed message. */
@@ -3491,6 +3499,7 @@ export function HomePage() {
           threadPanel.closeTab("recording:main");
         }
       }}
+      ownsOverlays={props.hiddenSurface !== true}
       topBar={hasConversationShell ? (
         <AgentThreadToolbar
           key={chatScopeKey}
@@ -3503,17 +3512,22 @@ export function HomePage() {
           onSearchNavigate={pauseAgentConversationAutoScroll}
           getSearchRoot={getAgentConversationSearchRoot}
         />
-      ) : null}
-      topBarEnd={!hasConversationShell && threadPanel.phase !== "open" ? <button type="button"
-        className="thread-toolbar__button" aria-label={t("home.threadPanel.open")}
-        title={t("home.threadPanel.open")}
-        onClick={() => {
-          setSidePanelMounted(true);
-          setBlankThreadPanelEnabled(true);
-          threadPanel.open();
-        }}>
-        <PanelRight size={16} aria-hidden="true" />
-      </button> : null}
+      ) : (
+        <div className="thread-toolbar">
+          <div className="thread-toolbar__actions" data-window-drag-exclusion="thread-toolbar-actions">
+            {threadPanel.phase !== "open" ? <button type="button"
+              className="thread-toolbar__button" aria-label={t("home.threadPanel.open")}
+              title={t("home.threadPanel.open")}
+              onClick={() => {
+                setSidePanelMounted(true);
+                setBlankThreadPanelEnabled(true);
+                threadPanel.open();
+              }}>
+              <PanelRight size={16} aria-hidden="true" />
+            </button> : null}
+          </div>
+        </div>
+      )}
       topBarBorder={hasConversationShell}
       topBarInset={hasConversationShell ? false : undefined}
       topBarClassName={`thread-topbar ${threadPanelMotionClass}`}
@@ -3535,7 +3549,7 @@ export function HomePage() {
           controller={threadPanel}
           messages={state.agent.messages}
           conversationId={state.agent.currentChatId}
-          workspaceRoot={activeTask?.cwd.trim() || workspaceEnvironment.data?.snapshot.cwd || null}
+          workspaceRoot={threadWorkspaceRoot}
           previewContext={{
             artifactClient: sessionArtifactClient,
             onPreviewFile: previewAttachmentInApp,
@@ -3579,7 +3593,7 @@ export function HomePage() {
             </h1>
           </div>
           <div className="home-empty-column home-empty-suggestions">
-            <HomeStarterActions scenarios={features.scenarios} onSelect={selectHomeStarter} />
+            <HomeStarterActions scenarios={features.scenarios} disabled={recommendationSendDisabled} onSend={(prompt) => void sendMessage(prompt)} />
           </div>
           <div className="home-empty-column home-empty-input">
             <AgentOperationErrorSlot message={agentError} />
@@ -4386,7 +4400,7 @@ export function agentStatusText(
   if (status === "error") {
     return t(context.startupIssue === "model_config_invalid" && !context.hasConnected
       ? "home.modelSelector.unavailable"
-      : "home.agent.failed");
+      : "home.agent.connecting");
   }
   if (status === "reconnecting") {
     return t("home.agent.reconnecting");
