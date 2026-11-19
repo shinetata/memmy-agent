@@ -123,17 +123,6 @@
   background: color-mix(in srgb, var(--color-action-sky, #5cbfae) 30%, #fff);
 }
 
-.boardIcon {
-  display: grid;
-  flex: 0 0 46px;
-  place-items: center;
-  height: 46px;
-  border-radius: 14px;
-  background: linear-gradient(145deg, #e9f6f2, #d8efe8);
-  color: var(--collab-accent-deep);
-  box-shadow: inset 0 0 0 1px rgba(47, 125, 105, 0.12);
-}
-
 .boardName {
   margin: 0;
   min-width: 0;

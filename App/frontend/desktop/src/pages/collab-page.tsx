@@ -1,4 +1,4 @@
-import { ArrowUpRight, AtSign, BookOpen, ChevronDown, ChevronRight, Cloud, Folder, Layers, LifeBuoy, Loader2, ListChecks, MoreHorizontal, PanelRight, PanelRightClose, Plug, Plus, RefreshCw, Search, Settings, Trash2, User, UserPlus, Users, X } from "lucide-react";
+import { ArrowUpRight, AtSign, BookOpen, ChevronDown, ChevronRight, Folder, Layers, LifeBuoy, Loader2, ListChecks, MoreHorizontal, PanelRight, PanelRightClose, Plug, Plus, RefreshCw, Search, Settings, Trash2, User, UserPlus, Users, X } from "lucide-react";
 import { memo, useCallback, useDeferredValue, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import {
@@ -1575,11 +1575,8 @@ const CollabBoard = memo(function CollabBoard(props: {
                   </div>
                 ) : null}
                 <header className={styles.boardHeader}>
-                  <span className={styles.boardIcon} aria-hidden="true">
-                    {shared ? <Cloud size={22} /> : <Folder size={22} />}
-                  </span>
                   <h1 className={styles.boardName}>{project.name}</h1>
-                  {/* 新手引导「成员已加入」那一屏的亮区：套住成员数量（含项目名与图标），告诉人小饭团已经在里面。 */}
+                  {/* 新手引导「成员已加入」那一屏的亮区：套住成员数量，告诉人小饭团已经在里面。 */}
                   <span className={styles.boardScope} data-demo-guide="board-members">
                     {shared
                       ? t("collab.members", { count: String(shared.memberCount) })

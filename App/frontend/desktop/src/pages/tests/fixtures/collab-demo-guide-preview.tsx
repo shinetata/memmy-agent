@@ -160,7 +160,6 @@ function BoardSurface(props: { withSettings: boolean; withAssistRow: boolean; wi
       <div className={board.scroller}>
         <div className={board.wrap}>
           <header className={board.boardHeader}>
-            <span className={board.boardIcon} aria-hidden="true">☁</span>
             <h1 className={board.boardName}>项目协作体验</h1>
             <span className={board.boardScope} {...(props.withMembersAnchor ? { "data-demo-guide": "board-members" } : {})}>2 位成员</span>
             <span className={board.grow} />

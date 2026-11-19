@@ -7,7 +7,7 @@
  */
 import type { ReactNode } from "react";
 import { createRoot } from "react-dom/client";
-import { Cloud, Link2, ListChecks, PanelRight, RefreshCw, Search, Settings, User, UserPlus } from "lucide-react";
+import { Link2, ListChecks, PanelRight, RefreshCw, Search, Settings, User, UserPlus } from "lucide-react";
 import type { AssistExecution, AssistGrant, AssistInboxItem, AssistRequest, AssistThread, CollabClient } from "../../../api/collab-client.js";
 import { I18nProvider } from "../../../i18n/i18n-provider.js";
 import { CollabAssistDialog } from "../../collab-assist-dialog.js";
@@ -735,9 +735,6 @@ function Preview() {
         <div className={board.scroller}>
           <div className={board.wrap}>
             <header className={board.boardHeader}>
-              <span className={board.boardIcon} aria-hidden="true">
-                <Cloud size={22} />
-              </span>
               <h1 className={board.boardName}>项目协作体验</h1>
               <span className={board.boardScope}>1 位成员</span>
               <span className={board.grow} />
