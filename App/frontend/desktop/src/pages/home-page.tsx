@@ -4382,6 +4382,8 @@ const AGENT_OPERATION_ERROR_MESSAGE_KEYS: Record<string, MessageKey> = {
   project_directory_not_empty: "home.error.projectNotEmpty",
   project_limit_reached: "home.error.projectLimit",
   project_registry_corrupt: "home.error.projectRegistry",
+  project_shared: "home.error.projectShared",
+  project_shared_elsewhere: "home.error.projectSharedElsewhere",
   message_request_conflict: "home.error.messageConflict",
   model_selection_unavailable: "home.modelSelector.unavailable",
   result_unknown: "home.error.resultUnknown",

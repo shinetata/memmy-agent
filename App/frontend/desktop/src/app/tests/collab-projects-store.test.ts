@@ -8,6 +8,7 @@ import {
   consumeTaskPickerRequest,
   getCollabProjectsSnapshot,
   loadCollabProjects,
+  projectsWithoutLocalProject,
   removeCollabProject,
   replaceCollabProject,
   requestCreateProject,
@@ -115,6 +116,30 @@ describe("collab projects store", () => {
     expect(sharedProjectFor(projects, "local-a")?.id).toBe("a");
     expect(sharedProjectFor(projects, "local-b")).toBeNull();
     expect(sharedProjectFor(null, "local-a")).toBeNull();
+  });
+
+  it("treats a binding to a removed local project as no binding at all", () => {
+    // 移除本机项目不会回头改云端记录，于是云端可能绑着一个已经不存在的本机项目。
+    // 自愈只认「没绑过」的话，这种项目两头都不认，就再也不会出现在侧栏。
+    const projects = [
+      project("alive", "alive", "local-alive"),
+      project("orphan", "orphan", "local-removed"),
+      project("never", "never", null)
+    ];
+
+    expect(projectsWithoutLocalProject(projects, ["local-alive"]).map((item) => item.id))
+      .toEqual(["orphan", "never"]);
+    // 本机一个项目都没有时，云端项目全要补；清单没读回来时什么也不能做。
+    expect(projectsWithoutLocalProject(projects, []).map((item) => item.id))
+      .toEqual(["alive", "orphan", "never"]);
+    expect(projectsWithoutLocalProject(null, ["local-alive"])).toEqual([]);
+  });
+
+  it("only trusts the local project list once it has been read", () => {
+    // 清单没读到的时候 projects 是空的，拿它对照会把每个云端项目都当成缺了落脚处，于是重复建一遍。
+    const projects = [project("alive", "alive", "local-alive"), project("never", "never", null)];
+
+    expect(projectsWithoutLocalProject(projects, null).map((item) => item.id)).toEqual(["never"]);
   });
 
   it("keeps the open state until it is closed, for every mounted frame", () => {

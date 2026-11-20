@@ -33,6 +33,7 @@ import {
   getCollabProjectsSnapshot,
   loadCollabProjects,
   markCollabProjectBound,
+  projectsWithoutLocalProject,
   removeCollabProject,
   replaceCollabProject,
   requestCreateProject,
@@ -43,6 +44,7 @@ import {
   subscribeCollabProjects
 } from "../app/collab-projects-store.js";
 import { collabEnabledFor } from "../app/collab-mode.js";
+import { projectOperationErrorMessageKey } from "../app/project-operation-error.js";
 import { demoCleanupBaseline, demoSessionKey, demoTasksToRemove, removeDemoTasks } from "../app/collab-demo-cleanup.js";
 import {
   demoGuideBoundLocalProject,
@@ -438,20 +440,26 @@ export function AppFrame(props: AppFrameProps) {
   // 本机项目清单用 ref 读：自愈要根据目录找已有项目，但不该因为侧边栏重画就重跑一遍。
   const localProjectsRef = useRef(state.agent.projects);
   localProjectsRef.current = state.agent.projects;
+  // 只在本机项目一增一减时重算：本机项目被移除后，绑着它的云端项目要立刻能补回一个。
+  const localProjectIdsKey = state.agent.projects.map((project) => project.id).sort().join(",");
   useEffect(() => {
     if (!collabClient || !collabEnabled) return;
-    const pending = (collabSnapshot.projects ?? []).filter((project) => (
-      !project.localProjectId && !collabBindAttempts.current.has(project.id)
-    ));
+    // 本机清单读到过一次才敢拿它对账：否则启动时清单还没回来，会把所有云端项目都当成缺了落脚处。
+    const loadedLocalIds = state.agent.projectRegistryLoaded
+      ? localProjectsRef.current.map((project) => project.id)
+      : null;
+    const pending = projectsWithoutLocalProject(collabSnapshot.projects, loadedLocalIds);
     if (!pending.length) return;
+    const activeLocalIds = new Set(localProjectsRef.current.map((project) => project.id));
     // 已经被别的在线项目占用的本机项目：那里的任务属于那个项目，不能再分给这个孤儿。
     const boundLocalIds = new Set(
       (collabSnapshot.projects ?? [])
         .map((project) => project.localProjectId)
-        .filter((id): id is string => Boolean(id))
+        .filter((id): id is string => Boolean(id) && activeLocalIds.has(id as string))
     );
     void (async () => {
       for (const project of pending) {
+        if (collabBindAttempts.current.has(project.id)) continue;
         collabBindAttempts.current.add(project.id);
         try {
           const directory = await collabClient.ensureWorkingDirectory(project.id, project.name);
@@ -463,11 +471,12 @@ export function AppFrame(props: AppFrameProps) {
           ));
           let localProjectId = reusable?.id;
           if (!localProjectId) {
+            // 绑到空处的项目原先就跑在一个文件夹里，那文件夹可能已经有这个人的东西；按「已有目录」登记，
+            // 不当成新目录要求它是空的，否则目录里一有文件就补不回来。
+            const ontoExistingFolder = directory.chosen || Boolean(project.localProjectId);
             const outcome = await taskStateCoordinator.mutateProject({
               kind: "create",
-              // A folder the person chose when joining may hold their own files and projects: the shared project
-              // gets a record of its own there, so it never adopts a local project and uploads its tasks.
-              input: directory.chosen
+              input: ontoExistingFolder
                 ? { mode: "existing", path: directory.localDirectory, name: project.name, allowShared: true }
                 : { mode: "blank", path: directory.localDirectory, name: project.name }
             });
@@ -486,7 +495,7 @@ export function AppFrame(props: AppFrameProps) {
         }
       }
     })();
-  }, [collabClient, collabEnabled, collabSnapshot.projects, taskStateCoordinator]);
+  }, [collabClient, collabEnabled, collabSnapshot.projects, localProjectIdsKey, state.agent.projectRegistryLoaded, taskStateCoordinator]);
 
   // Coming back to the window picks up an approval that happened while Memmy was in the background.
   const collabRefreshedAt = useRef(0);
@@ -731,9 +740,14 @@ export function AppFrame(props: AppFrameProps) {
   const [inlineRename, setInlineRename] = useState<SidebarInlineRename | null>(null);
   const [inlineRenameDraft, setInlineRenameDraft] = useState("");
   const [removeProjectId, setRemoveProjectId] = useState<string | null>(null);
+  /** 移除失败的文案：写回那个确认弹窗，弹窗不关。 */
+  const [removeProjectError, setRemoveProjectError] = useState<string | null>(null);
   /** The shared project awaiting delete confirmation. */
   const [deleteOnlineProjectId, setDeleteOnlineProjectId] = useState<string | null>(null);
   const [deletingOnlineProject, setDeletingOnlineProject] = useState(false);
+  /** 停止共享 / 退出项目失败的文案，同样写回各自的确认弹窗。 */
+  const [unshareProjectError, setUnshareProjectError] = useState<string | null>(null);
+  const [leaveProjectError, setLeaveProjectError] = useState<string | null>(null);
   const [archiveProjectId, setArchiveProjectId] = useState<string | null>(null);
   const [projectMutationId, setProjectMutationId] = useState<string | null>(null);
   const [archiveConfirmSessionKey, setArchiveConfirmSessionKey] = useState<string | null>(null);
@@ -1154,7 +1168,13 @@ export function AppFrame(props: AppFrameProps) {
    * Members lose what they could read there; nothing local is touched.
    */
   async function unshareProject(projectId: string) {
-    if (!projectId || !collabClient || deletingOnlineProject) return;
+    if (!projectId || deletingOnlineProject) return;
+    setUnshareProjectError(null);
+    // 没有云端客户端就停不了共享：理由写回弹窗，不静默返回。
+    if (!collabClient) {
+      setUnshareProjectError(projectOperationErrorText("agent_gateway_unavailable"));
+      return;
+    }
     setDeletingOnlineProject(true);
     try {
       try {
@@ -1168,8 +1188,8 @@ export function AppFrame(props: AppFrameProps) {
       await loadCollabProjects(collabClient);
       void refreshAgentTasks();
     } catch (error) {
-      showProjectOperationError(error);
-      setDeleteOnlineProjectId(null);
+      // 弹窗不关：人已经确认过一次，失败的原因就地写在下面，在这里就能看到并决定下一步。
+      setUnshareProjectError(projectOperationErrorText(error));
     } finally {
       setDeletingOnlineProject(false);
     }
@@ -1180,7 +1200,12 @@ export function AppFrame(props: AppFrameProps) {
    * sharing; sessions already shared stay in the project for the others.
    */
   async function leaveOnlineProject(projectId: string) {
-    if (!projectId || !collabClient || leavingOnlineProject) return;
+    if (!projectId || leavingOnlineProject) return;
+    setLeaveProjectError(null);
+    if (!collabClient) {
+      setLeaveProjectError(projectOperationErrorText("agent_gateway_unavailable"));
+      return;
+    }
     setLeavingOnlineProject(true);
     try {
       try {
@@ -1193,8 +1218,7 @@ export function AppFrame(props: AppFrameProps) {
       setLeaveOnlineProjectId(null);
       await loadCollabProjects(collabClient);
     } catch (error) {
-      showProjectOperationError(error);
-      setLeaveOnlineProjectId(null);
+      setLeaveProjectError(projectOperationErrorText(error));
     } finally {
       setLeavingOnlineProject(false);
     }
@@ -1316,7 +1340,20 @@ export function AppFrame(props: AppFrameProps) {
 
   async function confirmRemoveProject() {
     const projectId = removeProjectId;
-    if (!projectId || !clients?.memmyAgent || projectMutationId) return;
+    if (!projectId || projectMutationId) return;
+    setRemoveProjectError(null);
+    // 删除没成时理由写回这个弹窗，不关、也不另发提示：人已经点过一次确认，
+    // 把弹窗收掉再在别处说一句，等于让他猜刚才发生了什么。
+    if (!clients?.memmyAgent) {
+      setRemoveProjectError(projectOperationErrorText("agent_gateway_unavailable"));
+      return;
+    }
+    // 菜单平时不给共享项目这个入口；兜底是菜单开着的时候清单才变成「已共享」（刚在别处共享、重读到）。
+    // 删下去留下的是一个指向空处的云端项目，而它再也回不来。
+    if (sharedLocalProjectIds.has(projectId)) {
+      setRemoveProjectError(projectOperationErrorText("project_shared"));
+      return;
+    }
     const operationId = `project-delete-${crypto.randomUUID()}`;
     setProjectMutationId(operationId);
     try {
@@ -1325,7 +1362,9 @@ export function AppFrame(props: AppFrameProps) {
         projectId
       });
       if (result.status !== "committed") {
-        showProjectOperationError(result.status === "rejected" ? result.code : "network_unavailable");
+        setRemoveProjectError(projectOperationErrorText(
+          result.status === "rejected" ? result.code : "network_unavailable"
+        ));
         return;
       }
       taskBus.removeTasksBySessionIds(result.deletedSessionKeys.flatMap((key) => [
@@ -1338,23 +1377,33 @@ export function AppFrame(props: AppFrameProps) {
         dispatch(appActions.navigate("/main"));
       }
     } catch (error) {
-      showProjectOperationError(error);
+      setRemoveProjectError(projectOperationErrorText(error));
       void refreshAgentTasks();
     } finally {
       setProjectMutationId((current) => current === operationId ? null : current);
     }
   }
 
-  function showProjectOperationError(error: unknown) {
+  /**
+   * 项目操作失败时的文案。没有确认弹窗的操作（重命名、置顶、在文件夹中显示、归档）走这里，
+   * 它们是原地生效，没有地方能就地写一句话。带确认弹窗的三个操作不走这里，而是把理由写回弹窗（见下面）。
+   */
+  function projectOperationErrorText(error: unknown): string {
     const code = typeof error === "string"
       ? error
       : error instanceof MemmyAgentRequestError
         ? error.code
         : null;
-    dispatch(agentActions.operationFailed("sidebar", createAgentOperationError({
-      source: "sidebar",
-      message: code ?? "project_operation_failed"
-    })));
+    return t(projectOperationErrorMessageKey(code));
+  }
+
+  function showProjectOperationError(error: unknown) {
+    // 只发一处：全局通知。原先还向 sidebar 那个界面位派发一份，而它只在首页输入框上方渲染，
+    // 于是同一次失败会出两条一模一样的提示（看板里一条都没有）。
+    notifications?.notify({
+      variant: "warning",
+      title: projectOperationErrorText(error)
+    });
   }
 
   function openProjectMenu(event: MouseEvent, projectId: string, onlineProjectId?: string) {
@@ -2001,8 +2050,8 @@ export function AppFrame(props: AppFrameProps) {
                 setProjectContextMenu(null);
                 setLeaveOnlineProjectId(onlineProjectId);
               }}
-              // Removing a shared project locally would leave its cloud record without a home, so it stops
-              // sharing first; the menu only offers removal once it is local again.
+              // 移除一个还共享着的本机项目，云端那条记录就没了落脚处；先停止共享再移除。
+              // 换号后看不出别人共享过它（云端名单只属于当前账号），那一种由后端扫全部绑定拦住。
               canRemove={!sharedLocalProjectIds.has(projectContextMenu.projectId)}
               // A shared project's name belongs to its owner; a local one is always this person's.
               canRename={(() => {
@@ -2211,7 +2260,11 @@ export function AppFrame(props: AppFrameProps) {
         // The cloud deletes in one request; disabling keeps a second click from queueing another.
         confirmDisabled={deletingOnlineProject}
         icon={null}
-        onCancel={() => setDeleteOnlineProjectId(null)}
+        error={unshareProjectError}
+        onCancel={() => {
+          setDeleteOnlineProjectId(null);
+          setUnshareProjectError(null);
+        }}
         onConfirm={() => void unshareProject(deleteOnlineProjectId ?? "")}
       />
       <ConfirmDialog
@@ -2225,7 +2278,11 @@ export function AppFrame(props: AppFrameProps) {
         confirmVariant="danger"
         confirmDisabled={leavingOnlineProject}
         icon={null}
-        onCancel={() => setLeaveOnlineProjectId(null)}
+        error={leaveProjectError}
+        onCancel={() => {
+          setLeaveOnlineProjectId(null);
+          setLeaveProjectError(null);
+        }}
         onConfirm={() => void leaveOnlineProject(leaveOnlineProjectId ?? "")}
       />
       <ConfirmDialog
@@ -2240,9 +2297,11 @@ export function AppFrame(props: AppFrameProps) {
         confirmLabel={t("common.remove")}
         confirmDisabled={projectMutationId != null}
         confirmVariant="danger"
+        error={removeProjectError}
         onCancel={() => {
           if (projectMutationId == null) {
             setRemoveProjectId(null);
+            setRemoveProjectError(null);
           }
         }}
         onConfirm={() => void confirmRemoveProject()}

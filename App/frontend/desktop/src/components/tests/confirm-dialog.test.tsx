@@ -38,6 +38,42 @@ describe("ConfirmDialog", () => {
     expect(html).not.toContain("<h3");
   });
 
+  it("shows why the action failed without closing the dialog", () => {
+    // 失败的理由写在正文下面，弹窗本身不关：这一步没做成，人还在这里就能看到原因。
+    const html = renderToString(
+      <ConfirmDialog
+        open
+        title="移除项目"
+        message="移除“Memmy项目协作开发”并永久删除其中的 2 个任务？"
+        cancelLabel="取消"
+        confirmLabel="移除"
+        error="先停止共享，再移除这个项目"
+        onCancel={() => undefined}
+        onConfirm={() => undefined}
+      />
+    );
+
+    expect(html).toContain('role="alert"');
+    expect(html).toContain("confirm-dialog__error");
+    expect(html).toContain("先停止共享，再移除这个项目");
+    expect(html).toContain("移除“Memmy项目协作开发”并永久删除其中的 2 个任务？");
+  });
+
+  it("keeps the dialog body free of an error element when nothing failed", () => {
+    const html = renderToString(
+      <ConfirmDialog
+        open
+        message="永久删除已归档对话？"
+        cancelLabel="取消"
+        confirmLabel="确定"
+        onCancel={() => undefined}
+        onConfirm={() => undefined}
+      />
+    );
+
+    expect(html).not.toContain("confirm-dialog__error");
+  });
+
   it("does not render when closed", () => {
     expect(renderToString(
       <ConfirmDialog

@@ -9161,7 +9161,8 @@ input[type="checkbox"].check-sky:checked::after {
   position: fixed;
   top: var(--codex-toolbar-height);
   right: var(--space-5);
-  z-index: 30;
+  /* 盖在弹窗与抽屉之上：操作结果被蒙版的模糊糊住，人只会看到「点了没反应」。 */
+  z-index: var(--z-toast);
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
@@ -11369,6 +11370,22 @@ body.memmy-platform-windows :is(
 
 .confirm-dialog__message--no-icon {
   margin-top: 0;
+}
+
+/* 没做成的理由：写在不成功的那一次操作里，不另开一层提示。
+   错误色直接上太浅（#f87b8e 在燕麦白底上难认），混入墨色加深，与产品其它错误正文一致。 */
+.confirm-dialog__error {
+  width: 100%;
+  margin: 10px 0 0;
+  padding: 0 4px;
+  color: color-mix(in srgb, var(--color-danger) 78%, var(--color-text-ink));
+  font-size: 13px;
+  line-height: 1.6;
+  text-align: left;
+}
+
+.confirm-dialog--titled .confirm-dialog__error {
+  padding: 0;
 }
 
 .confirm-dialog__footer {

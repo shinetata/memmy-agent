@@ -103,6 +103,11 @@
   --duration-normal: 220ms;
   --z-modal: 50;
   --z-drawer: 10001;
+  /**
+   * 通知置顶于一切浮层之上：它是操作结果的交代，被弹窗蒙版或抽屉盖住就等于没提示。
+   * 普通弹窗在 `--z-modal`（50），录音确认那套局部提到 4001，抽屉 10001。
+   */
+  --z-toast: 10002;
 
   /* Color canvas color token. */
   --color-canvas: var(--color-canvas-oat);

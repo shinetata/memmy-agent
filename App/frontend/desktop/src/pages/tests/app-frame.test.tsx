@@ -1172,7 +1172,12 @@ describe("AppFrame", () => {
     expect(source).not.toContain("appFrame.project.openBoard");
     // Stopping sharing is the only way out of a shared project: removing it locally would orphan the cloud record.
     expect(source).toContain('label={t("appFrame.project.stopSharing")}');
+    // 当前账号共享的项目，菜单里就不给移除。
     expect(source).toContain("canRemove={!sharedLocalProjectIds.has(projectContextMenu.projectId)}");
+    // 换号后看不出别人共享过它，靠后端扫全部账号的绑定拦住；菜单开着时刚变成共享也懒这里。
+    expect(source).toContain("if (sharedLocalProjectIds.has(projectId)) {");
+    // 绑到已移除本机项目的云端项目，要和从未绑过的一样补一个本机项目回来。
+    expect(source).toContain("projectsWithoutLocalProject(collabSnapshot.projects");
   });
 
   it("lets members leave a shared project instead of stopping the owner's share", () => {

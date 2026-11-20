@@ -41,6 +41,7 @@ const running: WebSocketChannel[] = [];
 const tmpDirs: string[] = [];
 const originalMemmyAgentConfig = process.env.MEMMY_CONFIG;
 const originalMemmyAgentDataDir = process.env.MEMMY_AGENT_DATA_DIR;
+const originalMemmyHome = process.env.MEMMY_HOME;
 
 afterEach(async () => {
   await Promise.all(running.splice(0).map((channel) => channel.stop()));
@@ -54,6 +55,8 @@ afterEach(async () => {
   else process.env.MEMMY_CONFIG = originalMemmyAgentConfig;
   if (originalMemmyAgentDataDir === undefined) delete process.env.MEMMY_AGENT_DATA_DIR;
   else process.env.MEMMY_AGENT_DATA_DIR = originalMemmyAgentDataDir;
+  if (originalMemmyHome === undefined) delete process.env.MEMMY_HOME;
+  else process.env.MEMMY_HOME = originalMemmyHome;
 });
 
 describe("WebSocket HTTP route helpers", () => {
@@ -1777,6 +1780,51 @@ describe("WebSocket HTTP route helpers", () => {
     const channel = makeChannel({ config: { host: "0.0.0.0", tokenIssueSecret: "s3cret" } });
     const response = (channel as any).handleBootstrap(remoteConnection, { headers: { "X-Memmy-Agent-Auth": "s3cret" } });
     expect(response.status).toBe(200);
+  });
+
+  it("refuses to remove a local project another account still shares", async () => {
+    // 本机项目不分账号，共享绑定却按账号存。换号进来时，上一个账号共享过的项目在界面上就是个普通本机项目，
+    // 删下去云端那条记录就指向不存在的项目。这里不看当前账号，扫全部记录兜住。
+    const root = tmpRoot();
+    process.env.MEMMY_AGENT_DATA_DIR = root;
+    // 绑定记录按 MEMMY_HOME 落盘，和 collab-service 的 projectsDir 同一套解析。
+    process.env.MEMMY_HOME = root;
+    const projectFolder = path.join(root, "shared-project");
+    fs.mkdirSync(projectFolder, { recursive: true });
+    const projectStore = new ProjectStore({ filePath: path.join(root, "webui", "projects.json") });
+    const project = projectStore.add(projectFolder, "blank", "共享给别的账号");
+    const channel = makeChannel({ projectStore });
+    // 真删要清这个项目的任务：这一步由会话删除服务完成，用例里给一个空实现即可。
+    channel.setSessionDeletionServices({
+      cronService: { removeWebuiJobsForSessionKeys: async () => undefined },
+    } as never);
+    const headers = withApiToken(channel);
+    const deleteRoute = `/api/projects/${encodeURIComponent(project.id)}`;
+    const linksDir = path.join(root, "projects", "online-project-1");
+    fs.mkdirSync(linksDir, { recursive: true });
+
+    fs.writeFileSync(path.join(linksDir, "links.json"), JSON.stringify({
+      projectId: "online-project-1",
+      accountId: "another-account",
+      localProjectId: project.id,
+    }), "utf8");
+
+    const blocked = await channel.dispatchHttp(localConnection, { path: deleteRoute, method: "DELETE", headers });
+    expect(blocked?.status).toBe(409);
+    expect(responseJson(blocked!)).toMatchObject({ code: "project_shared_elsewhere" });
+    // 拦住就是没删：项目还在本机清单里。
+    expect(projectStore.listActive().map((item) => item.id)).toContain(project.id);
+
+    // 那个账号停止共享之后，记录里的绑定清空，移除照常。
+    fs.writeFileSync(path.join(linksDir, "links.json"), JSON.stringify({
+      projectId: "online-project-1",
+      accountId: "another-account",
+      localProjectId: null,
+    }), "utf8");
+
+    const removed = await channel.dispatchHttp(localConnection, { path: deleteRoute, method: "DELETE", headers });
+    expect(removed?.status).toBe(200);
+    expect(projectStore.listActive().map((item) => item.id)).not.toContain(project.id);
   });
 
   it("enforces bootstrap secrets even for localhost connections", () => {

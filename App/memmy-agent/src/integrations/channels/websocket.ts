@@ -3188,6 +3188,7 @@ export class WebSocketChannel extends BaseChannel {
         throw new WebuiProjectError("project_not_found", 404);
       }
       if (active) {
+        await this.assertProjectNotBoundElsewhere(id);
         store.beginDeleting(id, (projectId) => {
           this.discardInflightForProject(projectId);
         });
@@ -3207,6 +3208,48 @@ export class WebSocketChannel extends BaseChannel {
       });
     } catch (error) {
       return this.projectErrorResponse(error);
+    }
+  }
+
+  /**
+   * 删本机项目之前，看本机还有没有哪个账号的协作项目拴着它。
+   *
+   * 本项目文件不分账号，共享绑定却按账号存（`~/.memmy/projects/<云端项目 id>/links.json` 的 `accountId`）。
+   * 于是换号登进来时，上一个账号共享过的本机项目看着就是一个普通本机项目，界面上的「已共享」徽标和移除
+   * 拦截都只认当前账号的名单，拦不住。删下去云端那条记录就指向一个不存在的本机项目，那个账号回来时
+   * 项目不在侧栏，只剩一条没人认的绑定。
+   *
+   * 所以这里不看当前账号，扫全部账号：只要有一条记录拴着这个本机项目就拒绝，让人先去对应账号停共享。
+   * 正常先停共享再移除的路径不会被拦：停共享会把那条记录的 `localProjectId` 清成 null。
+   */
+  private async assertProjectNotBoundElsewhere(projectId: string): Promise<void> {
+    // 与 collab-service 的 `projectsDir` 同一套解析：MEMMY_HOME 优先，否则 ~/.memmy。
+    const memmyHome = process.env.MEMMY_HOME?.trim() || path.join(os.homedir(), ".memmy");
+    const projectsDir = path.join(memmyHome, "projects");
+    let entries: fs.Dirent[];
+    try {
+      entries = await fs.promises.readdir(projectsDir, { withFileTypes: true });
+    } catch {
+      // 本机还没有任何协作项目记录：没什么可挂的。
+      return;
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      let stored: unknown;
+      try {
+        stored = JSON.parse(await fs.promises.readFile(path.join(projectsDir, entry.name, "links.json"), "utf8"));
+      } catch {
+        // 没写过或写坏了：这条记录挂不住任何项目。
+        continue;
+      }
+      if (!stored || typeof stored !== "object" || Array.isArray(stored)) continue;
+      if ((stored as { localProjectId?: unknown }).localProjectId === projectId) {
+        throw new WebuiProjectError(
+          "project_shared_elsewhere",
+          409,
+          "project is still bound to a shared project",
+        );
+      }
     }
   }
 

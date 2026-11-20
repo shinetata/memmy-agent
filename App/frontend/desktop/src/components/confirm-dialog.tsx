@@ -27,6 +27,13 @@ export interface ConfirmDialogProps {
   minHeight?: ConfirmDialogSizeValue;
   title?: string;
   width?: ConfirmDialogSizeValue;
+  /**
+   * 这次没做成的理由，直接写在正文下方。
+   *
+   * 有确认弹窗的操作失败时，弹窗不关、原因就地显示：人已经点过一次确认，把他推回原来的界面
+   * 再另找一句提示，等于让他猜刚才发生了什么。
+   */
+  error?: ReactNode;
   onCancel?: () => void;
   onConfirm: () => void;
 }
@@ -123,6 +130,9 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
       >
         {props.message}
       </div>
+      {props.error ? (
+        <p className="confirm-dialog__error" role="alert">{props.error}</p>
+      ) : null}
     </Modal>
   );
 }

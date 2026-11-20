@@ -221,6 +221,11 @@ export interface AgentState {
   currentChatId: string | null;
   currentSessionKey: string | null;
   projectRegistryState: "ready" | "corrupt";
+  /**
+   * 本机项目清单是否真的读到过一次。清单没读到之前 `projects` 为空，不能拿它判断「某个本机项目不存在」，
+   * 否则启动时会把所有云端项目当成缺了落脚处，一人一个再造一遍。
+   */
+  projectRegistryLoaded: boolean;
   projects: MemmyAgentProject[];
   sessions: MemmyAgentSessionSummary[];
   sidebarState: MemmyAgentSidebarState;
@@ -402,6 +407,7 @@ export const initialAgentState: AgentState = {
   currentChatId: null,
   currentSessionKey: null,
   projectRegistryState: "ready",
+  projectRegistryLoaded: false,
   projects: [],
   sessions: [],
   sidebarState: defaultAgentSidebarState,
@@ -1701,6 +1707,8 @@ function completeSessionSnapshotLoad(
   const loaded = completeSessionsLoad({
     ...state,
     projectRegistryState: snapshot.projectRegistryState,
+    // 清单读到才算数：注册表坏了时它读不出内容，这时的「空」不代表项目都不存在。
+    projectRegistryLoaded: snapshot.projectRegistryState === "ready",
     projects: snapshot.projects,
     draftTargetsByScope,
     draftTargetRevisionByScope

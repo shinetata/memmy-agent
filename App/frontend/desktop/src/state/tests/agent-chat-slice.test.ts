@@ -5135,6 +5135,35 @@ describe("agent chat slice", () => {
     expect(state.blankDraftActive).toBe(false);
   });
 
+  it("marks the local project list as read only once a snapshot carried it", () => {
+    // 自愈要靠这份清单判断「某个本机项目还在不在」：没读到过就不能拿空清单当结论，否则会把云端项目全建一遍。
+    let state = agentReducer(initialAgentState, {
+      type: "agent/taskStateLoading",
+      request: {
+        requestId: "registry-1",
+        sidebarStateVersionAtStart: 0,
+        runStatusVersionAtStartByChatId: {},
+        recoveryGeneration: null
+      }
+    });
+    expect(state.projectRegistryLoaded).toBe(false);
+
+    state = agentReducer(state, {
+      type: "agent/taskStateSettled",
+      requestId: "registry-1",
+      recoveryGeneration: null,
+      snapshot: { sessions: [], projects: [], projectRegistryState: "ready", sidebarState: state.sidebarState }
+    });
+    expect(state.projectRegistryLoaded).toBe(true);
+
+    // 注册表不可用时清单读出来的永远是空，这时不能把它当成「项目都不存在了」。
+    const corrupt = agentReducer(initialAgentState, {
+      type: "agent/sessionSnapshotApplied",
+      snapshot: { sessions: [], projects: [], projectRegistryState: "corrupt", sidebarState: initialAgentState.sidebarState }
+    });
+    expect(corrupt.projectRegistryLoaded).toBe(false);
+  });
+
   it("keeps a plugin-only conversation selected across an empty canonical snapshot", () => {
     let state = agentReducer(initialAgentState, { type: "agent/newChatRequested" });
     state = agentReducer(state, {

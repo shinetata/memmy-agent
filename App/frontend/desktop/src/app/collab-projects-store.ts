@@ -94,6 +94,27 @@ export function sharedProjectFor(
 }
 
 /**
+ * 云端项目里，这台电脑上没有可对应本机项目的那些：要么本来就没绑过（在别处加入、本机记录丢了），
+ * 要么绑着的本机项目已经被移除。
+ *
+ * 后一种最容易漏：移除本机项目只删本机注册表与本机任务，不会回头改云端那份记录，于是云端记着一个
+ * 已经不存在的本机项目。侧栏只能靠本机项目成行，而自愈原先只认「没有绑定」，这种绑空的记录两头都不认，
+ * 那个协作项目就再也不回来了。把它当成「没绑过」处理，才会重新接上一个本机项目。
+ *
+ * @param activeLocalProjectIds 这台电脑上还在的本机项目 id。传 null 表示本机清单还没读到（或注册表不可用），
+ *        这时只看「云端说没绑过」的那一种：拿一份还没读出来的空清单去对照，会把所有项目都当成缺了。
+ */
+export function projectsWithoutLocalProject(
+  projects: CollabProject[] | null | undefined,
+  activeLocalProjectIds: Iterable<string> | null
+): CollabProject[] {
+  if (!projects) return [];
+  if (activeLocalProjectIds === null) return projects.filter((project) => !project.localProjectId);
+  const active = new Set(activeLocalProjectIds);
+  return projects.filter((project) => !project.localProjectId || !active.has(project.localProjectId));
+}
+
+/**
  * 共享 store 的两个写入点都会收到「内容一样的新对象」（轮询、切回窗口后的重读），
  * 字段逐个比一遍就能判断要不要通知订阅方；值都是字符串与数字，浅比即可。
  */
