@@ -1501,11 +1501,15 @@ export function HomePage(props: { hiddenSurface?: boolean } = {}) {
    * 用户自己改过的内容不会被再次覆盖。
    */
   const demoGuide = useSyncExternalStore(subscribeDemoGuide, getDemoGuideState, getDemoGuideState);
+  /** 上一次把引导那句话填进输入框的 nonce：同一个 nonce 只填一次。 */
   const demoPrefillNonceRef = useRef(0);
+  /** 那句话被填进了哪个草稿作用域：换了任务就不再属于它，留给新任务是错的。 */
+  const demoPrefillScopeRef = useRef<string | null>(null);
   useEffect(() => {
     const prefill = demoGuide.prefill;
     if (!prefill || prefill.nonce === demoPrefillNonceRef.current) return;
     demoPrefillNonceRef.current = prefill.nonce;
+    demoPrefillScopeRef.current = chatScopeKey;
     setCurrentComposerDraft(prefill.text);
     window.requestAnimationFrame(() => {
       const element = inputRef.current;
@@ -1513,24 +1517,37 @@ export function HomePage(props: { hiddenSurface?: boolean } = {}) {
       resizeComposerInput(element);
       element.focus();
     });
-  }, [demoGuide.prefill]);
+  }, [demoGuide.prefill, chatScopeKey]);
 
   /**
-   * 演示一结束（完成 / 退出 / 离开 / 心跳超时），第二步预填的那句话不该留在任何草稿里：
-   * 之后的空白会话会把一句没发生过的请求带出来。只清与那句话完全相同的那一版，人自己写的照旧留着。
+   * 第二步预填的那句话只在「请求成员协助」这一屏里成立：一旦离开（跳过、退回上一步、进入第三步、
+   * 演示结束），任何草稿里都不该再留着它——不然下次点「新建任务」，一句没发生过的请求会跟着冒出来。
+   *
+   * 只清与那句话完全相同的那一版，用户自己改过的照旧留着。
    */
   const demoAskSentenceRef = useRef("");
-  const demoEndedHandledRef = useRef(false);
+  const demoAskPhase = demoGuide.status === "active"
+    && (demoGuide.phase === "ask-compose" || demoGuide.phase === "ask-waiting");
   useEffect(() => {
-    if (demoGuide.status === "active") {
-      demoAskSentenceRef.current = t("collab.demo.prefill.ask", { name: demoGuide.memberName, ask: demoGuide.copy.askSentence });
-      demoEndedHandledRef.current = false;
-      return;
-    }
-    if (demoGuide.status !== "ended" || demoEndedHandledRef.current) return;
-    demoEndedHandledRef.current = true;
+    const sentence = demoGuide.status === "active"
+      ? t("collab.demo.prefill.ask", { name: demoGuide.memberName, ask: demoGuide.copy.askSentence })
+      : "";
+    if (sentence) demoAskSentenceRef.current = sentence;
+    // 还停在第二步的输入与等待：那句话就是这一步要发的内容，留着。
+    if (demoAskPhase) return;
+    clearDraftIfUntouched(demoAskSentenceRef.current || sentence);
+  }, [demoAskPhase, demoGuide.status, demoGuide.memberName, demoGuide.copy, dispatch, t]);
+
+  /**
+   * 换了任务（点「新建任务」、切到别的会话）时，上一张输入框里那句引导写的话要收回来：
+   * 新任务是空的，不该带着还没发生的请求。用户在这期间自己改过的内容不动。
+   */
+  useEffect(() => {
+    const scope = demoPrefillScopeRef.current;
+    if (!scope || scope === chatScopeKey) return;
+    demoPrefillScopeRef.current = null;
     clearDraftIfUntouched(demoAskSentenceRef.current);
-  }, [demoGuide.status, demoGuide.memberName, dispatch, t]);
+  }, [chatScopeKey]);
 
   /** 第二步被跳过时要停住的那一轮 Agent：指向下面的 `stopCurrentTurn`，避免 effect 重建时反复变化。 */
   const stopTurnForDemoRef = useRef<(() => void) | null>(null);
