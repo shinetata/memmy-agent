@@ -3180,6 +3180,8 @@ export function ProjectBoardSettingsDialog(props: {
           <CollabAssistProjectSettings
             client={props.collab}
             projectId={sharedId}
+            // 打开设置时就按列表里带回的状态画，不等再读一次云端：先画错再翻过来会看得到一次闪烁。
+            initialEnabled={props.shared?.acceptAssist ?? null}
             demoAnchor={props.demoActive === true}
             // 引导正讲到这一行：只展示默认开启，开关不给拨。
             locked={props.demoActive === true}

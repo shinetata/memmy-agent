@@ -8,10 +8,11 @@
  *
  * 次数限制不做成设置项：同一时间一个、单次最长 15 分钟，由产品内置，在协助请求弹窗里说明。
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ChevronDown, Loader2, LifeBuoy } from "lucide-react";
 import { InfoHint } from "./collab-info-hint.js";
 import type { AssistAgent, AssistGrant, CollabClient } from "../api/collab-client.js";
+import { markCollabProjectAssistReceiving } from "../app/collab-projects-store.js";
 import { useTranslation } from "../i18n/use-translation.js";
 import { agentSourceLogoUrl } from "./agent-source-logos.js";
 import { assistAgentName, grantRemaining } from "./collab-assist-view.js";
@@ -35,26 +36,48 @@ export function CollabAssistProjectSettings(props: {
    * 引导期间让人顺手关掉，后面等演示成员请求那一步就永远等不到。
    */
   locked?: boolean;
+  /**
+   * 打开时先按这个值画：云端项目列表带回来的「本人是否接收协助请求」。
+   *
+   * 打开项目设置的那一刻只有这一份现成的状态。不给的话开关会先画成关着，
+   * 读到云端再翻成开着——看得到的一次闪烁，而且读错了一瞬。
+   */
+  initialEnabled?: boolean | null;
 }) {
   const { t } = useTranslation();
   const { client, projectId } = props;
-  const [enabled, setEnabled] = useState<boolean | null>(null);
+  const [enabled, setEnabled] = useState<boolean | null>(() => props.initialEnabled ?? null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** 画面上的这个值属于哪个项目：换项目时才回到「还没读到」，同一个项目内保留当前值。 */
+  const shownFor = useRef<string>(projectId);
+  /** 最新的初始值：列表刷新会带新的对象进来，effect 不该因此再读一遍云端。 */
+  const initialEnabled = useRef(props.initialEnabled);
+  initialEnabled.current = props.initialEnabled;
+  /** 读取的序号：拨过开关之后再回来的旧结果不能把开关翻回去。 */
+  const readSeq = useRef(0);
 
   useEffect(() => {
     if (!client) return;
     let cancelled = false;
-    setEnabled(null);
+    // 换项目时先把列表带回的状态画上，同一个项目内不动：刚拨过的开关不能因为重新读一遍又翻回去。
+    if (shownFor.current !== projectId) {
+      shownFor.current = projectId;
+      setEnabled(initialEnabled.current ?? null);
+    }
     setError(null);
-    // 读失败（含旧版本的本机接口）时按关闭显示，并说明没读到。
+    const seq = ++readSeq.current;
+    // 读失败（含旧版本的本机接口）时按关闭显示，并说明没读到；已经显示着某个状态就留着，不因一次读失败翻面。
     void (async () => {
       try {
         const view = await client.assistReceiving(projectId);
-        if (!cancelled) setEnabled(view.enabled);
+        if (!cancelled && readSeq.current === seq) {
+          setEnabled(view.enabled);
+          markCollabProjectAssistReceiving(projectId, view.enabled);
+        }
       } catch {
         if (!cancelled) {
-          setEnabled(false);
+          setEnabled((current) => current ?? false);
           setError(t("settings.assist.failed"));
         }
       }
@@ -71,6 +94,10 @@ export function CollabAssistProjectSettings(props: {
     try {
       const saved = await client.setAssistReceiving(projectId, next);
       setEnabled(saved.enabled);
+      // 拨过开关之前发出的那次读取已经旧了：它回来的值不能盖掉这一次写入。
+      readSeq.current += 1;
+      // 写回项目列表那一份：下次打开项目设置先按它画，不用等再读一次云端。
+      markCollabProjectAssistReceiving(projectId, saved.enabled);
       props.onEnabledChange?.(saved.enabled);
     } catch {
       setError(t("collab.settings.assist.saveFailed"));
@@ -80,6 +107,8 @@ export function CollabAssistProjectSettings(props: {
   }
 
   const on = enabled === true;
+  /** 还不知道实际状态：画一个转圈，不要先画成关着。 */
+  const reading = enabled === null;
   // 这一行放在项目设置「协作」那一组里，外框由那一组提供。
   return (
     <div className={frame.settingsAssist} data-collab-assist-settings="">
@@ -101,11 +130,12 @@ export function CollabAssistProjectSettings(props: {
           />
         </span>
         <span className={frame.settingsRowControl}>
-          {busy ? <Loader2 size={13} className={frame.settingsSpinner} aria-hidden="true" /> : null}
+          {busy || reading ? <Loader2 size={13} className={frame.settingsSpinner} aria-hidden="true" /> : null}
           <button
             type="button"
             role="switch"
             aria-checked={on}
+            aria-busy={reading || busy}
             aria-label={t("collab.settings.assist.title")}
             data-demo-guide={props.demoAnchor ? "settings-assist-switch" : undefined}
             disabled={busy || !client || enabled === null || props.locked === true}

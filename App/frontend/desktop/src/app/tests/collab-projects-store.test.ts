@@ -8,6 +8,7 @@ import {
   consumeTaskPickerRequest,
   getCollabProjectsSnapshot,
   loadCollabProjects,
+  markCollabProjectAssistReceiving,
   projectsWithoutLocalProject,
   removeCollabProject,
   replaceCollabProject,
@@ -225,6 +226,23 @@ describe("collab projects store", () => {
     // 云端给出空列表时就清空，不再一直挂着。
     await loadCollabProjects(clientWith(async () => [project("cloud-1")], [], []));
     expect(getCollabProjectsSnapshot().decisions).toEqual([]);
+  });
+
+  it("records the receiving switch the settings page just flipped", async () => {
+    await loadCollabProjects(clientWith(async () => [{ ...project("a"), acceptAssist: false }]));
+    let notifications = 0;
+    const unsubscribe = subscribeCollabProjects(() => {
+      notifications += 1;
+    });
+
+    markCollabProjectAssistReceiving("a", true);
+    expect(getCollabProjectsSnapshot().projects?.[0]?.acceptAssist).toBe(true);
+    expect(notifications).toBe(1);
+
+    // 值没变就不再通知：看板、侧栏不必重画。
+    markCollabProjectAssistReceiving("a", true);
+    expect(notifications).toBe(1);
+    unsubscribe();
   });
 
   it("stays silent when a reload or a board refresh brings the same content", async () => {

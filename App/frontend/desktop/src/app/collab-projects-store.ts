@@ -224,9 +224,13 @@ export function replaceCollabProject(project: CollabProject): void {
   // 「谁接收协助请求」只有项目列表带这一项，单查项目与会话列表都不带。照那些回应写回就会把可请的
   // 成员清空，协助页头上那排头像跟着消失；列表那一份有名单时一律沿用，新回应真给了才换。
   const listedReceivers = current?.assistReceivers?.length ? current.assistReceivers : null;
-  const merged = listedReceivers && !project.assistReceivers?.length
-    ? { ...project, assistReceivers: listedReceivers }
-    : project;
+  const merged = {
+    ...project,
+    ...(listedReceivers && !project.assistReceivers?.length ? { assistReceivers: listedReceivers } : {}),
+    // 「本人是否接收协助请求」同样只有项目列表与那个开关接口能给准：改名、保存指令这类回应不带它，
+    // 接它们写回会让开关下次打开时先画成关着。以本机记着的那一份为准，列表重新加载时自然更新。
+    ...(current?.acceptAssist === undefined ? {} : { acceptAssist: current.acceptAssist })
+  };
   // 轮询每 5 秒带回一份新对象：字段没变就不通知，否则侧栏会跟着重画一次。
   if (current && sameRecord(current, merged)) return;
   update({ projects: snapshot.projects.map((entry) => (entry.id === project.id ? merged : entry)) });
@@ -236,6 +240,23 @@ export function replaceCollabProject(project: CollabProject): void {
 export function removeCollabProject(projectId: string): void {
   if (!snapshot.projects) return;
   update({ projects: snapshot.projects.filter((project) => project.id !== projectId) });
+}
+
+/**
+ * 记下本人刚改过的「接收协助请求」。
+ *
+ * 这一项只有项目列表带着，改开关的那个接口只回 `{ projectId, enabled }`，不写回这里的话，
+ * 下一次打开项目设置看到的还是旧值：开关先按旧状态画，读到云端才翻过来。
+ */
+export function markCollabProjectAssistReceiving(projectId: string, acceptAssist: boolean): void {
+  if (!snapshot.projects) return;
+  const current = snapshot.projects.find((project) => project.id === projectId);
+  if (!current || current.acceptAssist === acceptAssist) return;
+  update({
+    projects: snapshot.projects.map((project) => (
+      project.id === projectId ? { ...project, acceptAssist } : project
+    ))
+  });
 }
 
 /**

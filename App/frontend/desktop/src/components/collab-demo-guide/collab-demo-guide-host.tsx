@@ -21,7 +21,7 @@ import {
   isDemoGuideActive,
   subscribeDemoGuide
 } from "../../app/collab-demo-guide-store.js";
-import { loadCollabProjects } from "../../app/collab-projects-store.js";
+import { loadCollabProjects, markCollabProjectAssistReceiving } from "../../app/collab-projects-store.js";
 import { useTranslation } from "../../i18n/use-translation.js";
 import { CollabDemoGuideOverlay } from "./collab-demo-guide-overlay.js";
 import styles from "./collab-demo-guide.module.css";
@@ -333,7 +333,10 @@ export function CollabDemoGuideHost(props: {
     }
     // 第三步的「接收协助请求」是自己打开的：退回去要关回原样，不然人以为退回去就等于没开过。
     if (phase === "settings-assist" || phase === "help-waiting" || phase === "help-dialog") {
-      void client.setAssistReceiving(projectId, false).catch(() => {
+      void client.setAssistReceiving(projectId, false).then(() => {
+        // 项目设置里的开关按列表那一份先画：不写回的话，退回后打开设置还会显示开着。
+        markCollabProjectAssistReceiving(projectId, false);
+      }).catch(() => {
         // 关不掉也不用拦人：下一次进项目设置时那一行会重新读一遍，看到的仍是开着的。
       });
     }
@@ -349,7 +352,10 @@ export function CollabDemoGuideHost(props: {
         // 第三步「接收协助」这一屏讲的是默认开启：老项目里可能曾经关过，往下走之前补开一次，
         // 免得后面一直等不到演示成员的请求。本来开着时这是一次无变化的写入。
         if (state.phase === "settings-assist" && props.collab && state.projectId) {
-          void props.collab.setAssistReceiving(state.projectId, true).catch(() => undefined);
+          const projectId = state.projectId;
+          void props.collab.setAssistReceiving(projectId, true).then(() => {
+            markCollabProjectAssistReceiving(projectId, true);
+          }).catch(() => undefined);
         }
         dispatchDemoGuide(state.phase === "joined"
           // 加入那一屏的主按钮是「继续」：与旧的「开始体验」同一个事件，进看板导览。

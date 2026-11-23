@@ -17,7 +17,7 @@ import {
   resetDemoGuideStore,
   setDemoGuideStateForTest
 } from "../../app/collab-demo-guide-store.js";
-import { loadCollabProjects, resetCollabProjectsStore } from "../../app/collab-projects-store.js";
+import { loadCollabProjects, getCollabProjectsSnapshot, resetCollabProjectsStore } from "../../app/collab-projects-store.js";
 import { I18nProvider } from "../../i18n/i18n-provider.js";
 import { ASSIST_PANEL_WIDTH_STORAGE_KEY, CollabAssistConversation } from "../collab-assist-conversation.js";
 import { CollabAssistRequestCard } from "../collab-assist-card.js";
@@ -1271,6 +1271,87 @@ describe("成员协助的宿主", () => {
 });
 
 describe("项目设置的成员协助", () => {
+  it("打开设置时就按列表带回的状态画，不等读取回来", async () => {
+    // 云端还没回：开关此刻必须已是列表里的那个状态（开着），不能先画成关着再翻过来。
+    let resolveReading: (() => void) | null = null;
+    const collab = client({
+      assistReceiving: vi.fn().mockImplementation(() => new Promise((resolve) => {
+        resolveReading = () => resolve({ projectId: "p1", enabled: true });
+      })),
+      assistGrants: vi.fn().mockResolvedValue({ grants: [], dailyLimit: 20 })
+    });
+    await act(async () => root.render(
+      <I18nProvider language="zh-CN">
+        <CollabAssistProjectSettings client={collab} projectId="p1" initialEnabled />
+      </I18nProvider>
+    ));
+
+    const toggle = document.querySelector<HTMLButtonElement>("[role=switch]");
+    expect(toggle?.getAttribute("aria-checked")).toBe("true");
+    expect(toggle?.getAttribute("aria-busy")).toBe("false");
+
+    await act(async () => resolveReading?.());
+    expect(document.querySelector<HTMLButtonElement>("[role=switch]")?.getAttribute("aria-checked")).toBe("true");
+  });
+
+  it("完全没有已知状态时转圈，不先画成关着", async () => {
+    const collab = client({
+      assistReceiving: vi.fn().mockImplementation(() => new Promise(() => undefined)),
+      assistGrants: vi.fn().mockResolvedValue({ grants: [], dailyLimit: 20 })
+    });
+    await act(async () => root.render(
+      <I18nProvider language="zh-CN">
+        <CollabAssistProjectSettings client={collab} projectId="p1" />
+      </I18nProvider>
+    ));
+
+    const toggle = document.querySelector<HTMLButtonElement>("[role=switch]");
+    // 标成还在读：看上去不是「关着」，也不能拨。
+    expect(toggle?.getAttribute("aria-busy")).toBe("true");
+    expect(toggle?.disabled).toBe(true);
+  });
+
+  it("读取失败时保留已经画出的状态，只贴出没读到", async () => {
+    const collab = client({
+      assistReceiving: vi.fn().mockRejectedValue(new Error("boom")),
+      assistGrants: vi.fn().mockResolvedValue({ grants: [], dailyLimit: 20 })
+    });
+    await act(async () => root.render(
+      <I18nProvider language="zh-CN">
+        <CollabAssistProjectSettings client={collab} projectId="p1" initialEnabled />
+      </I18nProvider>
+    ));
+    await flush();
+
+    expect(document.querySelector("[role=switch]")?.getAttribute("aria-checked")).toBe("true");
+    expect(document.querySelector("[role='alert']")?.textContent).toContain("读取成员协助的设置没有完成");
+  });
+
+  it("拨过开关后写回项目列表，下次打开就按新状态画", async () => {
+    resetCollabProjectsStore();
+    await loadCollabProjects({
+      listProjects: vi.fn().mockResolvedValue({
+        projects: [{ id: "p1", name: "Memmy 内测反馈", localProjectId: "local-1", acceptAssist: false }]
+      })
+    } as unknown as CollabClient).catch(() => undefined);
+    const collab = client({
+      assistReceiving: vi.fn().mockResolvedValue({ projectId: "p1", enabled: false }),
+      setAssistReceiving: vi.fn().mockResolvedValue({ projectId: "p1", enabled: true }),
+      assistGrants: vi.fn().mockResolvedValue({ grants: [], dailyLimit: 20 })
+    });
+    await act(async () => root.render(
+      <I18nProvider language="zh-CN">
+        <CollabAssistProjectSettings client={collab} projectId="p1" initialEnabled={false} />
+      </I18nProvider>
+    ));
+    await flush();
+    await act(async () => document.querySelector<HTMLButtonElement>("[role=switch]")?.click());
+
+    const stored = getCollabProjectsSnapshot().projects?.find((project) => project.id === "p1");
+    expect(stored?.acceptAssist).toBe(true);
+    resetCollabProjectsStore();
+  });
+
   it("接收协助请求关掉时说明收在问号里；打开后在同一个字段里列出剩余时间", async () => {
     const expiresAt = new Date(Date.now() + 42 * 60_000 + 20_000).toISOString();
     const collab = client({
