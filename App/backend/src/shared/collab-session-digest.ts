@@ -50,10 +50,14 @@ export interface DigestParams {
   inputChars: number;
 }
 
-/** T0 是默认档；越往后压得越狠，只在整条任务接近容量上限时才用。 */
+/**
+ * T0 是默认档；越往后压得越狠，只在整条任务接近容量上限时才用。
+ * 单步摘要约「入参 + 两倍头尾」，所以单步越小，同一份预算装下的步数越多：
+ * 头尾从各 500 收到各 250 后，同样四千字预算能留下两倍的步骤，总量反而变小。
+ */
 export const LEVELS: Readonly<Record<DigestLevel, DigestParams>> = Object.freeze({
-  T0: { outputHalfChars: 500, windowChars: 4_000, inputChars: 180 },
-  T1: { outputHalfChars: 250, windowChars: 4_000, inputChars: 180 },
+  T0: { outputHalfChars: 250, windowChars: 4_000, inputChars: 180 },
+  T1: { outputHalfChars: 150, windowChars: 4_000, inputChars: 180 },
   T2: { outputHalfChars: 120, windowChars: 4_000, inputChars: 120 },
   T3: { outputHalfChars: 120, windowChars: 800, inputChars: 120 },
   T4: { outputHalfChars: 60, windowChars: 400, inputChars: 60 }

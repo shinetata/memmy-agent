@@ -818,7 +818,7 @@ describe("collab service", () => {
     expect(upload.sessions[0]!.turns[0]!.steps).toEqual([{
       name: "Bash",
       input: "{\"command\":\"npm test\"}",
-      output: `${"A".repeat(500)} …[omitted]… ${"B".repeat(500)}`,
+      output: `${"A".repeat(250)} …[omitted]… ${"B".repeat(250)}`,
       truncated: true
     }]);
   });

@@ -139,10 +139,10 @@ describe("shapeToolSteps", () => {
     expect(step?.truncated).toBeUndefined();
   });
 
-  it("keeps 500 characters of each end of a long output and marks the cut", () => {
+  it("keeps 250 characters of each end of a long output and marks the cut", () => {
     const [step] = shapeToolSteps([{ name: "Bash", output: `${"A".repeat(800)}${"B".repeat(800)}` }]);
 
-    expect(step?.output).toBe(`${"A".repeat(500)} …[omitted]… ${"B".repeat(500)}`);
+    expect(step?.output).toBe(`${"A".repeat(250)} …[omitted]… ${"B".repeat(250)}`);
     expect(step?.truncated).toBe(true);
   });
 
@@ -180,8 +180,8 @@ describe("shapeToolSteps", () => {
 
   it("applies each degradation level's own parameters", () => {
     expect(LEVELS).toEqual({
-      T0: { outputHalfChars: 500, windowChars: 4_000, inputChars: 180 },
-      T1: { outputHalfChars: 250, windowChars: 4_000, inputChars: 180 },
+      T0: { outputHalfChars: 250, windowChars: 4_000, inputChars: 180 },
+      T1: { outputHalfChars: 150, windowChars: 4_000, inputChars: 180 },
       T2: { outputHalfChars: 120, windowChars: 4_000, inputChars: 120 },
       T3: { outputHalfChars: 120, windowChars: 800, inputChars: 120 },
       T4: { outputHalfChars: 60, windowChars: 400, inputChars: 60 }
@@ -193,9 +193,9 @@ describe("shapeToolSteps", () => {
     const [atT1] = shapeToolSteps([call], "T1");
     const [atT4] = shapeToolSteps([call], "T4");
 
-    // T0 的上下限是 500+500，700 字的输出仍算短；再狠的档位才开始舍。
-    expect(atT0?.output).toBe(long(700));
-    expect(atT1?.output).toBe(`${long(250)} …[omitted]… ${long(250)}`);
+    // T0 的上下限是 250+250；700 字的输出已超出，从头尾各留 250。
+    expect(atT0?.output).toBe(`${long(250)} …[omitted]… ${long(250)}`);
+    expect(atT1?.output).toBe(`${long(150)} …[omitted]… ${long(150)}`);
     expect(atT4?.output).toBe(`${long(60)} …[omitted]… ${long(60)}`);
     expect(atT4?.input).toHaveLength(60);
     expect(atT0?.input).toHaveLength(180);
