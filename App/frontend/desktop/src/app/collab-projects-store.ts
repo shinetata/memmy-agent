@@ -4,7 +4,8 @@
  * store keeps a single open project — named by the local project id — and a single fetch of the cloud list.
  */
 import type { CollabApplication, CollabApplicationDecision, CollabClient, CollabProject } from "../api/collab-client.js";
-import { readDemoGuideDone } from "./collab-demo-guide-store.js";
+import { readDemoGuideDone, startDemoGuideBeforeProject } from "./collab-demo-guide-store.js";
+import { isDesktopPromptPreview } from "./desktop-prompt-preview.js";
 
 export interface CollabProjectsSnapshot {
   /** Null until the first load finishes, so the sidebar can tell "none" from "not loaded yet". */
@@ -219,10 +220,16 @@ export function addCollabProject(project: CollabProject): void {
 /** Keeps the sidebar name and member count current after the board reloads a project. */
 export function replaceCollabProject(project: CollabProject): void {
   if (!snapshot.projects) return;
-  // 轮询每 5 秒带回一份新对象：字段没变就不通知，否则侧栏会跟着重画一次。
   const current = snapshot.projects.find((entry) => entry.id === project.id);
-  if (current && sameRecord(current, project)) return;
-  update({ projects: snapshot.projects.map((entry) => (entry.id === project.id ? project : entry)) });
+  // 「谁接收协助请求」只有项目列表带这一项，单查项目与会话列表都不带。照那些回应写回就会把可请的
+  // 成员清空，协助页头上那排头像跟着消失；列表那一份有名单时一律沿用，新回应真给了才换。
+  const listedReceivers = current?.assistReceivers?.length ? current.assistReceivers : null;
+  const merged = listedReceivers && !project.assistReceivers?.length
+    ? { ...project, assistReceivers: listedReceivers }
+    : project;
+  // 轮询每 5 秒带回一份新对象：字段没变就不通知，否则侧栏会跟着重画一次。
+  if (current && sameRecord(current, merged)) return;
+  update({ projects: snapshot.projects.map((entry) => (entry.id === project.id ? merged : entry)) });
 }
 
 /** Drops a project's cloud record after sharing was turned off; the local project stays. */
@@ -250,14 +257,35 @@ export function markCollabProjectBound(projectId: string, localProjectId: string
  * 打开与关闭都在 store 里：弹窗是应用级的，同一个请求可能被多个挂着的应用外壳看到，
  * 任意一处关闭都对所有外壳生效。
  *
- * @param options.demo 这次是新手引导的体验入口：弹窗预填名称并提前打开共享，引导先只亮「创建项目」。
+ * 带不带六屏引导在**这一刻**就定下来，之后名单再怎么变也不改这次新建的样子：弹窗、预填的名称与蒙版
+ * 必须同一刻到位。名单（`demoEligible`）还没回来时按普通新建打开，绝不等它回来再补——晚到的这一步会
+ * 盖在已经开着的弹窗上，人早就在里面点过名称输入框、把预填的名字清掉了，蒙版一上来就既改不了名
+ * 也点不了「创建项目」。
+ *
+ * @param options.demo 这次是新手引导的体验入口（大卡或侧栏第一次新建）：名单允许时弹窗预填名称并提前打开共享。
  */
 export function requestCreateProject(options?: { share?: boolean; demo?: boolean }): void {
+  const createDemo = options?.demo === true && demoIsSettledForNewProject();
   update({
     createOpen: true,
     createShareDefault: options?.share === true,
-    createDemo: options?.demo === true
+    createDemo
   });
+  // 引导与弹窗同一拍开始：都写在这里，同一次 React 提交里就同时出现弹窗与蒙版。
+  // 留给上层的 effect 去启动时，弹窗会先单独渲染一帧——那一帧里它看上去就是一张普通新建弹窗。
+  // 幂等：引导已经 active 时这里什么都不做，上层那个 effect 因此可以保留作兜底。
+  if (createDemo) startDemoGuideBeforeProject({ force: isDesktopPromptPreview("collabLaunch") });
+}
+
+/**
+ * 此刻能不能带着人走六屏：云端名单已经回来、并且说这个人可以。
+ *
+ * 名单还没读过（`projects === null`）时不猜：宁可这次按普通新建打开，也不要先露出弹窗再补上蒙版。
+ * 开发预览（`?previewPrompt=collabLaunch`）不读本机记录，专门用来在其他机器上看流程，照旧放行。
+ */
+function demoIsSettledForNewProject(): boolean {
+  if (isDesktopPromptPreview("collabLaunch")) return true;
+  return snapshot.projects !== null && snapshot.demoEligible === true;
 }
 
 /** Closes the new-project dialog, whether it was cancelled, used, or switched to the join dialog. */

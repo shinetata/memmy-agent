@@ -237,7 +237,6 @@ describe("demo guide layout", () => {
       "compose",
       "ask-compose",
       "settings-open",
-      "settings-assist",
       "help-dialog"
     ] as const) {
       expect(demoGuideClickTarget(demoGuideTarget(phase)), phase).toBe(demoGuideTarget(phase).stroke);
@@ -255,6 +254,10 @@ describe("demo guide layout", () => {
       "tour-associate",
       "tour-associate-pick",
       "tour-new-task",
+      // 协助上手那一屏只亮不点：没有可点的控件。
+      "assist-intro",
+      // 第三步只展示「默认已开启」的开关，开关本身不给点。
+      "settings-assist",
       "reply-waiting",
       "reply-done",
       "ask-waiting",

@@ -12,8 +12,10 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import { Check } from "lucide-react";
 import { Memmy, type MemmyPose } from "../mascot/memmy.js";
 import {
+  DEMO_GUIDE_ASSIST_PHASES,
   DEMO_GUIDE_COPY_FALLBACK,
   demoGuideBackTarget,
+  demoGuideIsAssistPhase,
   demoGuideIsBeforeProjectPhase,
   demoGuideIsTourPhase,
   demoGuideStartsExperience,
@@ -81,6 +83,7 @@ export const DEMO_GUIDE_STEPS = [1, 2, 3] as const;
  * 用部分映射而不是全集，导览段与以后新增的阶段没登记时就退回中性的那一张。
  */
 const POSES: Partial<Record<DemoGuidePhase, MemmyPose>> = {
+  "assist-intro": "wave",
   intro: "wave",
   name: "peek",
   folder: "peek",
@@ -136,6 +139,26 @@ export function demoGuideCard(state: DemoGuideState, t: Translate): DemoGuideCar
     canGoBack: demoGuideBackTarget(state) !== null,
     ...extra
   });
+  // 协助上手一屏：与看板导览同样只介绍，头部是「介绍」徽章，讲完就「完成」。
+  if (demoGuideIsAssistPhase(state.phase)) {
+    const index = DEMO_GUIDE_ASSIST_PHASES.indexOf(state.phase);
+    const key = String(index + 1) as "1";
+    return {
+      step: null,
+      badge: t("collab.demo.assistGuide.label"),
+      stepName: t(("collab.demo.assistGuide.stepName." + key) as MessageKey),
+      pose: POSES[state.phase] ?? "hum",
+      wide: false,
+      title: null,
+      body: t(("collab.demo.assistGuide.body." + key) as MessageKey),
+      status: null,
+      // 只有这一屏：讲完就收场，不留「下一步」。
+      action: "done",
+      // 前面没有可退的一屏。
+      canGoBack: demoGuideBackTarget(state) !== null,
+      actionDisabled: false
+    };
+  }
   // 看板导览：纯介绍，头部是「介绍」徽章，最后一步的按钮是「开始协作」。
   if (demoGuideIsTourPhase(state.phase)) {
     const tour = demoGuideTourCard(demoGuideTourIndex(state.phase), t);
@@ -213,7 +236,8 @@ export function demoGuideCard(state: DemoGuideState, t: Translate): DemoGuideCar
       // 这句按定稿写死了演示成员的名字，不带占位符：传了值也不会被替换，测试里也钉住了原句。
       return base(3, t("collab.demo.settings.body"));
     case "settings-assist":
-      return base(3, t("collab.demo.assist.body"));
+      // 默认已开启，这一屏不再让人去拨开关：卡片上的「下一步」直接往下走。
+      return base(3, t("collab.demo.assist.body"), { action: "next" });
     case "help-waiting":
       return base(3, "", { status: t("collab.demo.help.incoming", { name }) });
     case "help-dialog":
@@ -257,6 +281,8 @@ export function demoGuideTourCard(index: number, t: Translate): DemoGuideCard {
 
 /** 哪几个子状态可以跳过这一步：出结果之后的「下一步」不是跳过的地方。 */
 export function demoGuideSkippable(phase: DemoGuidePhase): boolean {
+  // 协助上手只有两屏介绍，没有「跳过这一步」：要么看完，要么直接退出引导。
+  if (demoGuideIsAssistPhase(phase)) return false;
   // 建项目之前没有可跳过的内容：不建项目就没有后面的演示；加入那一屏也不是一步。
   if (demoGuideIsBeforeProjectPhase(phase) || phase === "joined") return false;
   // 「关联会话」不是一步、而是导览里的一站：授权装不上时也要能只放过这一站，所以这里给一个「跳过这一站」。
@@ -439,6 +465,18 @@ export function CollabDemoGuideOverlay(props: {
    * 所以只要引导在屏上就每帧量一次，位置变了才重画；窗口缩放、滚动、内容重排、动画结束都因此自动跟上，
    * 元素晚一步出现也一样，下一帧就画出来。
    */
+  /**
+   * 首帧就同步量一次：蒙版与弹窗在同一次提交里出现，弹窗 DOM 此刻已经在文档里。
+   *
+   * 只靠下面那个 rAF 循环的话，第一帧是「弹窗已可见、蒙版还是空的」（`layout` 为 null 时只渲染一个空 root），
+   * 那一帧里人能看到、也能点到一张没有压暗的弹窗。`useLayoutEffect` 在浏览器绘制之前执行，
+   * 这里量到的位置就直接用在首帧的绘制上，用户第一眼看到的就是蒙版已经盖好。
+   */
+  useLayoutEffect(() => {
+    if (!masking || typeof window === "undefined") return;
+    setLayout(measure().layout);
+  }, [masking, measure, state.phase]);
+
   useEffect(() => {
     if (!masking) {
       setLayout(null);

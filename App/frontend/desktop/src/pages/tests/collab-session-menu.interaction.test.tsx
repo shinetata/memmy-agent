@@ -175,14 +175,14 @@ describe("collab session row menu", () => {
 
     await act(async () => buttonByText("多选")!.click());
     await flush();
-    await act(async () => buttonByText("全选本页")!.click());
+    await act(async () => buttonByText("全选")!.click());
     await flush();
     expect(document.body.textContent).toContain("已选 1 个");
     expect(buttonByText("取消全选")).toBeTruthy();
     await act(async () => buttonByText("取消全选")!.click());
     expect(document.body.textContent).toContain("已选 0 个");
-    expect(buttonByText("全选本页")).toBeTruthy();
-    await act(async () => buttonByText("全选本页")!.click());
+    expect(buttonByText("全选")).toBeTruthy();
+    await act(async () => buttonByText("全选")!.click());
 
     await act(async () => buttonByText("删除")!.click());
     await flush();

@@ -92,11 +92,11 @@ describe("the demo guide copy", () => {
 
   it("keeps the approved wording for the step whose name is written out", () => {
     const t = translate("zh-CN");
-    // 第三步的这句话按定稿写死了演示成员的名字，卡片上不出现字面的 {name}。
+    // 第三步：接收协助默认开启，这一屏只讲「它开着、你随时可以关」，不再让人去打开开关。
     expect(demoGuideCard(stateFor("settings-open"), t).body)
-      .toBe("现在小饭团也需要你电脑上的信息。先去项目设置，打开「接收协助请求」。");
+      .toBe("「接收协助请求」默认是打开的，不用你操作。现在小饭团也能请这台电脑上的 Agent 做事了。");
     expect(demoGuideCard(stateFor("settings-open"), translate("en-US")).body)
-      .toBe("Now Xiaofantuan needs something from your computer. Open project settings and turn on Accept assistance requests.");
+      .toBe("Accept assistance requests is on by default, so nothing to do here. Xiaofantuan can now ask the Agent on this computer to run something.");
     // 不带人名的句子照旧不写死叫法：执行中的状态只说结果回传给发起的人。
     expect(demoGuideCard(stateFor("help-running"), t).status)
       .toBe("正在本机执行，完成后结果会回传给小饭团。");

@@ -746,6 +746,35 @@ describe("collab service", () => {
     ]);
   });
 
+  it("titles a task without a generated title by its first question, not by the latest one", async () => {
+    const root = mkdtempSync(join(tmpdir(), "memmy-collab-home-"));
+    roots.push(root);
+    const agentSessions = join(root, "workspace", "sessions");
+    mkdirSync(agentSessions, { recursive: true });
+    // 标题生成失败时 metadata 里没有 title：看板要用第一句问题当标题，最新一句只算摘要。
+    writeMemmyTask(agentSessions, "task-1", "local-9", "", [
+      { role: "user", content: "帮我看下部署", timestamp: "2026-10-22T03:00:00.000Z" },
+      { role: "assistant", content: "已确认可以部署。", timestamp: "2026-10-22T03:00:01.000Z" },
+      { role: "user", content: "<timestamp>Friday, Oct 30, 2026</timestamp> <system_notification>任务已完成</system_notification>", timestamp: "2026-10-22T03:00:02.000Z" },
+      { role: "user", content: "说错了，是这个项目", timestamp: "2026-10-22T03:00:03.000Z" }
+    ]);
+    const { fetcher, calls } = fakeFetch({
+      "GET /api/collab/projects": () => ({ code: 0, data: { projects: [{ id: "p-9", name: "Memmy 开发", role: "owner", memberCount: 1, sessionCount: 0, createdAt: null }] } }),
+      "PUT /api/collab/projects/p-9/sessions": (call) => {
+        const upload = (call.body as { sessions: Array<{ sourceSessionId: string }> }).sessions[0]!;
+        return { code: 0, data: { sessions: [{ id: `id-${upload.sourceSessionId}` }] } };
+      }
+    });
+    const svc = service(fetcher, { projectsDir: join(root, "projects"), agentSessionsDir: agentSessions });
+
+    await svc.bindLocalProject("p-9", "local-9");
+    calls.length = 0;
+    await svc.setTaskSharing("p-9", "task-1", true);
+    await waitForUploads(svc, "p-9");
+
+    expect(uploadedTitles(calls)).toEqual(["帮我看下部署"]);
+  });
+
   it("syncs one project's tasks when a board asks for that project only", async () => {
     const root = mkdtempSync(join(tmpdir(), "memmy-collab-home-"));
     roots.push(root);

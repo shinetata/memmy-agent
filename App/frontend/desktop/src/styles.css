@@ -878,6 +878,37 @@ body.memmy-window-fullscreen {
   transform: scale(0.75);
 }
 
+/*
+ * 协助目标 chip：与接续任务的 chip 同一套样子——常驻无底色，只有 @ 图标与名字，悬停或聚焦才变成灰色胶囊，
+ * 图标此时换成 ×，点一下就取消这次指定。它不是引用一条任务，所以图标用 @。
+ */
+.composer-assist-chip {
+  height: 28px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: transparent;
+  color: color-mix(in srgb, var(--color-text-ink) 84%, transparent);
+  font-size: 12px;
+}
+
+/* 悬停底色与接续任务 chip 一致：6% 的 ink 落到白底上是中性灰，不拿带青的 --color-border-stone 混白。 */
+.composer-assist-chip:hover,
+.composer-assist-chip:focus-within {
+  background: color-mix(in srgb, var(--color-text-ink) 6%, var(--color-background-paper));
+  color: var(--color-text-ink);
+}
+
+.composer-assist-chip .composer-assist-chip__at {
+  opacity: 1;
+  transform: scale(1);
+}
+
+.composer-assist-chip:hover .composer-assist-chip__at,
+.composer-assist-chip:focus-within .composer-assist-chip__at {
+  opacity: 0;
+  transform: scale(0.75);
+}
+
 .composer-command-chip__icon {
   position: absolute;
   color: color-mix(in srgb, var(--color-action-sky) 48%, var(--color-text-ink));

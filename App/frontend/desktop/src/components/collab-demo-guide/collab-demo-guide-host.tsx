@@ -345,14 +345,21 @@ export function CollabDemoGuideHost(props: {
       state={state}
       onSkipJoinEntry={() => dispatchDemoGuide({ type: "skip-join-entry" })}
       onBack={onBack}
-      onNext={() => dispatchDemoGuide(state.phase === "joined"
-        // 加入那一屏的主按钮是「继续」：与旧的「开始体验」同一个事件，进看板导览。
-        ? { type: "joined-confirmed" }
-        : {
-          type: "next",
-          // 第一步做完就直接请成员协助：那句话在进入这一步时才填；看板导览段与建项目之前不预填任何东西。
-          prefill: state.phase === "reply-done" ? askPrefill() : undefined
-        })}
+      onNext={() => {
+        // 第三步「接收协助」这一屏讲的是默认开启：老项目里可能曾经关过，往下走之前补开一次，
+        // 免得后面一直等不到演示成员的请求。本来开着时这是一次无变化的写入。
+        if (state.phase === "settings-assist" && props.collab && state.projectId) {
+          void props.collab.setAssistReceiving(state.projectId, true).catch(() => undefined);
+        }
+        dispatchDemoGuide(state.phase === "joined"
+          // 加入那一屏的主按钮是「继续」：与旧的「开始体验」同一个事件，进看板导览。
+          ? { type: "joined-confirmed" }
+          : {
+            type: "next",
+            // 第一步做完就直接请成员协助：那句话在进入这一步时才填；看板导览段与建项目之前不预填任何东西。
+            prefill: state.phase === "reply-done" ? askPrefill() : undefined
+          });
+      }}
       onSkip={() => dispatchDemoGuide(state.phase === "tour-associate-pick"
         // 「关联会话」不是一步，而是导览里的一站：跳过它只往下一站走，不结束整轮演示。
         ? { type: "pass" }

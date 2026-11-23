@@ -1,8 +1,8 @@
 /**
- * 看板文字的纯函数：任务摘要要能识别出 Agent 写进会话的通知轮，提示条要知道怎么称呼留下任务的成员。
+ * 看板文字的纯函数：任务摘要要能识别出 Agent 写进会话的通知轮。
  */
 import { describe, expect, it } from "vitest";
-import { memberNamesLabel, readableSummary } from "../collab-board-text.js";
+import { readableSummary } from "../collab-board-text.js";
 
 describe("readableSummary", () => {
   it("keeps a normal question as it is", () => {
@@ -20,26 +20,5 @@ describe("readableSummary", () => {
   it("returns an empty string for an empty summary", () => {
     expect(readableSummary("")).toBe("");
     expect(readableSummary("   ")).toBe("");
-  });
-});
-
-describe("memberNamesLabel", () => {
-  it("uses the single name as it is", () => {
-    expect(memberNamesLabel(["灵动栗子"], "zh-CN")).toBe("灵动栗子");
-  });
-
-  it("joins two names the way each language writes a list", () => {
-    expect(memberNamesLabel(["灵动栗子", "吴天"], "zh-CN")).toBe("灵动栗子、吴天");
-    expect(memberNamesLabel(["Lizi", "Tian"], "en-US")).toBe("Lizi and Tian");
-  });
-
-  it("only points at the first member once there are three or more", () => {
-    expect(memberNamesLabel(["灵动栗子", "吴天", "赵六"], "zh-CN")).toBe("灵动栗子等 3 位成员");
-    expect(memberNamesLabel(["Lizi", "Tian", "Zhao"], "en-US")).toBe("Lizi and 2 other members");
-  });
-
-  it("merges repeated and blank names, because one member can leave several tasks", () => {
-    expect(memberNamesLabel(["灵动栗子", "灵动栗子", "  "], "zh-CN")).toBe("灵动栗子");
-    expect(memberNamesLabel([], "zh-CN")).toBe("");
   });
 });

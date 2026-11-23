@@ -7,8 +7,14 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { addCollabProject, loadCollabProjects, resetCollabProjectsStore } from "../../app/collab-projects-store.js";
-import { clearDemoGuideDone, markDemoGuideDone } from "../../app/collab-demo-guide-store.js";
+import { addCollabProject, getCollabProjectsSnapshot, loadCollabProjects, requestCreateProject, resetCollabProjectsStore } from "../../app/collab-projects-store.js";
+import {
+  clearDemoGuideDone,
+  dispatchDemoGuide,
+  markDemoGuideDone,
+  setDemoGuideStateForTest,
+  startDemoGuideBeforeProject
+} from "../../app/collab-demo-guide-store.js";
 import { I18nProvider } from "../../i18n/i18n-provider.js";
 import { CreateProjectModal } from "../collab-create-project-dialog.js";
 
@@ -42,7 +48,7 @@ async function flush(): Promise<void> {
 /**
  * 把云端「这个人现在能不能体验」写成给定值。
  *
- * 项目列表响应里的 `demoEligible` 就是云端 `eligible()` 的结果，弹窗靠它决定要不要走六屏。
+ * 项目列表响应里的 `demoEligible` 就是云端 `eligible()` 的结果，新建弹窗要不要走六屏按它判。
  */
 async function setDemoEligible(eligible: boolean): Promise<void> {
   await loadCollabProjects({
@@ -72,8 +78,26 @@ describe("new project dialog and the demo flag", () => {
     return target!;
   }
 
+  /** 启动引导并一路「下一步」到最后一屏：只有那一屏名称框可输入、「创建项目」可点。 */
+  async function advanceToCreateScreen(): Promise<void> {
+    // 真实路径里引导由 app-frame 在弹窗打开后启动，这里补上这一步。
+    await act(async () => {
+      startDemoGuideBeforeProject();
+    });
+    for (let step = 0; step < 5; step += 1) {
+      await act(async () => {
+        dispatchDemoGuide({ type: "next" });
+      });
+    }
+  }
+
   /** 用体验入口的样子打开一次弹窗：名称与协作开关都由引导替人填好。 */
-  async function renderDemoDialog(overrides?: { shareAvailable?: boolean; onJoinProject?: boolean }): Promise<void> {
+  async function renderDemoDialog(overrides?: {
+    shareAvailable?: boolean;
+    onJoinProject?: boolean;
+    /** 打开后直接推到最后一屏：要真的输入并提交的用例用这个。 */
+    advanceToCreate?: boolean;
+  }): Promise<void> {
     await act(async () => root.unmount());
     container.remove();
     container = document.createElement("div");
@@ -100,6 +124,7 @@ describe("new project dialog and the demo flag", () => {
       );
     });
     await flush();
+    if (overrides?.advanceToCreate) await advanceToCreateScreen();
   }
 
   /** 弹窗上所有的引导锚点。 */
@@ -165,6 +190,7 @@ describe("new project dialog and the demo flag", () => {
     await act(async () => root.unmount());
     container.remove();
     resetCollabProjectsStore();
+    setDemoGuideStateForTest(null);
     clearDemoGuideDone();
   });
 
@@ -256,29 +282,100 @@ describe("new project dialog and the demo flag", () => {
         localProjectId: "local-9"
       });
     });
-    await renderDemoDialog();
+    await renderDemoDialog({ advanceToCreate: true });
     await createNamed("项目协作体验");
     expect(mocks.createProject).toHaveBeenCalledWith("项目协作体验", "/Users/me/.memmy/local-projects/demo", { demo: true, localProjectId: "local-1" });
   });
   /**
    * 云端说这个人这次不能演示（已体验过、开关关掉、不在名单）：六屏就不该开。
    *
-   * 只看本机「退出过引导」时，云端已经记过体验的机器（重装、换过应用数据）会照旧走完六屏，
-   * 点「创建项目」后云端不启动演示，引导就在进看板的那一刻无声消失。
+   * 判断只在打开那一刻做一次（`requestCreateProject`）：弹窗、预填的名称与蒙版因此同一刻到位。
+   * 弹窗自己再按 `demoEligible` 重算一遍就会多一个时机差——名单是随列表异步回来的。
    */
   it("opens an ordinary dialog when the cloud cannot demo this person", async () => {
     await act(async () => {
       await setDemoEligible(false);
     });
+    await act(async () => {
+      requestCreateProject({ share: true, demo: true });
+    });
+
+    // 名单说不能演示：这次新建按普通新建打开，弹窗收到的 demo 是 false，预填名称与六个亮区都不会出现。
+    expect(getCollabProjectsSnapshot().createDemo).toBe(false);
+    // 分享仍按大卡的意图默认打开。
+    expect(getCollabProjectsSnapshot().createShareDefault).toBe(true);
+  });
+
+  /**
+   * 名单晚于弹窗回来：不再补一次蒙版。
+   *
+   * 补上去就是「弹窗先露出来、人已经在填名称，蒙版才盖上来」：预填的名称被清掉之后，蒙版挡着输入框，
+   * 「创建项目」也因为名称为空一直是灰的，两条路都堵住。
+   */
+  it("never adds the walkthrough to a dialog that is already open", async () => {
+    await act(async () => {
+      resetCollabProjectsStore();
+      requestCreateProject({ share: true, demo: true });
+    });
+    // 名单还没读过：先按普通新建开，不猜。
+    expect(getCollabProjectsSnapshot().createDemo).toBe(false);
+
+    await act(async () => {
+      await setDemoEligible(true);
+    });
+    // 名单回来说可以：这一次也不改，弹窗里人已经动过的东西不能被换掉。
+    expect(getCollabProjectsSnapshot().createDemo).toBe(false);
+  });
+
+  /**
+   * 六屏在弹窗上走的时候，名称框先不接点击。
+   *
+   * 蒙版要量出锚点位置才画得出来，这几帧里弹窗看上去和普通新建一样；人此时点进名称框把预填的名字删掉，
+   * 蒙版一盖上来就既改不回去也点不了创建。
+   */
+  it("holds the name field and the submit button before the last screen", async () => {
+    await act(async () => {
+      startDemoGuideBeforeProject();
+    });
+    await renderDemoDialog();
+    expect(document.querySelector<HTMLElement>("[data-demo-guide='create-name']")?.style.pointerEvents).toBe("none");
+    // `pointerEvents` 只挡鼠标，键盘 Tab 仍能聚焦输入框并退格删字，所以名称框同时是只读且跳过 Tab。
+    expect(nameInput().readOnly).toBe(true);
+    expect(nameInput().tabIndex).toBe(-1);
+    // 最后一屏之前「创建项目」也不接点击：蒙版还没画出来时点下去，六屏一步都没走就建出了项目。
+    expect(submitButton().hasAttribute("disabled")).toBe(true);
+
+    // 引导收起（退出、跳过或云端说结束）：名称框回到可点。
+    await act(async () => {
+      setDemoGuideStateForTest(null);
+    });
+    expect(document.querySelector<HTMLElement>("[data-demo-guide='create-name']")?.style.pointerEvents ?? "").toBe("");
+    expect(nameInput().readOnly).toBe(false);
+  });
+
+  /**
+   * 引导还没启动的那一帧也要拦住：弹窗与引导不是同一拍挂上来的，引导由 app-frame 的 effect 启动。
+   * 只看「引导是否 active」时首帧漏拦，而那一帧弹窗已经带着预填名称、「创建项目」也是亮的。
+   */
+  it("holds the fields on the very first frame, before the walkthrough starts", async () => {
+    await renderDemoDialog();
+    // 这一步没有调用 startDemoGuideBeforeProject：模拟弹窗先渲染、引导晚一拍。
+    expect(nameInput().value).toBe("项目协作体验");
+    expect(nameInput().readOnly).toBe(true);
+    expect(submitButton().hasAttribute("disabled")).toBe(true);
+  });
+
+  it("lets the real create button be pressed on the last screen", async () => {
+    await act(async () => {
+      startDemoGuideBeforeProject();
+    });
     await renderDemoDialog();
 
-    // 名字不再替人预填，六个亮区一个都不挂：这就是一次普通新建。
-    expect(nameInput().value).toBe("");
-    expect(anchors()).toEqual([]);
-    // 分享仍按大卡的意图默认打开，请求标记照旧交给云端判断，界面不自己编结果。
-    expect(document.querySelector<HTMLElement>("[role='switch']")?.getAttribute("aria-checked")).toBe("true");
-    await createNamed("普通项目");
-    expect(mocks.createProject).toHaveBeenCalledWith("普通项目", "/Users/me/.memmy/local-projects/demo", { demo: true, localProjectId: "local-1" });
+    // 一路「下一步」到最后一屏：只有这里「创建项目」可点；名称仍然只读，人不需要也不能改名。
+    await advanceToCreateScreen();
+    expect(nameInput().readOnly).toBe(true);
+    expect(nameInput().value).toBe("项目协作体验");
+    expect(submitButton().hasAttribute("disabled")).toBe(false);
   });
 
   it("never asks for the demo once this machine has left the walkthrough", async () => {

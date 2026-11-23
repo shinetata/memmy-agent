@@ -28,6 +28,8 @@ const allowedSourceFiles = new Set([
   "pages/collab-assist-protocol.ts",
   // 引导那句执行提示的开头标记（中英两种），用来在显示时把提示从正文里剔掉：是协议文本，不是界面文案。
   "lib/demo-guide-hint.ts",
+  // 引导新建项目的默认名称：与云端剧本里的项目名同一份数据，界面只按它预填输入框。
+  "pages/collab-create-project-dialog.tsx",
   // English ui coverage tests.
   "dev-agent-preview.tsx"
 ]);

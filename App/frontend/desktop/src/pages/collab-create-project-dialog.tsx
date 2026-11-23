@@ -6,8 +6,11 @@ import {
   getCollabProjectsSnapshot,
   subscribeCollabProjects
 } from "../app/collab-projects-store.js";
-import { readDemoGuideDone } from "../app/collab-demo-guide-store.js";
-import { isDesktopPromptPreview } from "../app/desktop-prompt-preview.js";
+import {
+  getDemoGuideState,
+  readDemoGuideDone,
+  subscribeDemoGuide
+} from "../app/collab-demo-guide-store.js";
 import { prepareProjectDirectory } from "../api/projects-client.js";
 import { useOptionalAgentRuntimeBridge } from "../app/agent-runtime-bridge.js";
 import { useOptionalApiClients } from "../app/providers.js";
@@ -19,6 +22,12 @@ import { InfoHint } from "./collab-info-hint.js";
 import styles from "./collab-page.module.css";
 
 const MAX_PROJECT_NAME_CHARS = 20;
+
+/**
+ * 引导给项目预填的名字。文案取自 i18n，但不让空值有任何可能：
+ * 引导期间名称框不给改，一旦它是空的，「创建项目」就永远是灰的，而名称又点不进去。
+ */
+const DEMO_PROJECT_NAME_FALLBACK = "项目协作体验";
 
 /** One dialog for the whole app, so creating a project never needs to change the page behind it. */
 export function CollabCreateProjectDialog(props: {
@@ -112,32 +121,63 @@ export function CreateProjectModal(props: {
    * 本机退出过引导就不再请求演示：在建项目之前退出时云端还没有项目可记，只能靠本机这个标记。
    */
   const demoRequested = !readDemoGuideDone();
-  const firstSharedProject = share && shareAvailable && ownedCount === 0;
 
   /**
    * 打开那一刻的默认勾选：用 ref 带上，effect 只在打开时读一次，弹窗开着时这个值变化不会重置人的选择。
    *
-   * 六屏引导还要云端这次真的能演示：项目列表里的 `demoEligible` 就是云端 `eligible()` 的结果，
-   * 与本机「退出过引导」是两套记录。只看本机标记时，云端已经记过这个人体验过（或开关关掉）的机器
-   * 仍会走完六屏，点「创建项目」后云端不启动演示，引导就在进看板的那一刻无声消失。
-   * 旧云端没有这个字段：按不能演示处理，与项目列表的同一套口径一致。
+   * 带不带六屏引导由打开那一刻在 store 里定好（`requestCreateProject` 判云端的名单），这里只管照做。
+   * 弹窗不再拿 `demoEligible` 重算一遍：名单是随列表异步回来的，一重算就多一个时机差——弹窗先露出来，
+   * 名称与蒙版晚一步才到位，人已经在里面把预填的名字清掉了。
    */
-  const demoEligible = projectsStore.demoEligible === true;
-  const demo = props.demo === true && shareAvailable && demoRequested
-    && (demoEligible || isDesktopPromptPreview("collabLaunch"));
+  const demo = props.demo === true && shareAvailable && demoRequested;
   const defaultShareOnOpen = demo || props.defaultShare === true;
   const shareOnOpenRef = useRef(defaultShareOnOpen && shareAvailable);
   shareOnOpenRef.current = defaultShareOnOpen && shareAvailable;
 
   useEffect(() => {
     if (props.open) {
-      // 体验入口的名字替人填好，用户也可以改；普通新建仍然留空等人输入。
-      setName(demo ? t("collab.demo.projectName") : "");
+      // 体验入口的名字替人填好，引导期间不给改；普通新建仍然留空等人输入。
+      const demoName = t("collab.demo.projectName").trim() || DEMO_PROJECT_NAME_FALLBACK;
+      setName(demo ? demoName : "");
       setDirectory(null);
       setShare(shareOnOpenRef.current);
       setError(null);
     }
   }, [props.open]);
+
+  /**
+   * 引导走在这一张弹窗上时，名称、文件夹、协作开关全程不接点击。
+   *
+   * 「全程」包括最后一屏：名称由引导预填好，人不需要也不应该改。名称为空这种状态因此不可能出现
+   * —— 一旦为空，`valid` 就是 false，「创建项目」永远是灰的，而名称又点不进去，两种路都堵死。
+   * 引导结束（退出、跳过、云端判定结束）之后才放开，弹窗退回普通新建。
+   */
+  const guideState = useSyncExternalStore(subscribeDemoGuide, getDemoGuideState, getDemoGuideState);
+  /**
+   * 这次弹窗上有没有真的走过引导：弹窗打开时复位，观察到 active 过就置真。
+   *
+   * 用来区分「引导还没开始」（首帧，要拦）与「引导已经结束」（退出、跳过、云端判定结束，要放开）。
+   * 引导 store 的初始状态与结束状态都叫 `ended`，光看 status 分不出这两件事。
+   */
+  const [guideStarted, setGuideStarted] = useState(false);
+  useEffect(() => {
+    if (!props.open) return;
+    setGuideStarted(false);
+  }, [props.open]);
+  useEffect(() => {
+    if (guideState.status === "active") setGuideStarted(true);
+  }, [guideState.status]);
+  const guideOnDialog = demo && (guideState.status === "active" || !guideStarted);
+  const holdStyle = guideOnDialog ? { pointerEvents: "none" as const } : undefined;
+  /**
+   * 「创建项目」只在最后一屏放开：那一屏没有「下一步」，建项目由人自己点那个真按钮。
+   *
+   * 其余几屏（含引导刚启动、蒙版还没画出来那一瞬）一律置灰：名称已经预填好、按钮看上去是亮的，
+   * 这时点下去会让六屏一步都没走就建出项目，而云端已经按 `demo:true` 开了一场演示。
+   */
+  const holdSubmit = guideOnDialog
+    && !(guideState.status === "active" && guideState.phase === "create-project");
+  const firstSharedProject = share && shareAvailable && ownedCount === 0;
 
   async function chooseDirectory() {
     // Any existing folder is fine here: the project's tasks run in it, it does not have to be empty.
@@ -251,7 +291,7 @@ export function CreateProjectModal(props: {
             <Button
               variant="primary"
               className={styles.simpleCreateFooterButton}
-              disabled={!valid || busy}
+              disabled={!valid || busy || holdSubmit}
               data-demo-guide={demo ? "create-project-submit" : undefined}
               onClick={() => void submit()}
             >
@@ -262,7 +302,7 @@ export function CreateProjectModal(props: {
       )}
     >
       {/* 名称占满一行：图标与竖线在框内左侧，其余都交给输入本身，不放常驻说明 */}
-      <div className={styles.simpleNameField} data-demo-guide={demo ? "create-name" : undefined}>
+      <div className={styles.simpleNameField} style={holdStyle} data-demo-guide={demo ? "create-name" : undefined}>
         <span className={styles.simpleNameIcon} aria-hidden="true"><Folder size={16} /></span>
         <span className={styles.simpleNameDivider} aria-hidden="true" />
         <input
@@ -272,7 +312,18 @@ export function CreateProjectModal(props: {
           maxLength={40}
           aria-label={t("collab.create.name")}
           placeholder={t("collab.create.name")}
-          onChange={(event) => setName(event.target.value)}
+          /**
+           * 引导期间名称框连键盘也不给：`pointerEvents` 只挡鼠标与触控，Tab 仍能聚焦输入框，
+           * 退格或空格就能把预填的名字改掉。`readOnly` + `tabIndex={-1}` 一起才真的进不去，
+           * 且不像 `disabled` 那样把文字变灰（名字还要照常读得清）。
+           */
+          readOnly={guideOnDialog}
+          tabIndex={guideOnDialog ? -1 : undefined}
+          onChange={(event) => {
+            // 双保险：readOnly 已经拦住了，但成组词上屏这类路径不会经过按键，这里再挡一次。
+            if (guideOnDialog) return;
+            setName(event.target.value);
+          }}
           onKeyDown={(event) => {
             // 中文等输入法用回车确认候选词（组词上屏），那不是提交意图：否则半成品拼音会被当成项目名。
             if (event.key !== "Enter" || isComposingKeyboardEvent(event)) return;
@@ -292,7 +343,7 @@ export function CreateProjectModal(props: {
         <InfoHint label={t("collab.create.folderHelpLabel")} text={t("collab.create.dirHint")} />
       </div>
       {/* 只支持一个目录：选了就把那一行显示出来，没选时给一个大框放「添加」 */}
-      <div className={styles.simpleFolderBox} data-demo-guide={demo ? "create-folder" : undefined}>
+      <div className={styles.simpleFolderBox} style={holdStyle} data-demo-guide={demo ? "create-folder" : undefined}>
         {directory ? (
           <div className={styles.simpleFolderRow}>
             <Folder size={15} aria-hidden="true" className={styles.simpleFolderIcon} />
@@ -330,6 +381,7 @@ export function CreateProjectModal(props: {
           {/* 共享和名称、文件夹一样是一个字段框：不用分隔线另起一段，点整框任意位置都能切换（问号除外） */}
           <div
             className={`${styles.simpleShareField}${share ? ` ${styles.simpleShareFieldOn}` : ""}`}
+            style={holdStyle}
             data-demo-guide={demo ? "create-collab" : undefined}
             onClick={() => setShare((current) => !current)}
           >

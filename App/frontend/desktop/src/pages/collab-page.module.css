@@ -216,94 +216,6 @@
   flex-wrap: nowrap;
 }
 
-/*
- * 按成员筛选收进下拉，与搜索框并排：外观按看板工具条重排，键盘操作、listbox 语义与选中勾
- * 都沿用 components/Select。
- * 全局 .select-control 那套样式写在 styles.css 里，而且最后才导入，所以这里用两个类的具体性压过它。
- */
-.memberFilter:global(.select-control) {
-  display: block;
-  width: auto;
-  flex: none;
-}
-
-.memberFilterButton:global(.select-control__button) {
-  display: flex;
-  width: auto;
-  height: 32px;
-  min-height: 32px;
-  padding: 0 26px 0 10px;
-  border: 1px solid var(--collab-line-soft);
-  border-radius: 10px;
-  background: var(--color-background-paper, #fff);
-  color: var(--collab-ink-2);
-  font-size: 13px;
-  transition: border-color 120ms ease, background 120ms ease;
-}
-
-/* 全局给的是浅米底：看板里保持白底，hover 只把边框收紧一点 */
-.memberFilterButton:global(.select-control__button):hover {
-  border-color: var(--collab-line);
-  background: var(--color-background-paper, #fff);
-}
-
-/* 焦点只在键盘操作时出现：与 tab 同一档，1.5px 半透明强调色，不用 40px 高输入框那种粗光圈 */
-.memberFilterButton:global(.select-control__button):focus-visible {
-  outline: 1.5px solid color-mix(in srgb, var(--collab-accent-deep) 55%, transparent);
-  outline-offset: 3px;
-}
-
-.memberFilterButton :global(.select-control__icon) {
-  right: 9px;
-  width: 13px;
-  height: 13px;
-  color: var(--collab-muted);
-}
-
-/* 展开时全局会把箭头的颜色换成蓝色：看板里保持 muted，只让它翻转 */
-.memberFilterButton:global(.select-control__button)[aria-expanded="true"] :global(.select-control__icon) {
-  color: var(--collab-muted);
-}
-
-/* 菜单：白底、细边框加轻投影，阴影与看板现有的 .menu 一致 */
-.memberFilterMenu:global(.select-control__menu) {
-  top: calc(100% + 6px);
-  right: auto;
-  left: 0;
-  min-width: 148px;
-  padding: 4px;
-  border: 0;
-  border-radius: 10px;
-  background: var(--color-background-paper, #fff);
-  box-shadow: 0 12px 28px rgba(15, 26, 25, 0.12), 0 0 0 1px var(--collab-line);
-}
-
-.memberFilterMenu :global(.select-control__option) {
-  min-height: 30px;
-  padding: 6px 10px;
-  border-radius: 7px;
-  color: var(--collab-ink-2);
-  font-size: 13px;
-}
-
-.memberFilterMenu :global(.select-control__option:hover:not(:disabled)),
-.memberFilterMenu :global(.select-control__option--active:not(:disabled):not(.select-control__option--selected)) {
-  background: var(--collab-surface);
-  color: var(--collab-ink);
-}
-
-/* 选中项：浅底 + 右侧勾，勾的颜色用强调色 */
-.memberFilterMenu :global(.select-control__option--selected),
-.memberFilterMenu :global(.select-control__option--selected:hover:not(:disabled)) {
-  background: var(--collab-active);
-  color: var(--collab-ink);
-  font-weight: 600;
-}
-
-.memberFilterMenu :global(.select-control__option-check) {
-  color: var(--collab-accent-deep);
-}
-
 .grow {
   flex: 1;
   min-width: 0;
@@ -549,6 +461,138 @@
   margin-top: 18px;
 }
 
+/*
+ * 按成员分区：每个成员一段，段头写名字与数量，段内是他的任务。
+ * 行的成员信息只在段头出现一次，行里不再重复头像与昵称。
+ */
+.memberBoard {
+  margin-top: 6px;
+}
+
+.memberGroup {
+  min-width: 0;
+  padding-top: 10px;
+}
+
+/*
+ * 段头吸顶：列表滚到哪都知道手里这几行属于谁。
+ * 底色必须是实白，否则吸上去时下面的行会透出来。
+ */
+.groupHead {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  /*
+   * 左右各外扩 14（与任务行悬停块的 -14 一致），再用同样的 14 做左内边距：
+   * 头像左缘正好落在内容左缘，与上面的项目标题、tab、搜索框同一条竖线；
+   * 悬停底色从外扩处开始，与任务行的悬停范围对齐，不会看起来偏右一块。
+   */
+  width: calc(100% + 28px);
+  margin: 0 -14px;
+  padding: 6px 14px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--color-background-paper, #fff);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+
+.groupHead:hover {
+  background: var(--collab-surface);
+}
+
+.groupHead:focus-visible {
+  outline: 1.5px solid color-mix(in srgb, var(--collab-accent-deep) 55%, transparent);
+  outline-offset: -1px;
+}
+
+.groupHeadAvatar {
+  flex: 0 0 30px;
+  height: 30px;
+  background: color-mix(in srgb, var(--member) 14%, var(--color-background-paper, #fff));
+  color: var(--member);
+  font-size: 12.5px;
+}
+
+.groupHeadName {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--collab-ink);
+  font-size: 13.5px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.groupHeadCount {
+  flex: none;
+  color: var(--collab-ter);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.groupHeadCaret {
+  flex: none;
+  color: var(--collab-ter);
+  transition: transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.groupHeadCaretShut {
+  transform: rotate(-90deg);
+}
+
+/* 行标题与段头昵称对齐：层级靠对齐，不靠行里再贴一次名字 */
+.memberGroup .stream {
+  margin-top: 2px;
+}
+
+/* 行标题与段头昵称对齐：头像 30 + 间距 10 = 40，行自身左移 14，内边距即 54 */
+.memberGroup .stream .row {
+  padding-left: 54px;
+}
+
+/* 选择模式下勾选框从最左开始，标题跟着右移是正常的 */
+.memberGroup .stream .row.rowSelecting {
+  padding-left: 14px;
+}
+
+/* 「展开其余 N 个」：就地展开，不翻页、不跳转 */
+/*
+ * 「展开其余 N 个」是纯文字按钮：不做容器（无底色、无边框、无圆角）。
+ * 左边缘与任务标题落在同一条竖线上：行内容起点是容器左缘 +48px（行 -14 外边距 + 62 左内边距），
+ * 段头昵称也在 +48（8 内边距 + 30 头像 + 10 间距），这里用同样的 48 对齐，不加水平内边距把文字推开。
+ * 悬停只改文字颜色——容器没了，底色反馈也不该再出现。
+ */
+.groupMore {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin: 2px 0 0 40px;
+  padding: 6px 0;
+  border: 0;
+  background: none;
+  color: var(--collab-muted);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+  transition: color 120ms ease;
+}
+
+.groupMore:hover {
+  color: var(--collab-ink);
+}
+
+.groupMore:focus-visible {
+  outline: 1.5px solid color-mix(in srgb, var(--collab-accent-deep) 55%, transparent);
+  outline-offset: 2px;
+}
+
 .stream .row {
   gap: 14px;
   margin: 0 -14px;
@@ -743,6 +787,94 @@
   list-style: none;
 }
 
+/*
+ * 「协助」里现在就能请的人：只有一串头像。没有标题、昵称与在线点——
+ * 这一行存在本身就说明她们此刻可以被请，名字只在悬停时给；点一下直接进会话页。
+ * 头像从 28px 提到 32px：现在它独自承担点击目标。
+ */
+.assistPeople {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 14px 0 22px;
+}
+
+.assistPerson {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  cursor: pointer;
+}
+
+/* 成员自身颜色的浅底与字色，与看板其他头像同一套 */
+.assistPersonAvatar {
+  width: 32px;
+  height: 32px;
+  background: color-mix(in srgb, var(--member) 14%, var(--color-background-paper, #fff));
+  color: var(--member);
+  font-size: 12.5px;
+  font-weight: 600;
+  transition: transform 150ms ease, box-shadow 150ms ease;
+}
+
+/* 悬停只做两件事：头像抬 1px、外圈出一圈强调色。不加缩放、不堆阴影。 */
+.assistPerson:hover .assistPersonAvatar,
+.assistPerson:focus-visible .assistPersonAvatar {
+  transform: translateY(-1px);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--collab-accent-deep) 45%, transparent);
+}
+
+.assistPerson:focus-visible {
+  outline: none;
+}
+
+/* 气泡开在头像右侧：上方是 tab、下方是正文，只有右边是空的。 */
+.assistPersonTip {
+  position: absolute;
+  left: calc(100% + 7px);
+  top: 50%;
+  z-index: 5;
+  padding: 5px 9px;
+  border: 1px solid color-mix(in srgb, var(--collab-line-soft) 100%, transparent);
+  border-radius: 8px;
+  background: var(--color-background-paper, #fff);
+  box-shadow: 0 6px 18px rgba(17, 29, 28, .09);
+  color: var(--collab-ink-2);
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: nowrap;
+  opacity: 0;
+  transform: translate(-3px, -50%);
+  pointer-events: none;
+  transition: opacity 150ms ease, transform 150ms ease;
+}
+
+.assistPersonTip::after {
+  content: "";
+  position: absolute;
+  left: -4.5px;
+  top: 50%;
+  width: 8px;
+  height: 8px;
+  margin-top: -4px;
+  border-left: 1px solid color-mix(in srgb, var(--collab-line-soft) 100%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--collab-line-soft) 100%, transparent);
+  background: var(--color-background-paper, #fff);
+  transform: rotate(45deg);
+}
+
+.assistPerson:hover .assistPersonTip,
+.assistPerson:focus-visible .assistPersonTip {
+  opacity: 1;
+  transform: translate(0, -50%);
+}
+
 /* 空看板里的说明列表：直接落在页面白底上，与工具条左缘对齐，不套卡片 */
 /* 协助空状态的说明：没有工具条撑着，自己与上面的 tab 留出距离 */
 .assistEmpty {
@@ -804,59 +936,13 @@
   text-decoration: underline;
 }
 
+
 .guideAction:focus-visible {
   outline: 2px solid var(--collab-accent-deep);
   outline-offset: 1px;
 }
 
-/* 成员首次进入时的单行提示：浅底内联，不遮列表，也不抢标题 */
-.contextTip {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  margin-top: 16px;
-  margin-bottom: 8px;
-  padding: 8px 8px 8px 12px;
-  border: 1px solid color-mix(in srgb, var(--collab-accent) 30%, transparent);
-  border-radius: 10px;
-  background: color-mix(in srgb, var(--collab-active) 55%, var(--color-background-paper, #fff));
-  font-size: 12.5px;
-  line-height: 1.6;
-}
-
-.contextTipIcon {
-  display: grid;
-  flex: 0 0 auto;
-  place-items: center;
-  color: var(--collab-accent-deep);
-}
-
-.contextTipText {
-  flex: 1;
-  min-width: 0;
-  color: var(--collab-ink-2);
-}
-
-.contextTipAction {
-  flex: 0 0 auto;
-  height: 26px;
-  padding: 0 10px;
-  border: 0;
-  border-radius: 7px;
-  background: transparent;
-  color: var(--collab-muted);
-  font: inherit;
-  font-size: 12.5px;
-  font-weight: 400;
-  cursor: pointer;
-}
-
-.contextTipAction:hover {
-  background: color-mix(in srgb, var(--collab-accent) 16%, transparent);
-  color: var(--collab-ink-2);
-}
-
-/* 等你处理的协助：与上面的取用提示同一种提示条，右侧按钮用主色，点了就去处理 */
+/* 等你处理的协助：提示条形式，右侧按钮用主色，点了就去处理 */
 .assistWaiting {
   display: flex;
   align-items: center;
@@ -1038,19 +1124,6 @@
   font-size: 12px;
   font-weight: 700;
   cursor: pointer;
-}
-
-.pager {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-top: 10px;
-}
-
-.pagerInfo {
-  margin: 8px 0 0;
-  color: var(--collab-ter);
-  font-size: 12px;
 }
 
 .rowOpenable {

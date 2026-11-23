@@ -159,7 +159,10 @@ describe("HomePage", () => {
     expect(source).toContain("selectedComposerCommandsByScope[chatScopeKey] ?? null");
     expect(source).toContain("setSelectedComposerCommandForScope(chatScopeKey, COMPOSER_GOAL_COMMAND);");
     expect(source).toContain('label={t("home.command.goalChip")}');
-    expect(source).toContain('placeholder={selectedComposerCommand ? t("home.goal.input") : t("home.input")}');
+    expect(source).toContain("placeholder={composerPlaceholder}");
+    expect(source).toContain("const composerPlaceholder = assistTarget");
+    expect(source).toContain('t("home.assist.placeholder", { name: assistTarget.name })');
+    expect(source).toContain('? t("home.goal.input") : t("home.input")');
     expect(styles).toContain(".agent-composer-shell--expanded textarea.agent-composer-input--conversation");
   });
 
@@ -572,10 +575,11 @@ describe("HomePage", () => {
     expect(source).toContain("onSend={(prompt) => void sendMessage(prompt)}");
     expect(sendBlock).toContain("const messageInput = suggestedPrompt ?? input;");
     expect(sendBlock).toContain("const submittedAttachments = fromRecommendation ? [] : [...pendingAttachments];");
-    // 新手引导演示会在内容后追加执行提示，所以真正发出的是包装器的结果；
-    // 推荐路径下包装器原样返回，内容仍然是 contentWithReferences 那一份。
-    expect(sendBlock).toContain("content: contentWithReferences");
+    // 协助目标与新手引导演示都会在内容后追加执行提示，所以真正发出的是包装器的结果；
+    // 推荐路径下包装器原样返回，内容仍然是 contentWithAssist 那一份。
+    expect(sendBlock).toContain("content: contentWithAssist");
     expect(sendBlock).toContain("content: demoAssistSend.content,");
+    expect(sendBlock).toContain('t("home.assist.hint", { name: assistTarget.name, project: assistTarget.projectName })');
     expect(sendBlock).toContain("clearComposer: () => { if (!fromRecommendation) stageComposerForSend(sendScopeKey); }");
   });
 

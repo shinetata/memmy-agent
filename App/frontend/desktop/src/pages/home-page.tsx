@@ -68,7 +68,7 @@ import { ImChannelTitleIcon, imChannelTitleDisplay } from "../integrations/integ
 import { useTaskBus, type TaskBusAgentMessage } from "../lib/task-bus.js";
 import type { AppAction } from "../state/app-actions.js";
 import { agentActions, appActions, createAgentOperationError } from "../state/app-actions.js";
-import { NEW_TASK_MODEL_SCOPE_KEY, type AgentChatMediaAttachment, type AgentChatMessage, type AgentState, type AgentThinkingState, type ComposerMention } from "../state/agent-chat-slice.js";
+import { NEW_TASK_MODEL_SCOPE_KEY, type AgentChatMediaAttachment, type AgentChatMessage, type AgentState, type AgentThinkingState, type AssistTarget, type ComposerMention } from "../state/agent-chat-slice.js";
 import { useAppState } from "../state/app-state.js";
 import { isComposingKeyboardEvent } from "../utils/keyboard.js";
 import {
@@ -132,7 +132,7 @@ import { HomeStarterActions } from "./home-starter-actions.js";
 import { LlmProviderLogo } from "./llm-provider-logo.js";
 import { Mic, Pause, Plus, Send } from "./memory/memory-prototype-icons.js";
 import { resolveWorkspaceEnvironmentScope, useWorkspaceEnvironment } from "./use-workspace-environment.js";
-import { ArrowDown, Check, Folder, MessageSquare, PanelRight, Plus as LucidePlus, RotateCw, Search, Target, X } from "lucide-react";
+import { ArrowDown, AtSign, Check, Folder, MessageSquare, PanelRight, Plus as LucidePlus, RotateCw, Search, Target, X } from "lucide-react";
 
 export { agentChatScopeKey, updateComposerDraftForScope };
 export { hydrateAgentThreadInBackground };
@@ -628,6 +628,35 @@ export function ComposerMentionChip(props: {
           <X size={13} strokeWidth={2.25} aria-hidden="true" className="composer-command-chip__icon composer-command-chip__icon--remove" />
         </button>
         <span className="composer-command-chip__label">{props.label}</span>
+      </div>
+    </Tooltip>
+  );
+}
+
+/**
+ * 会话页输入框左下角的协助目标：`@ 陈可`。它说的是「这次请她」，不是引用一条任务，所以图标用 @；
+ * 样子与接续任务的 chip 一致（常驻无底色，悬停才变胶囊），此时 @ 换成 ×，点一下就取消这次指定，退回给 Memmy 自己。
+ */
+export function ComposerAssistChip(props: {
+  name: string;
+  hint: string;
+  removeLabel: string;
+  onRemove: () => void;
+}) {
+  return (
+    <Tooltip content={props.hint}>
+      <div className="composer-command-chip composer-assist-chip">
+        <button
+          type="button"
+          className="composer-command-chip__leading"
+          aria-label={`${props.removeLabel} ${props.name}`}
+          title={`${props.removeLabel} ${props.name}`}
+          onClick={props.onRemove}
+        >
+          <AtSign size={13} strokeWidth={2} aria-hidden="true" className="composer-command-chip__icon composer-assist-chip__at" />
+          <X size={13} strokeWidth={2.25} aria-hidden="true" className="composer-command-chip__icon composer-command-chip__icon--remove" />
+        </button>
+        <span className="composer-command-chip__label">{props.name}</span>
       </div>
     </Tooltip>
   );
@@ -1143,6 +1172,14 @@ export function HomePage(props: { hiddenSurface?: boolean } = {}) {
     [composerInput, composerCaret, mentionDismissed]
   );
   const pendingMentions = state.agent.composerMentionsByScope[chatScopeKey] ?? [];
+  const assistTarget = state.agent.assistTargetByScope[chatScopeKey] ?? null;
+  /**
+   * 从协助页点头像进来时，输入框问的就是「给这位成员的请求」；名字带进句子里，
+   * 不再另加一行说明。剩下两种情况照旧：选了 Goal 命令、普通提问。
+   */
+  const composerPlaceholder = assistTarget
+    ? t("home.assist.placeholder", { name: assistTarget.name })
+    : (selectedComposerCommand ? t("home.goal.input") : t("home.input"));
   const pendingAttachments = pendingAttachmentsByScope[chatScopeKey] ?? [];
   const draftTarget = state.agent.draftTargetsByScope[chatScopeKey] ?? { kind: "standalone" as const };
   const selectedDraftProject = draftTarget.kind === "project"
@@ -2359,6 +2396,12 @@ export function HomePage(props: { hiddenSurface?: boolean } = {}) {
     const contentWithReferences = submittedMentions.length
       ? `${submittedMentions.map((item) => item.reference).join("\n\n")}\n\n${promptedInput}`
       : promptedInput;
+    // 从协助页点头像进来时带着协助目标：把「请谁、在哪个项目」写成执行提示追在后面，
+    // Agent 据此直接发请求，不必再反问；气泡里只显示人自己写的那句（同新手引导的做法）。
+    const assistHint = assistTarget
+      ? t("home.assist.hint", { name: assistTarget.name, project: assistTarget.projectName })
+      : null;
+    const contentWithAssist = assistHint ? `${contentWithReferences}\n\n${assistHint}` : contentWithReferences;
     // 新手引导第二步：那句要求连同执行提示一起交给 Agent，气泡里仍然只有用户看到的那一句。
     const demoAssistSend = composeDemoGuideAssistSend({
       status: demoGuide.status,
@@ -2366,7 +2409,7 @@ export function HomePage(props: { hiddenSurface?: boolean } = {}) {
       typed: composerInput,
       sentence: demoAssistSentence,
       hint: demoAssistHint,
-      content: contentWithReferences
+      content: contentWithAssist
     });
     messageSendLocksRef.current.add(sendScopeKey);
     dispatch(agentActions.messageSendLockUpdated(sendScopeKey, clientRequestId));
@@ -2387,7 +2430,7 @@ export function HomePage(props: { hiddenSurface?: boolean } = {}) {
         content: demoAssistSend.content,
         // With references, a command, a rewritten prompt or the guide's hint the wire text differs from what was typed;
         // show the typed part.
-        displayContent: (agentPrompt || submittedCommand || submittedMentions.length || demoAssistSend.displayContent !== null) ? messageInput : undefined,
+        displayContent: (agentPrompt || submittedCommand || submittedMentions.length || assistHint || demoAssistSend.displayContent !== null) ? messageInput : undefined,
         language,
         pendingAttachments: submittedAttachments,
         uploadAgentMedia: (attachments) => clients!.memmyAgent.uploadAgentMedia(attachments),
@@ -3188,6 +3231,11 @@ export function HomePage(props: { hiddenSurface?: boolean } = {}) {
     dispatch(agentActions.composerMentionsUpdated(scopeKey, existing.filter((item) => item.id !== id)));
   }
 
+  /** 拿掉协助目标：这次不请人，退回给 Memmy 自己；项目不变。 */
+  function clearAssistTarget(scopeKey: string) {
+    dispatch(agentActions.assistTargetUpdated(scopeKey, null));
+  }
+
   function handleComposerKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
     if (isComposingKeyboardEvent(event) && (event.key === "Enter" || event.key === "Tab")) {
       return;
@@ -3636,7 +3684,7 @@ export function HomePage(props: { hiddenSurface?: boolean } = {}) {
                   textareaRef={inputRef}
                   highlightedCommands={slashCommandsWithLocal.map((command) => command.command)}
                   value={composerInput}
-                  placeholder={selectedComposerCommand ? t("home.goal.input") : t("home.input")}
+                  placeholder={composerPlaceholder}
                   rows={3}
                   className="w-full px-5 pt-4 pb-12 text-sm resize-none focus:outline-none rounded-card-lg bg-background-paper placeholder:text-text-ink/40"
                   onChange={(event) => {
@@ -3659,6 +3707,16 @@ export function HomePage(props: { hiddenSurface?: boolean } = {}) {
                     >
                       <Plus size={15} strokeWidth={2} />
                     </button>
+                    {assistTarget ? (
+                      <div className="composer-mention-chips">
+                        <ComposerAssistChip
+                          name={assistTarget.name}
+                          hint={t("home.assist.chipHint", { name: assistTarget.name })}
+                          removeLabel={t("home.assist.dropTarget")}
+                          onRemove={() => clearAssistTarget(chatScopeKey)}
+                        />
+                      </div>
+                    ) : null}
                     {selectedComposerCommand || pendingMentions.length ? (
                       <div className="composer-mention-chips">
                         {selectedComposerCommand ? (
@@ -3918,7 +3976,7 @@ export function HomePage(props: { hiddenSurface?: boolean } = {}) {
                       textareaRef={inputRef}
                       highlightedCommands={slashCommandsWithLocal.map((command) => command.command)}
                       value={composerInput}
-                      placeholder={selectedComposerCommand ? t("home.goal.input") : t("home.input")}
+                      placeholder={composerPlaceholder}
                       rows={isComposerSingleLine ? 1 : 3}
                       className={`${isComposerSingleLine ? "agent-composer-input--single " : ""}agent-composer-input--conversation block w-full pl-4 py-3 text-sm rounded-card-lg bg-background-paper`}
                       onChange={(event) => {
@@ -3942,6 +4000,16 @@ export function HomePage(props: { hiddenSurface?: boolean } = {}) {
                         </button>
                         {/* 引用任务的 chip 排在共享开关（云图标）右侧，和首页输入框保持一致。 */}
                         {shareToggle}
+                        {assistTarget ? (
+                          <div className="composer-mention-chips">
+                            <ComposerAssistChip
+                              name={assistTarget.name}
+                              hint={t("home.assist.chipHint", { name: assistTarget.name })}
+                              removeLabel={t("home.assist.dropTarget")}
+                              onRemove={() => clearAssistTarget(chatScopeKey)}
+                            />
+                          </div>
+                        ) : null}
                         {pendingMentions.length ? (
                           <div className="composer-mention-chips">
                             {pendingMentions.map((item) => (

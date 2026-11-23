@@ -5874,6 +5874,32 @@ describe("agent chat slice", () => {
     expect(state.thinkingStateByScope[NEW_TASK_MODEL_SCOPE_KEY]).toEqual({ enabled: true });
     expect(state.thinkingStateByScope["chat-2"]).toBeUndefined();
   });
+
+  it("carries the assist target per scope and drops it with the rest of the composer state", () => {
+    const target = { userId: "8", name: "陈可", projectName: "前端设计" };
+    let state = agentReducer(initialAgentState, {
+      type: "agent/assistTargetUpdated",
+      scopeKey: "draft-1",
+      target
+    });
+    expect(state.assistTargetByScope["draft-1"]).toEqual(target);
+
+    // 换人只改这一个 scope，别的 scope 不受影响。
+    state = agentReducer(state, {
+      type: "agent/assistTargetUpdated",
+      scopeKey: "draft-1",
+      target: { ...target, userId: "9", name: "小饭团" }
+    });
+    expect(state.assistTargetByScope["draft-1"]).toEqual({ userId: "9", name: "小饭团", projectName: "前端设计" });
+
+    // 拿掉目标时把这一项删掉，不留空值在状态里。
+    state = agentReducer(state, { type: "agent/assistTargetUpdated", scopeKey: "draft-1", target: null });
+    expect("draft-1" in state.assistTargetByScope).toBe(false);
+
+    state = agentReducer(state, { type: "agent/assistTargetUpdated", scopeKey: "draft-1", target });
+    state = agentReducer(state, { type: "agent/composerScopeCleared", scopeKey: "draft-1" });
+    expect("draft-1" in state.assistTargetByScope).toBe(false);
+  });
 });
 
 function recoveryStateWithPendingMessage(content: string): AgentState {

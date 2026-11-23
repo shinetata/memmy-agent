@@ -28,6 +28,13 @@ export function CollabAssistProjectSettings(props: {
   onEnabledChange?: (enabled: boolean) => void;
   /** 新手引导的演示中：给开关加一个锚点，蒙版的描边落在它上面。 */
   demoAnchor?: boolean;
+  /**
+   * 引导正讲到这一行：开关只展示、不能拨。
+   *
+   * 接收协助现在默认开启，引导这一步只是在说明「它开着、你随时可以关」；
+   * 引导期间让人顺手关掉，后面等演示成员请求那一步就永远等不到。
+   */
+  locked?: boolean;
 }) {
   const { t } = useTranslation();
   const { client, projectId } = props;
@@ -80,6 +87,7 @@ export function CollabAssistProjectSettings(props: {
       <div
         className={`${frame.settingsRow} ${frame.settingsRowAction}`}
         onClick={() => {
+          if (props.locked === true) return;
           if (!busy && client && enabled !== null) void toggle(!on);
         }}
       >
@@ -100,7 +108,7 @@ export function CollabAssistProjectSettings(props: {
             aria-checked={on}
             aria-label={t("collab.settings.assist.title")}
             data-demo-guide={props.demoAnchor ? "settings-assist-switch" : undefined}
-            disabled={busy || !client || enabled === null}
+            disabled={busy || !client || enabled === null || props.locked === true}
             className={`${frame.settingsSwitch}${on ? ` ${frame.settingsSwitchOn}` : ""}`}
           />
         </span>

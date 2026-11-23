@@ -20,7 +20,11 @@ import {
   resetCollabLaunchPromptRuntime,
   setCollabLaunchPromptOpen
 } from "../../app/collab-launch-prompt-state.js";
-import { getCollabProjectsSnapshot, resetCollabProjectsStore } from "../../app/collab-projects-store.js";
+import {
+  getCollabProjectsSnapshot,
+  loadCollabProjects,
+  resetCollabProjectsStore
+} from "../../app/collab-projects-store.js";
 import { reportOnboardingPromptOpen, resetOnboardingPromptActivity } from "../../app/onboarding-activity.js";
 import { ONBOARDING_QUIET_MS } from "../../app/use-onboarding-quiet.js";
 import { I18nProvider } from "../../i18n/i18n-provider.js";
@@ -206,6 +210,10 @@ describe("collab launch waits for the existing guidance", () => {
   });
 
   it("brings the walkthrough demo along once nothing is queued", async () => {
+    // 名单已经回来、并且说这个人可以体验：大卡这时点「新建项目」才带六屏。
+    await act(async () => {
+      await loadCollabProjects({ listProjects: async () => ({ projects: [], demoEligible: true }) } as never);
+    });
     await renderHost();
     await advance(ONBOARDING_QUIET_MS);
 

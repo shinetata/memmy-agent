@@ -49,6 +49,10 @@ export interface DemoGuideTarget {
 }
 
 const TARGETS: Record<DemoGuidePhase, DemoGuideTarget> = {
+  // 「协助上手」一屏（已经用过项目协作的人）：与任务面板的导览同一套尺寸，只框「协助」列表那一片，
+  // 不把头部与工具条一起圈进来——亮区太大人就分不清在讲什么。
+  // 协助为空时那块空态也带同一个锚点；锚点还没渲染出来时先量整块看板，不至于什么也画不出来。
+  "assist-intro": { region: "board-list", stroke: null, blockRest: true, radius: 14, padding: 6, prefer: "right", fallback: "board-main" },
   // 建项目之前的六屏：都在新建弹窗上，一屏一个亮区；按控件自己的形状给圆角。
   // 这一段只介绍、不让人动手：整张弹窗（`intro`）与每一项设置都不接点击，只能按卡片上的「下一步」。
   // 出场那一步只压暗、不描边，让人先看整张弹窗。
@@ -88,7 +92,8 @@ const TARGETS: Record<DemoGuidePhase, DemoGuideTarget> = {
   "ask-waiting": { region: "conversation", stroke: null, blockRest: true },
   "ask-done": { region: "conversation", stroke: null, blockRest: true },
   "settings-open": { region: "board-settings", stroke: "board-settings", blockRest: false },
-  "settings-assist": { region: "settings-assist", stroke: "settings-assist-switch", blockRest: true },
+  // 第三步：接收协助默认开启，这一屏只讲「它开着、随时可以关」——描边标出开关，开关本身不给点。
+  "settings-assist": { region: "settings-assist", stroke: "settings-assist-switch", blockRest: true, blockStroke: true },
   "help-waiting": { region: "board-main", stroke: null, blockRest: true },
   "help-dialog": { region: "assist-dialog", stroke: "assist-allow", blockRest: true },
   // 允许之后人站到那条 Memmy 任务里：亮整个任务页，协助条、执行过程与结果都在里面；人若是留在看板上，改亮那条协助。
@@ -342,9 +347,12 @@ export function cardPlacement(
     const left = align === "left"
       ? Math.max(EDGE_MARGIN, Math.min(hole.left + 20, viewport.width - width - EDGE_MARGIN))
       : Math.max(EDGE_MARGIN, Math.min(hole.left + hole.width - width - 20, viewport.width - width - EDGE_MARGIN));
-    const top = corner === "bottom"
+    // 上下都要夹回窗口：亮区本身很高（整块看板）时，贴着亮区底边算出来的位置会落到窗口外，
+    // 卡片的下半截与按钮就被切掉了。宁可压在亮区偏上的位置，也不能出窗口。
+    const rawTop = corner === "bottom"
       ? Math.max(EDGE_MARGIN, hole.top + hole.height - height - 20 - reserveBottom)
       : Math.max(EDGE_MARGIN, hole.top + 20);
+    const top = Math.max(EDGE_MARGIN, Math.min(rawTop, viewport.height - height - EDGE_MARGIN));
     return { left, top, arrow: { side: "bottom", offset: arrowHorizontal(left) } };
   };
 

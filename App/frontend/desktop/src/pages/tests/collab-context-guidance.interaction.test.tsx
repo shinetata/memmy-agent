@@ -1,9 +1,8 @@
 // @vitest-environment happy-dom
 
 /**
- * 看板上的三处引导：成员首次进入的单行提示、「使用方式」浮层，以及任务行的「继续任务」。
- * 三者的共同前提是“任务即对话”这件事要被看见，所以断言也落在“话有没有说出口”和
- * “点了之后新任务有没有带上引用”上，而不是样式。
+ * 看板上的引导：「使用方式」浮层已移除，剩下「继续任务」。
+ * 断言落在“话有没有说出口”和“点了之后新任务有没有带上引用”上，而不是样式。
  */
 import { act } from "react";
 import type { ReactNode } from "react";
@@ -136,18 +135,6 @@ describe("collab board guidance", () => {
     container.remove();
     resetCollabProjectsStore();
     window.localStorage.clear();
-  });
-
-  it("tells a member once that the synced tasks can be referenced with @", async () => {
-    // 提示条点名留下任务的成员，不再笼统说「成员」，免得和自己刚上传的任务混起来。
-    expect(document.body.textContent).toContain("李四已在这里留下 1 条对话");
-
-    await act(async () => buttonByText("知道了")!.click());
-    await flush();
-
-    expect(document.body.textContent).not.toContain("已在这里留下");
-    // 按本机项目记住：云端记录重建（停止共享后再共享）时不会重新提示一遍。
-    expect(window.localStorage.getItem("memmy.collab.contextTipSeen")).toContain("local-1");
   });
 
   it("keeps the header free of its own help entry", async () => {

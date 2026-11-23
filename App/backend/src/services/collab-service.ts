@@ -84,6 +84,8 @@ const MAX_UPLOAD_TURNS = 300;
 const MAX_QUESTION_CHARS = 4_000;
 const MAX_REPLY_CHARS = 8_000;
 const MAX_STEPS_PER_TURN = 40;
+/** 会话标题缺失时的兜底：Agent 写回会话的完成通知不算人问的事，跳过它们取第一条真问题。 */
+const NOTIFICATION_TURN_PREFIXES = ["<timestamp>", "<system_notification>", "<task>"];
 const SESSION_ID_PATTERN = /^[A-Za-z0-9-]{1,36}$/u;
 /** Marks the sessions of Memmy's own tasks, which are not one of the external agent sources. */
 export const MEMMY_SOURCE_ID = "memmy";
@@ -2915,6 +2917,12 @@ export function conversationIdFor(key: string, path: string, platform: NodeJS.Pl
   return paths.basename(path).replace(/^websocket_/u, "").replace(/\.jsonl$/u, "");
 }
 
+/** 这一轮是人问的问题，还是 Agent 写回会话的完成通知。 */
+function isNotificationTurn(question: string): boolean {
+  const head = question.trim().toLowerCase();
+  return NOTIFICATION_TURN_PREFIXES.some((prefix) => head.startsWith(prefix));
+}
+
 /**
  * Reads one of Memmy's task session files: a metadata line first, then user, assistant and tool records that
  * group into turns the same way the board shows them.
@@ -2928,6 +2936,7 @@ async function readSessionRecords(path: string): Promise<MemmySessionRecords | n
   let title = "";
   let workspacePath: string | null = null;
   let updatedAt = "";
+  let firstQuestion = "";
   let lastQuestion = "";
   const turns: CollabSessionTurn[] = [];
   let current: CollabSessionTurn | null = null;
@@ -2960,7 +2969,10 @@ async function readSessionRecords(path: string): Promise<MemmySessionRecords | n
       if (current) turns.push(current);
       // 协助结果送回发起方任务的那条消息：内容来自执行方的电脑，只有协助双方看得到。这条任务共享到项目时只留一句说明。
       const question = isAssistResult(text(raw.content)) ? ASSIST_RESULT_PLACEHOLDER : text(raw.content);
-      if (!isAssistResult(text(raw.content))) lastQuestion = question;
+      if (!isAssistResult(text(raw.content))) {
+        lastQuestion = question;
+        if (!firstQuestion && !isNotificationTurn(question)) firstQuestion = question;
+      }
       current = { question, reply: "", steps: [], startedAt: timestamp };
       continue;
     }
@@ -2981,7 +2993,8 @@ async function readSessionRecords(path: string): Promise<MemmySessionRecords | n
   return {
     conversationId,
     projectId,
-    title: title || lastQuestion,
+    // 没有生成标题时用第一句问题，和首页的会话列表一致；最新一句问题只当摘要，不能顶替标题。
+    title: title || firstQuestion || lastQuestion,
     lastQuestion,
     workspacePath,
     updatedAt,

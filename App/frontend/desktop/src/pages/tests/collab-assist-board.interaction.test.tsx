@@ -51,7 +51,12 @@ vi.mock("../../state/app-state.js", () => ({
     state: {
       agent: {
         projects: [{ id: "local-1", name: "Memmy 内测反馈", rootPath: "/tmp/feedback", pinned: false, createdAt: "2026-10-21T03:00:00.000Z" }],
-        tasks: []
+        tasks: [],
+        // 协助页点头像会开一条新任务：建草稿的判定要读这几项。
+        blankDraftActive: false,
+        newChatRequestId: 1,
+        composerDraftsByScope: {},
+        composerPendingAttachmentsByScope: {}
       }
     },
     dispatch: mocks.dispatch
@@ -129,25 +134,6 @@ function clickTab(label: string): void {
   act(() => target.click());
 }
 
-/** 成员筛选下拉的触发按钮。 */
-function memberFilter(): HTMLElement {
-  const element = document.querySelector<HTMLElement>("[aria-label='按成员筛选']");
-  if (!element) throw new Error("工具条里没有成员筛选下拉");
-  return element;
-}
-
-function memberFilterLabel(): string {
-  return memberFilter().textContent?.trim() ?? "";
-}
-
-/** 点开下拉并选中一项。 */
-function pickMember(label: string): void {
-  act(() => memberFilter().click());
-  const option = [...document.querySelectorAll<HTMLElement>("[role='option']")].find((node) => node.textContent?.trim() === label);
-  if (!option) throw new Error(`下拉里没有「${label}」`);
-  act(() => option.click());
-}
-
 function clickTextIn(scope: string, text: string): void {
   const container = [...document.querySelectorAll(scope)].at(-1);
   const target = container ? [...container.querySelectorAll<HTMLElement>("button")].find((node) => node.textContent?.trim() === text) : null;
@@ -172,8 +158,6 @@ describe("assists on the project board", () => {
     mocks.listMembers.mockResolvedValue({ project, joinMode: "approval", canManage: false, members: [], requests: [] });
     mocks.listSessions.mockResolvedValue({ project, sessions: [session], total: 1 });
     mocks.readSessionDetail.mockResolvedValue({ session, turns: [] });
-    // 首次进入有他人任务时的取用提示与本用例无关：先记为已看过。
-    window.localStorage.setItem("memmy.collab.contextTipSeen", JSON.stringify(["local-1", "p-1"]));
     container = document.createElement("div");
     document.body.append(container);
   });
@@ -326,7 +310,7 @@ describe("assists on the project board", () => {
     clickText("多选");
     // 还没结束的不可勾选。
     expect(document.querySelectorAll("[data-collab-assist-row] input[type='checkbox']")).toHaveLength(2);
-    clickText("全选本页");
+    clickText("全选");
     expect(document.body.textContent).toContain("已选 2 个");
     clickText("删除");
     expect(document.body.textContent).toContain("选中的 2 次协助将从你的列表中移除，另一方仍能看到；双方都移除后，记录会被删除。");
@@ -481,31 +465,42 @@ describe("assists on the project board", () => {
     clickTab("协助");
     await flush();
 
-    // 空状态不摆标题与引导句：直接从「发起协助 / 接收协助」两条开始。
+    // 空状态不摆标题与引导句：直接从「发起协助」这一条开始，后面接接收协助的那一句话。
     expect(document.body.textContent).not.toContain("还没有协助");
     expect(document.body.textContent).toContain("发起协助");
     expect(document.body.textContent).toContain("在装有协作组件的 Agent 对话中说明请哪位成员协助");
+    // 接收协助与「发起协助」同构：有小标题，正文只剩一句话，指向设置的是句子里的链接（没有单独的按钮）。
     expect(document.body.textContent).toContain("接收协助");
-    expect(document.body.textContent).toContain("在项目设置中开启「接收协助请求」后，成员才能向你发起请求");
+    expect(document.body.textContent).toContain("接收成员发起的协助请求，可在");
+    expect(document.body.textContent).toContain("中开启或关闭。");
+    expect(document.body.textContent).not.toContain("打开项目设置");
 
-    clickText("打开项目设置");
+    clickText("项目设置");
     await flush();
     expect(document.body.textContent).toContain("共享给成员的任务");
   });
 
-  it("keeps the task filter when you leave the tasks tab and come back", async () => {
+  it("keeps the search when you leave the tasks tab and come back", async () => {
     await renderBoard([thread(request("d1", "done"))]);
-    pickMember("成员任务");
+    const search = document.querySelector<HTMLInputElement>("input[aria-label='搜索任务标题、问题或成员']")!;
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+      setter.call(search, "查版本");
+      search.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => {
+      search.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    });
     await flush();
-    expect(memberFilterLabel()).toBe("成员任务");
 
     clickTab("协助");
     await flush();
-    expect(document.querySelector("[aria-label='按成员筛选']")).toBeNull();
+    // 协助列表没有搜索框。
+    expect(document.querySelector("input[aria-label='搜索任务标题、问题或成员']")).toBeNull();
 
     clickTab("任务");
     await flush();
-    expect(memberFilterLabel()).toBe("成员任务");
+    expect(document.querySelector<HTMLInputElement>("input[aria-label='搜索任务标题、问题或成员']")!.value).toBe("查版本");
   });
 
   it("leaves selection mode when switching tabs", async () => {
@@ -530,5 +525,40 @@ describe("assists on the project board", () => {
     expect(document.querySelector("[data-collab-assist-conversation]")?.textContent).toContain("查版本");
     expect(getAssistFocus()).toBeNull();
     consumeAssistFocus();
+  });
+  it("lists the members you can ask at the top of the assists tab and takes you into a session for one of them", async () => {
+    // 云端只在项目列表里给出开了「接收协助请求」的成员；本人即使也开了也不该出现在这一行。
+    mocks.listProjects.mockResolvedValue([
+      { ...project, assistReceivers: [ME, { userId: "9", name: "陈可", mine: false }] }
+    ]);
+    await renderBoard([]);
+    clickTab("协助");
+    await flush();
+
+    const people = [...document.querySelectorAll<HTMLElement>("[data-collab-assist-people] button")];
+    expect(people.map((node) => node.getAttribute("aria-label"))).toEqual(["请 陈可 协助"]);
+
+    act(() => people[0]!.click());
+    await flush();
+
+    // 建草稿、指定项目、带上这次请谁，然后回会话页；不再多一层确认。
+    expect(mocks.dispatch).toHaveBeenCalledWith({ type: "agent/newChatRequested" });
+    expect(mocks.dispatch).toHaveBeenCalledWith({
+      type: "agent/draftTargetUpdated",
+      scopeKey: expect.any(String),
+      target: { kind: "project", projectId: "local-1" }
+    });
+    expect(mocks.dispatch).toHaveBeenCalledWith({
+      type: "agent/assistTargetUpdated",
+      scopeKey: expect.any(String),
+      target: { userId: "9", name: "陈可", projectName: project.name }
+    });
+  });
+
+  it("shows no member row when nobody is taking assist requests", async () => {
+    await renderBoard([]);
+    clickTab("协助");
+    await flush();
+    expect(document.querySelector("[data-collab-assist-people]")).toBeNull();
   });
 });

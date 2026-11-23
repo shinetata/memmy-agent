@@ -9,6 +9,7 @@ import {
   DEMO_GUIDE_BEFORE_PROJECT_PHASES,
   DEMO_GUIDE_TOUR_PHASES,
   clearDemoGuideDone,
+  demoGuideBackTarget,
   demoGuideHeartbeatStep,
   demoGuideIsBeforeProjectPhase,
   demoGuideIsTourPhase,
@@ -23,8 +24,11 @@ import {
   endDemoGuide,
   getDemoGuideState,
   markDemoGuideDone,
+  readAssistGuideDone,
   readDemoGuideDone,
   resetDemoGuideStore,
+  shouldOfferAssistIntro,
+  startAssistGuide,
   setDemoGuideStorageForTest,
   startDemoGuideBeforeProject,
   type DemoGuideEvent,
@@ -733,5 +737,83 @@ describe("a walkthrough that ended stays ended on this machine", () => {
     markDemoGuideDone(storage);
     startDemoGuideBeforeProject();
     expect(getDemoGuideState().status).toBe("ended");
+  });
+});
+
+describe("the assistance intro for people who already used projects", () => {
+  let storage: Storage;
+
+  beforeEach(() => {
+    storage = memoryStorage();
+    resetDemoGuideStore();
+    setDemoGuideStorageForTest(storage);
+  });
+
+  afterEach(() => {
+    resetDemoGuideStore();
+  });
+
+  it("shows one screen on the board without a cloud project or a demo member", () => {
+    startAssistGuide({ localProjectId: "local-1" });
+    const first = getDemoGuideState();
+    expect(first.status).toBe("active");
+    expect(first.phase).toBe("assist-intro");
+    // 没有云端项目与演示成员：不发心跳、不叫云端结束。
+    expect(first.projectId).toBeNull();
+    expect(first.memberUserId).toBeNull();
+    expect(first.localProjectId).toBe("local-1");
+    expect(demoGuideStepNumberOf(first.phase)).toBeNull();
+    // 只有这一屏：没有可退的上一屏，点「完成」就收场。
+    expect(demoGuideBackTarget(first)).toBeNull();
+
+    dispatchDemoGuide({ type: "next" });
+    expect(getDemoGuideState().status).toBe("ended");
+  });
+
+  it("remembers only its own marker, so the full walkthrough is still available", () => {
+    startAssistGuide({ localProjectId: "local-1" });
+    dispatchDemoGuide({ type: "next" });
+    expect(readAssistGuideDone(storage)).toBe(true);
+    // 看完这一屏不能顺手把完整引导也算作看过。
+    expect(readDemoGuideDone(storage)).toBe(false);
+  });
+
+  it("keeps the full walkthrough for people who never used projects", () => {
+    // 云端还能演示、本机也没退出过：这是从 1.2.6 升级的人，走完整引导。
+    expect(shouldOfferAssistIntro({ collabEnabled: true, demoGuideActive: false, demoEligible: true, assistDone: false, baseDone: false }))
+      .toBe(false);
+    // 云端已经有一条演示记录（demoEligible 为假）：1.2.7 升级上来的人，只看协助这两屏。
+    expect(shouldOfferAssistIntro({ collabEnabled: true, demoGuideActive: false, demoEligible: false, assistDone: false, baseDone: false }))
+      .toBe(true);
+    // 本机已经把完整引导走完过：同样只看协助。
+    expect(shouldOfferAssistIntro({ collabEnabled: true, demoGuideActive: false, demoEligible: true, assistDone: false, baseDone: true }))
+      .toBe(true);
+    // 已经看过、正在别的引导里、或协作不可用时都不进。
+    expect(shouldOfferAssistIntro({ collabEnabled: true, demoGuideActive: false, demoEligible: false, assistDone: true, baseDone: true }))
+      .toBe(false);
+    expect(shouldOfferAssistIntro({ collabEnabled: true, demoGuideActive: true, demoEligible: false, assistDone: false, baseDone: true }))
+      .toBe(false);
+    expect(shouldOfferAssistIntro({ collabEnabled: false, demoGuideActive: false, demoEligible: false, assistDone: false, baseDone: true }))
+      .toBe(false);
+  });
+
+  it("does not start again on this machine once it was seen", () => {
+    startAssistGuide({ localProjectId: "local-1" });
+    dispatchDemoGuide({ type: "next" });
+    dispatchDemoGuide({ type: "next" });
+    startAssistGuide({ localProjectId: "local-2" });
+    expect(getDemoGuideState().status).toBe("ended");
+    // force 只给预览与自助重置：看过也能再来一遍。
+    startAssistGuide({ force: true, localProjectId: "local-2" });
+    expect(getDemoGuideState().status).toBe("active");
+  });
+});
+
+describe("accepting assistance is explained, not switched on by hand", () => {
+  it("moves on from the settings screen without asking for a click on the switch", () => {
+    const state = started();
+    const waiting = demoGuideReducer({ ...state, phase: "settings-assist" }, { type: "next" });
+    expect(waiting.phase).toBe("help-waiting");
+    expect(waiting.status).toBe("active");
   });
 });

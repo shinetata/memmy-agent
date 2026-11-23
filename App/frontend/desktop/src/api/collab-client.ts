@@ -19,6 +19,19 @@ const ProjectSchema = z.object({
    */
   instructions: z.string().nullish().transform((value) => value ?? ""),
   /**
+   * 本人在这项目里是否接收协助请求；旧后端不返回时按不接收处理。
+   */
+  acceptAssist: z.boolean().nullish().transform((value) => value ?? false),
+  /**
+   * 开启了「接收协助请求」的成员（含本人）：这些人现在就能被请，协助页据此列出可点的头像。
+   * 单个项目的接口不带这一项，此时为空数组。
+   */
+  assistReceivers: z.array(z.object({
+    userId: z.string(),
+    name: z.string(),
+    mine: z.boolean().nullish().transform((value) => value ?? false)
+  })).nullish().transform((value) => value ?? []),
+  /**
    * 新手引导的演示：只有演示进行中的项目带它。云端给 `null` / 不返回时按普通项目处理，
    * 桌面端不自己判断「是不是演示项目」，也不认任何写死的账号或昵称。
    */

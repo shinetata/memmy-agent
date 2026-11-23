@@ -8,7 +8,7 @@ import type { CSSProperties, ReactNode } from "react";
 import { Check, LifeBuoy, Link2, MessageSquarePlus, Search, Settings, Send, UserPlus } from "lucide-react";
 import { I18nProvider } from "../../../i18n/i18n-provider.js";
 import { CollabDemoGuideOverlay } from "../../../components/collab-demo-guide/collab-demo-guide-overlay.js";
-import { demoGuideIsTourPhase, type DemoGuidePhase, type DemoGuideState } from "../../../app/collab-demo-guide-store.js";
+import { demoGuideIsAssistPhase, demoGuideIsTourPhase, type DemoGuidePhase, type DemoGuideState } from "../../../app/collab-demo-guide-store.js";
 import board from "../../collab-page.module.css";
 
 /**
@@ -40,6 +40,8 @@ export const DEMO_GUIDE_PREVIEW_STEPS = {
   "2-compose": "ask-compose",
   "2-waiting": "ask-waiting",
   "2-done": "ask-done",
+  // 已经用过项目协作的人第一次看到协助时的两屏（看板上的介绍）。
+  "a-intro": "assist-intro",
   "3-gear": "settings-open",
   "3-settings": "settings-assist",
   "3-waiting": "help-waiting",
@@ -71,15 +73,17 @@ function stateFor(step: DemoGuidePreviewStep): DemoGuideState {
     ? (step === "complete" ? "complete" : "reply-waiting")
     : DEMO_GUIDE_PREVIEW_STEPS[step];
   const beforeProject = PRE_PROJECT_PHASES.includes(phase);
+  // 协助上手两屏没有云端项目与演示成员：卡片与亮区都按这个来。
+  const assistIntro = demoGuideIsAssistPhase(phase);
   // 第三步的这几个阶段意味着前两步都走过了：完成弹窗与卡片都按它列条目。
   const lateStep = step === "3-gear" || step === "3-settings" || step === "3-waiting" || step === "3-dialog" || step === "3-running" || step === "3-done";
   return {
     status: step === "complete" ? "complete" : "active",
     phase,
-    projectId: beforeProject ? null : "preview-cloud",
+    projectId: beforeProject || assistIntro ? null : "preview-cloud",
     localProjectId: beforeProject ? null : "preview-local",
-    memberUserId: beforeProject ? null : "9001",
-    memberName: beforeProject ? "" : MEMBER,
+    memberUserId: beforeProject || assistIntro ? null : "9001",
+    memberName: beforeProject || assistIntro ? "" : MEMBER,
     error: step === "error" ? "Agent 没有给出回复。" : null,
     done: {
       task: step === "complete" || lateStep,
@@ -649,6 +653,8 @@ export function DemoGuidePreview(props: { step: DemoGuidePreviewStep }) {
   }
   else if (phase === "reader") surface = (<><BoardSurface withSettings={false} withAssistRow={false} /><ReaderSurface /></>);
   else if (phase === "settings-assist") surface = <SettingsSurface />;
+  // 协助上手：两屏都落在看板上（第二屏亮 tab 那一行）。
+  else if (demoGuideIsAssistPhase(phase)) surface = <BoardSurface withSettings />;
   else if (phase === "help-dialog") surface = <AssistDialogSurface />;
   // 允许之后人就在那条任务里：协助 chip、执行过程与「结果已发给谁」都在这一页。
   else if (phase === "help-running") surface = <AssistTaskSurface done={false} />;

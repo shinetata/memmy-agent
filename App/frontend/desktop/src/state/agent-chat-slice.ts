@@ -192,6 +192,16 @@ export interface ComposerMention {
   reference: string;
 }
 
+/**
+ * 这次要请哪位成员协助：从协助页点头像进来时带上，输入框左下角据此显示那颗 chip。
+ * `projectName` 是云端项目名——发请求的那条命令按名字找项目，不认本机项目 id。
+ */
+export interface AssistTarget {
+  userId: string;
+  name: string;
+  projectName: string;
+}
+
 export interface AgentState {
   connectionStatus: AgentConnectionStatus;
   connectionError: string | null;
@@ -281,6 +291,8 @@ export interface AgentState {
   composerPendingAttachmentsByScope: Record<string, PendingAttachment[]>;
   /** Sessions referenced into the message; the reference text is sent, the chips are what the person sees. */
   composerMentionsByScope: Record<string, ComposerMention[]>;
+  /** 这次请哪位成员协助：协助页点头像进入会话时带上，发出去或移除后清掉。 */
+  assistTargetByScope: Record<string, AssistTarget>;
   draftTargetsByScope: Record<string, WebuiSessionTarget>;
   draftTargetRevisionByScope: Record<string, number>;
   messageSendInFlightByScope: Record<string, string>;
@@ -348,6 +360,7 @@ export type AgentAction =
   | { type: "agent/composerDraftUpdated"; scopeKey: string; value: string }
   | { type: "agent/composerPendingAttachmentsUpdated"; scopeKey: string; attachments: PendingAttachment[] }
   | { type: "agent/composerMentionsUpdated"; scopeKey: string; mentions: ComposerMention[] }
+  | { type: "agent/assistTargetUpdated"; scopeKey: string; target: AssistTarget | null }
   | { type: "agent/draftTargetUpdated"; scopeKey: string; target: WebuiSessionTarget }
   | { type: "agent/messageSendLockUpdated"; scopeKey: string; clientRequestId: string | null }
   | { type: "agent/tasksMarkedRead"; chatIds: string[] }
@@ -456,6 +469,7 @@ export const initialAgentState: AgentState = {
   composerDraftsByScope: {},
   composerPendingAttachmentsByScope: {},
   composerMentionsByScope: {},
+  assistTargetByScope: {},
   draftTargetsByScope: {},
   draftTargetRevisionByScope: {},
   messageSendInFlightByScope: {},
@@ -709,6 +723,8 @@ export function agentReducer(state: AgentState, action: AgentAction): AgentState
       return updateComposerDraft(state, action.scopeKey, action.value);
     case "agent/composerMentionsUpdated":
       return updateComposerMentions(state, action.scopeKey, action.mentions);
+    case "agent/assistTargetUpdated":
+      return updateAssistTarget(state, action.scopeKey, action.target);
     case "agent/composerPendingAttachmentsUpdated":
       return updateComposerPendingAttachments(state, action.scopeKey, action.attachments);
     case "agent/draftTargetUpdated":
@@ -1485,26 +1501,40 @@ function updateComposerMentions(state: AgentState, scopeKey: string, mentions: C
   return { ...state, composerMentionsByScope: { ...state.composerMentionsByScope, [scopeKey]: mentions } };
 }
 
+/** 协助目标只有一份：换人或取消都走这里，空值时把这一项删掉，不让空对象在状态里积下来。 */
+function updateAssistTarget(state: AgentState, scopeKey: string, target: AssistTarget | null): AgentState {
+  if (!target) {
+    if (!(scopeKey in state.assistTargetByScope)) return state;
+    const assistTargetByScope = { ...state.assistTargetByScope };
+    delete assistTargetByScope[scopeKey];
+    return { ...state, assistTargetByScope };
+  }
+  return { ...state, assistTargetByScope: { ...state.assistTargetByScope, [scopeKey]: target } };
+}
+
 function clearComposerScope(state: AgentState, scopeKey: string): AgentState {
   const hasDraft = scopeKey in state.composerDraftsByScope;
   const hasPendingAttachments = scopeKey in state.composerPendingAttachmentsByScope;
   const hasMentions = scopeKey in state.composerMentionsByScope;
+  const hasAssistTarget = scopeKey in state.assistTargetByScope;
   const hasTarget = scopeKey in state.draftTargetsByScope;
   const hasTargetRevision = scopeKey in state.draftTargetRevisionByScope;
   const hasSendLock = scopeKey in state.messageSendInFlightByScope;
-  if (!hasDraft && !hasPendingAttachments && !hasMentions && !hasTarget && !hasTargetRevision && !hasSendLock) {
+  if (!hasDraft && !hasPendingAttachments && !hasMentions && !hasAssistTarget && !hasTarget && !hasTargetRevision && !hasSendLock) {
     return state;
   }
 
   const composerDraftsByScope = { ...state.composerDraftsByScope };
   const composerPendingAttachmentsByScope = { ...state.composerPendingAttachmentsByScope };
   const composerMentionsByScope = { ...state.composerMentionsByScope };
+  const assistTargetByScope = { ...state.assistTargetByScope };
   const draftTargetsByScope = { ...state.draftTargetsByScope };
   const draftTargetRevisionByScope = { ...state.draftTargetRevisionByScope };
   const messageSendInFlightByScope = { ...state.messageSendInFlightByScope };
   delete composerDraftsByScope[scopeKey];
   delete composerPendingAttachmentsByScope[scopeKey];
   delete composerMentionsByScope[scopeKey];
+  delete assistTargetByScope[scopeKey];
   delete draftTargetsByScope[scopeKey];
   delete draftTargetRevisionByScope[scopeKey];
   delete messageSendInFlightByScope[scopeKey];
@@ -1513,6 +1543,7 @@ function clearComposerScope(state: AgentState, scopeKey: string): AgentState {
     composerDraftsByScope,
     composerPendingAttachmentsByScope,
     composerMentionsByScope,
+    assistTargetByScope,
     draftTargetsByScope,
     draftTargetRevisionByScope,
     messageSendInFlightByScope

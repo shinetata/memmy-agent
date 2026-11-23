@@ -1,7 +1,8 @@
 // @vitest-environment happy-dom
 
 /**
- * The board displays a continuous, paginated task list with a member filter and row timestamps.
+ * 看板的任务列表按成员分区：本人第一段，其余成员各一段；段内默认五条，多的就地展开。
+ * 行里只留时间，成员信息只在段头出现一次；没有任务的成员不占位。
  */
 import { act } from "react";
 import type { ReactNode } from "react";
@@ -107,19 +108,36 @@ async function flush(): Promise<void> {
   }
 }
 
-/** 成员筛选下拉的触发按钮。 */
-function trigger(): HTMLElement {
-  const element = document.querySelector<HTMLElement>("[aria-label='按成员筛选']");
-  if (!element) throw new Error("工具条里没有成员筛选下拉");
-  return element;
+/** 成员分段的段头：按段键找（`me` 或 `member:<昵称>`），段头本身是 button。 */
+function groupHead(name: string): HTMLElement {
+  const section = groupSection(name);
+  const head = section.querySelector<HTMLElement>("button[data-collab-member-toggle]");
+  if (!head) throw new Error(`段落「${name}」没有段头`);
+  return head;
 }
 
-/** 点开下拉并选中一项：触发按钮是 combobox，菜单里是 role=option。 */
-function pickMember(label: string): void {
-  act(() => trigger().click());
-  const option = [...document.querySelectorAll<HTMLElement>("[role='option']")].find((node) => node.textContent?.trim() === label);
-  if (!option) throw new Error(`下拉里没有「${label}」`);
-  act(() => option.click());
+/** 某一位成员的整段。本人在数据里记作 `me`，其余按昵称。 */
+function groupSection(name: string): HTMLElement {
+  const wanted = name === "me" ? "me" : `member:${name}`;
+  const section = document.querySelector<HTMLElement>(`[data-collab-member-group="${wanted}"]`)
+    ?? [...document.querySelectorAll<HTMLElement>("[data-collab-member-group]")]
+      .find((node) => node.querySelector("[data-collab-member-name]")?.textContent === name);
+  if (!section) throw new Error(`看板里没有「${name}」这一段`);
+  return section;
+}
+
+/** 页面里的段落顺序：读段头写的昵称（本人那一段也写自己的昵称）。 */
+function groupNames(): string[] {
+  return [...document.querySelectorAll<HTMLElement>("[data-collab-member-group]")]
+    .map((node) => node.querySelector("[data-collab-member-name]")?.textContent?.trim() ?? "");
+}
+
+/** 某一段里的任务标题。 */
+function titlesIn(name: string): string[] {
+  const section = groupSection(name);
+  return [...section.querySelectorAll<HTMLElement>("li")]
+    .map((node) => node.querySelector<HTMLElement>("[data-collab-row-title]")?.textContent?.trim() ?? "")
+    .filter(Boolean);
 }
 
 /** 在搜索框里输入并回车，发起一次搜索。 */
@@ -205,17 +223,83 @@ describe("collab task list", () => {
     });
     await flush();
   }
-
-  it("displays every task on the page in the returned order, without time sections", async () => {
+  it("splits the board into one section per member, with your own section first", async () => {
     await renderBoard();
-    const rows = Array.from(container.querySelectorAll("li"));
-    expect(rows).toHaveLength(3);
-    expect(rows.map((row) => SESSIONS.find((entry) => row.textContent?.includes(entry.title))?.id)).toEqual(["s-1", "s-2", "s-3"]);
-    expect(container.querySelectorAll("h2 button")).toHaveLength(0);
-    // 本人的任务也写昵称，不再用「你」。
-    expect(document.body.textContent).toContain("林晓 · 09:05");
-    expect(document.body.textContent).toContain("林晓 · 昨天");
-    expect(document.body.textContent).toMatch(/陈墨 · \d{1,2}月\d{1,2}日/);
+    // 林晓（本人）在前，陈墨在后；段头写名字与数量。
+    expect(groupNames()).toEqual(["林晓", "陈墨"]);
+    expect(container.querySelectorAll("li")).toHaveLength(3);
+    expect(titlesIn("林晓")).toEqual(["事项页的视觉重做", "删除成员权重"]);
+    expect(titlesIn("陈墨")).toEqual(["任务按额度滚动保留"]);
+    // 分页器没有了：整份列表一次给完。
+    expect(document.body.textContent).not.toContain("下一页");
+    expect(document.body.textContent).not.toContain("共 3 个任务");
+  });
+
+  it("writes the member once in the section head and only the time on each row", async () => {
+    await renderBoard();
+    const row = [...container.querySelectorAll<HTMLElement>("li")]
+      .find((node) => node.textContent?.includes("事项页的视觉重做"))!;
+    // 行里不再重复昵称，也没有头像；时间还在。
+    expect(row.textContent).not.toContain("林晓 ·");
+    expect(row.querySelector("img, span[aria-hidden='true'].avatar")).toBeNull();
+    expect(row.textContent).toMatch(/\d{2}:\d{2}/);
+    // 段头一次：名字 + 数量 + 头像。
+    expect(groupHead("林晓").textContent).toContain("林晓");
+    expect(groupHead("林晓").textContent).toContain("2 个任务");
+  });
+
+  it("shows five rows per member and expands the rest in place", async () => {
+    const many = Array.from({ length: 8 }, (_, index) => ({
+      ...SESSIONS[0]!,
+      id: `mine-${index}`,
+      title: `我的任务 ${index + 1}`,
+      lastActiveAt: daysBack(0, 9 + index, 0)
+    }));
+    mocks.listSessions.mockResolvedValue({ project: CLOUD_PROJECT, sessions: many, total: many.length });
+    await renderBoard();
+
+    expect(container.querySelectorAll("li")).toHaveLength(5);
+    expect(document.body.textContent).toContain("展开其余 3 个");
+
+    const more = [...document.querySelectorAll<HTMLButtonElement>("button")]
+      .find((node) => node.textContent?.trim().startsWith("展开其余"))!;
+    await act(async () => more.click());
+    expect(container.querySelectorAll("li")).toHaveLength(8);
+    expect(document.body.textContent).toContain("收起");
+  });
+
+  it("collapses a whole section to its head and back", async () => {
+    await renderBoard();
+    expect(titlesIn("陈墨")).toHaveLength(1);
+
+    await act(async () => groupHead("陈墨").click());
+    expect(titlesIn("陈墨")).toHaveLength(0);
+    expect(groupHead("陈墨").getAttribute("aria-expanded")).toBe("false");
+    // 段头本身还在，数量和名字都看得到。
+    expect(groupHead("陈墨").textContent).toContain("1 个任务");
+
+    await act(async () => groupHead("陈墨").click());
+    expect(titlesIn("陈墨")).toHaveLength(1);
+  });
+
+  it("does not reserve a section for a member without tasks", async () => {
+    // 云端列出了三位成员，但只有两人有任务：没有任务的许知不占段落，也不在末尾收成一行。
+    mocks.listMembers.mockResolvedValue({
+      project: CLOUD_PROJECT,
+      joinMode: "approval",
+      canManage: true,
+      members: [
+        { userId: "1", name: "林晓", role: "owner", mine: true },
+        { userId: "2", name: "陈墨", role: "member", mine: false },
+        { userId: "3", name: "许知", role: "member", mine: false }
+      ],
+      requests: []
+    });
+    await renderBoard();
+
+    expect(groupNames()).toEqual(["林晓", "陈墨"]);
+    expect(document.body.textContent).not.toContain("许知 还没有任务");
+    expect(document.body.textContent).not.toContain("还没有任务");
   });
 
   it("hides a summary that stopped on an agent's task notification", async () => {
@@ -253,34 +337,27 @@ describe("collab task list", () => {
     expect(invite!.textContent).toContain("2");
   });
 
-  it("shows 10 tasks on the first page and loads the next page", async () => {
-    const all = Array.from({ length: 13 }, (_, index) => ({ ...SESSIONS[0]!, id: `page-${index}`, title: `任务 ${index + 1}` }));
-    mocks.listSessions.mockImplementation(async (_project, options) => ({
-      project: CLOUD_PROJECT,
-      sessions: all.slice(options.offset, options.offset + options.limit),
-      total: all.length
-    }));
+  it("keeps only the members whose tasks match the search, and counts the matches", async () => {
+    const matched = [
+      session(11, { title: "退款回调重试", lastQuestion: "重试三次后放弃。", mine: true, lastActiveAt: daysBack(0, 10, 0) }),
+      session(12, { title: "退款回调的日志", lastQuestion: "把请求体和响应都记下来。", mine: false, lastActiveAt: daysBack(1, 10, 0) })
+    ];
+    mocks.listSessions.mockImplementation(async (_project, options) => {
+      // 云端按查询词过滤：这里模拟同一条查询只回命中项。
+      const hits = options?.query ? matched : SESSIONS;
+      return { project: CLOUD_PROJECT, sessions: hits, total: hits.length };
+    });
     await renderBoard();
-    expect(container.querySelectorAll("li")).toHaveLength(10);
-    const next = Array.from(container.querySelectorAll<HTMLButtonElement>("button"))
-      .find((entry) => entry.textContent?.trim() === "下一页");
-    expect(next).toBeTruthy();
-    await act(async () => next!.click());
-    await flush();
-    expect(container.querySelectorAll("li")).toHaveLength(3);
-    expect(container.textContent).toContain("任务 11");
-    expect(mocks.listSessions).toHaveBeenLastCalledWith(CLOUD_PROJECT.id, expect.objectContaining({ offset: 10, limit: 10 }));
-  });
 
-  it("filters by member from the dropdown beside the search box", async () => {
-    await renderBoard();
-    expect(trigger().textContent?.trim()).toBe("全部任务");
-
-    pickMember("我的任务");
+    await typeSearch("退款");
     await flush();
 
-    expect(mocks.listSessions).toHaveBeenLastCalledWith(CLOUD_PROJECT.id, expect.objectContaining({ member: "me" }));
-    expect(trigger().textContent?.trim()).toBe("我的任务");
+    expect(groupNames()).toEqual(["林晓", "陈墨"]);
+    // 段头改说命中数，不再说总数。
+    expect(groupHead("林晓").textContent).toContain("命中 1 个");
+    expect(groupHead("陈墨").textContent).toContain("命中 1 个");
+    // 搜索跨所有成员：本机筛选一次、云端查询一次，之后不再带成员参数。
+    expect(mocks.listSessions).toHaveBeenLastCalledWith(CLOUD_PROJECT.id, { query: "退款" });
   });
 
   it("explains an empty result under the search box, with the query in the title", async () => {
@@ -294,95 +371,42 @@ describe("collab task list", () => {
     expect(card.kind).toBe("search");
     expect(card.iconKind).toBe("search");
     expect(card.title).toBe("没有匹配「退款回调」的任务");
-    expect(card.body).toBe("换个关键词试试，或切换上方的筛选。");
+    expect(card.body).toBe("换个关键词试试，或清除搜索。");
+    // 空结果不画任何段头。
+    expect(groupNames()).toEqual([]);
   });
 
-  it("explains an empty 「我的任务」 and offers linking tasks in place", async () => {
-    mocks.listSessions.mockResolvedValue({ project: CLOUD_PROJECT, sessions: [], total: 0 });
-    await renderBoard();
-
-    pickMember("我的任务");
-    await flush();
-
-    const card = filterEmptyCard();
-    expect(card.kind).toBe("me");
-    expect(card.iconKind).toBe("user");
-    expect(card.title).toBe("你还没有任务");
-    expect(card.body).toBe("在侧栏新建任务，发出第一条消息后即进入项目；或关联任务，把其他 Agent 中的任务纳入。");
-
-    // 说明里的「关联任务」与工具条上的主按钮打开同一个弹窗。
-    await act(async () => document.querySelector<HTMLElement>("[data-collab-filter-empty] button")!.click());
-    await flush();
-    expect(document.body.textContent).toContain("管理其他 Agent 的任务");
-  });
-
-  it("explains an empty 「成员任务」", async () => {
-    mocks.listSessions.mockResolvedValue({ project: CLOUD_PROJECT, sessions: [], total: 0 });
-    await renderBoard();
-
-    pickMember("成员任务");
-    await flush();
-
-    const card = filterEmptyCard();
-    expect(card.kind).toBe("others");
-    expect(card.iconKind).toBe("users");
-    expect(card.title).toBe("成员还没有任务");
-    expect(card.body).toBe("成员同步任务后，会列在这里。");
-  });
-
-  it("treats a search as the reason the list is empty even when a member filter is on", async () => {
-    mocks.listSessions.mockResolvedValue({ project: CLOUD_PROJECT, sessions: [], total: 0 });
-    await renderBoard();
-
-    pickMember("成员任务");
-    await typeSearch("退款回调");
-    await flush();
-
-    const card = filterEmptyCard();
-    expect(card.kind).toBe("search");
-    expect(card.title).toBe("没有匹配「退款回调」的任务");
-  });
-
-  it("keeps the member filter visible while selecting, but only when it is not 「全部」", async () => {
+  it("keeps the search out of the way while selecting", async () => {
     await renderBoard();
     const selectButton = (label: string) => Array.from(document.querySelectorAll<HTMLButtonElement>("button"))
       .find((entry) => entry.textContent?.trim() === label)!;
 
-    // 全部：选择态把搜索与下拉一起收起来。
     await act(async () => selectButton("多选").click());
-    expect(document.querySelector("[aria-label='按成员筛选']")).toBeNull();
     expect(document.querySelector("input[aria-label='搜索任务标题、问题或成员']")).toBeNull();
     await act(async () => selectButton("取消").click());
-
-    // 筛着成员：下拉留着，否则看不出列表为什么少了。
-    pickMember("我的任务");
-    await flush();
-    await act(async () => selectButton("多选").click());
-    expect(document.querySelector("[aria-label='按成员筛选']")).not.toBeNull();
-    expect(trigger().textContent?.trim()).toBe("我的任务");
+    expect(document.querySelector("input[aria-label='搜索任务标题、问题或成员']")).not.toBeNull();
   });
 
-  it("selects and clears only the current page's own tasks", async () => {
-    const rows = SESSIONS.map((entry) => ({ ...entry, lastActiveAt: daysBack(0, 9, 5) }));
-    mocks.listSessions.mockResolvedValue({ project: CLOUD_PROJECT, sessions: rows, total: rows.length });
+  it("selects and clears only your own tasks across every section", async () => {
     await renderBoard();
     const button = (label: string) => Array.from(document.querySelectorAll<HTMLButtonElement>("button"))
       .find((entry) => entry.textContent?.trim() === label);
 
     await act(async () => button("多选")!.click());
     const checks = Array.from(container.querySelectorAll<HTMLInputElement>('input[type="checkbox"]'));
+    // 只有本人的两条可选，他人的任务没有勾选框。
     expect(checks).toHaveLength(2);
     await act(async () => checks[0]!.click());
     expect(document.body.textContent).toContain("已选 1 个");
-    expect(button("全选本页")).toBeTruthy();
+    expect(button("全选")).toBeTruthy();
 
-    await act(async () => button("全选本页")!.click());
+    await act(async () => button("全选")!.click());
     expect(checks.every((check) => check.checked)).toBe(true);
     expect(document.body.textContent).toContain("已选 2 个");
     expect(button("取消全选")).toBeTruthy();
     await act(async () => button("取消全选")!.click());
     expect(checks.every((check) => !check.checked)).toBe(true);
-    expect(button("全选本页")).toBeTruthy();
+    expect(button("全选")).toBeTruthy();
   });
 
   it("opens the member's own Memmy task in its conversation page instead of the read-only panel", async () => {

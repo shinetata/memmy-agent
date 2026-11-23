@@ -110,6 +110,20 @@ describe("collab projects store", () => {
     expect(getCollabProjectsSnapshot().projects?.[0]?.name).toBe("更名为 A");
   });
 
+  it("keeps the assist receivers when a single-project view writes the project back", async () => {
+    const listed: CollabProject = {
+      ...project("a"),
+      assistReceivers: [{ userId: "8", name: "陈可", mine: false }]
+    };
+    await loadCollabProjects(clientWith(async () => [listed]));
+
+    // 会话列表、改名、保存指令这类回应都不带「谁接收协助请求」：照它们写回不能把这个名单清空。
+    replaceCollabProject({ ...project("a"), sessionCount: 3 });
+
+    expect(getCollabProjectsSnapshot().projects?.[0]?.assistReceivers).toEqual(listed.assistReceivers);
+    expect(getCollabProjectsSnapshot().projects?.[0]?.sessionCount).toBe(3);
+  });
+
   it("finds the cloud record of a local project", () => {
     const projects = [project("a", "a", "local-a"), project("b", "b", null)];
 
@@ -157,7 +171,9 @@ describe("collab projects store", () => {
     expect(getCollabProjectsSnapshot().createOpen).toBe(false);
   });
 
-  it("carries the walkthrough entry through the create request", () => {
+  it("carries the walkthrough entry through the create request", async () => {
+    // 云端名单说这个人可以体验，才有这一次的六屏。
+    await loadCollabProjects(clientWithEligibility([], true));
     // 从新功能大卡点「新建项目」：弹窗要预填名称、提前打开共享，并让引导停在「创建项目」。
     requestCreateProject({ share: true, demo: true });
     expect(getCollabProjectsSnapshot()).toMatchObject({ createOpen: true, createShareDefault: true, createDemo: true });
