@@ -1,7 +1,7 @@
 /**
  * 说明卡上的字：一句都不能漏掉占位符。
  *
- * `formatMessage` 只替换传进来的那几项，没传的 `{name}` 会原样留在句子里——之前 `settings-open`
+ * `formatMessage` 只替换传进来的那几项，没传的 `{name}` 会原样留在句子里——之前有一屏
  * 就是这么把「{name}的问题」印到卡片上的。这里把每个子状态、两种语言的卡片都生成一遍，
  * 断言正文里不出现字面的 `{`；顺带把导览四步与那句无名字的文案钉住。
  */
@@ -42,8 +42,6 @@ const PHASES: DemoGuidePhase[] = [
   "ask-compose",
   "ask-waiting",
   "ask-done",
-  "settings-open",
-  "settings-assist",
   "help-waiting",
   "help-dialog",
   "help-running",
@@ -94,11 +92,6 @@ describe("the demo guide copy", () => {
 
   it("keeps the approved wording for the step whose name is written out", () => {
     const t = translate("zh-CN");
-    // 第三步：接收协助默认开启，这一屏只讲「它开着、你随时可以关」，不再让人去打开开关。
-    expect(demoGuideCard(stateFor("settings-open"), t).body)
-      .toBe("「接收协助请求」默认是打开的，不用你操作。现在小饭团也能请这台电脑上的 Agent 做事了。");
-    expect(demoGuideCard(stateFor("settings-open"), translate("en-US")).body)
-      .toBe("Accept assistance requests is on by default, so nothing to do here. Xiaofantuan can now ask the Agent on this computer to run something.");
     // 不带人名的句子照旧不写死叫法：执行中的状态只说结果回传给发起的人。
     expect(demoGuideCard(stateFor("help-running"), t).status)
       .toBe("正在本机执行，完成后结果会回传给小饭团。");
@@ -122,18 +115,22 @@ describe("the demo guide copy", () => {
   it("keeps the five tour steps in the approved words", () => {
     const zh = [0, 1, 2, 3, 4].map((index) => demoGuideTourCard(index, translate("zh-CN")));
     expect(zh.map((card) => card.stepName)).toEqual(["任务列表", "请求协助", "关联任务", "关联会话", "新建任务"]);
+    // 「请求协助」这一站用与升级用户同样的那句短话：把鼠标移到哪、点完谁去执行、结果回到哪。
     expect(zh.map((card) => card.body)).toEqual([
       "成员共享的任务都在这里。每项任务的完整对话与进展都能读到，也可以接着往下推进，不用反复同步背景。",
-      "有些信息和操作只在成员自己的电脑上，比如他的本地文件、本机环境。把鼠标移到成员的这一行，右侧会出现「请求协助」，点一下就能带着她开一条任务；她确认后由她电脑上的 Agent 执行，结果回写到你的任务中。双方的协助记录在项目设置里。",
+      "成员那边的本地文件或环境无法访问时，点击「请求协助」可以让对方本地的Agent帮助你执行任务，执行结果自动回传",
       "你在 Claude Code、Cursor 等外部工具里做的工作，成员默认看不到。把那段会话关联进项目，成员就能读到完整上下文并接着处理，不用再讲一遍；关联整个分组后，该分组新增的会话也会自动进入项目。",
       "之后可以在这里选择对应的会话内容，共享给其他成员，不过这次我们先进入下面的环节吧。",
       "需要开展新工作时，从这里新建任务。项目内新建的任务默认对成员可见，方便他们查看进展、接着推进或发起协助。"
     ]);
+    // 只有「请求协助」加粗：它说的就是那颗按钮上写的字。
+    expect(zh[1]?.bodyParts?.filter((part) => part.strong).map((part) => part.text)).toEqual(["请求协助"]);
+    expect(zh[1]?.bodyParts?.map((part) => part.text).join("")).toBe(zh[1]?.body);
     const en = [0, 1, 2, 3, 4].map((index) => demoGuideTourCard(index, translate("en-US")));
     expect(en.map((card) => card.stepName)).toEqual(["Task list", "Request help", "Linked tasks", "Linked sessions", "New task"]);
     expect(en.map((card) => card.body)).toEqual([
       "Tasks shared by members live here. You can read each task's full conversation and progress, and carry on from where it stopped without briefing each other again.",
-      "Some information and actions only exist on a member's own computer, such as their local files or their machine's environment. Hover a member's row and Request help appears on the right; click it to start a task addressed to her. Once she confirms, the agent on her computer runs it and the result is written back to your task. Both sides can read the history in the project settings.",
+      "When a member's local files or environment can't be reached, click Request help and the agent on her computer runs the task for you, with the result sent back automatically.",
       "Work you did in Claude Code, Cursor and other external tools is invisible to members by default. Link that session to the project and members can read the full context and carry on, without you retelling it. Link a whole group and its new sessions come in automatically.",
       "Later you can pick which sessions to share with members here. For now, let's move on to the next part.",
       "Start new work here. New tasks in this project are visible to members by default, so they can follow progress, carry on, or ask for assistance."

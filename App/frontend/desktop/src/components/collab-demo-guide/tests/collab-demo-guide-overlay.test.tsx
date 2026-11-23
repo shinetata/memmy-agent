@@ -472,13 +472,12 @@ describe("demo guide overlay tracking", () => {
 
     const dialog = document.querySelector<HTMLElement>('[role="dialog"]');
     expect(dialog?.textContent).toContain("体验完成");
-    // 三步的回顾只说做了什么，不再复述剧本内容（内容随云端剧本走，见 copy 测试）。
-    expect(dialog?.textContent).toContain("接续了成员的任务，写一段分享会的通知");
-    expect(dialog?.textContent).toContain("请成员协助，结果回写到任务里");
-    expect(dialog?.textContent).toContain("响应了成员的协助请求");
-    // 那段讲机制的话已经不显示了：完成弹窗只列做过的事，再加一句说明与两个按钮。
-    expect(dialog?.textContent).not.toContain("项目协作以项目内的上下文为基础");
-    expect(dialog?.textContent).toContain("成员之间可以直接接着推进");
+    // 只剩一句「接下来做什么」：清单（做过哪几步）与那段共享机制的说明都去掉了。
+    expect(dialog?.textContent).toContain("邀请其他同事进入项目，开启协作吧！");
+    expect(dialog?.textContent).not.toContain("接续了成员的任务");
+    expect(dialog?.textContent).not.toContain("结果回写到任务里");
+    expect(dialog?.textContent).not.toContain("响应了成员的协助请求");
+    expect(dialog?.textContent).not.toContain("成员之间可以直接接着推进");
     expect(dialog?.textContent).not.toContain("{name}");
 
     // 按钮顺序与原型一致：左边是次要的「邀请同事」，右边才是主按钮「完成」。
@@ -567,11 +566,11 @@ describe("demo guide overlay tracking", () => {
   });
 
   it("never prints a raw placeholder on the card", async () => {
-    // settings-open 这一句里的名字按定稿写死，不再走占位符：渲染出来不能有任何 { 。
-    anchor("board-settings", () => rect({ left: 1060, top: 60, width: 28, height: 28 }), "button");
-    await mount("settings-open");
+    // 第三步等请求那一句不带任何占位符：渲染出来不能有 { 。
+    anchor("board-main", () => rect({ left: 100, top: 60, width: 1000, height: 620 }));
+    await mount("help-waiting");
 
-    expect(cardText()).toContain(zhCNMessages["collab.demo.settings.body"]);
+    expect(cardText()).toContain("小饭团");
     expect(cardText()).not.toContain("{");
     expect(document.body.textContent).not.toContain("{name}");
   });

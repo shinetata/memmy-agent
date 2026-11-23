@@ -133,7 +133,6 @@ describe("demo guide layout", () => {
     expect(demoGuideTarget("reader").stroke).toBe("reader-continue");
     expect(demoGuideTarget("compose").stroke).toBe("composer-send");
     expect(demoGuideTarget("help-dialog").stroke).toBe("assist-allow");
-    expect(demoGuideTarget("settings-assist").stroke).toBe("settings-assist-switch");
   });
 
   it("does not let the settings intro screens be clicked", () => {
@@ -169,16 +168,18 @@ describe("demo guide layout", () => {
       // 协助上手：亮区落在被预演的那位成员那一行（那一行常显「请求协助」），没有时退回任务列表。
       ["assist-intro", { region: "board-assist-intro-row", stroke: null, blockRest: true, radius: 10, padding: 6, prefer: "right", fallback: "board-list" }],
       ["tour-board", { region: "board-list", stroke: null, blockRest: true, radius: 14, padding: 6, prefer: "right" }],
-      ["tour-tabs", { region: "board-member-ask", stroke: null, blockRest: true, radius: 10, padding: 6, prefer: "right", fallback: "board-list" }],
+      // 「请求协助」这一站：亮区落在成员段头上那颗按钮上，看板在演示的这一站把它常显。
+      ["tour-tabs", { region: "board-member-ask", stroke: null, blockRest: true, radius: 8, padding: 6, prefer: "right", fallback: "board-list" }],
       ["tour-associate", { region: "board-associate", stroke: null, blockRest: true, radius: 10, padding: 6, prefer: "bottom" }],
       ["tour-associate-pick", { region: "associate-pick", stroke: null, blockRest: true, radius: 16, padding: 6, prefer: "left" }],
-      ["tour-new-task", { region: "sidebar-new-task", stroke: null, blockRest: true, radius: 9, padding: 5, prefer: "bottom" }]
+      // 新建任务这一站亮的是看板工具条上那颗「新建任务」，不是侧栏项目行的「＋」。
+      ["tour-new-task", { region: "board-new-task", stroke: null, blockRest: true, radius: 9, padding: 6, prefer: "bottom", fallback: "board-list" }]
     ];
     for (const [phase, expected] of table) {
       expect(demoGuideTarget(phase), phase).toEqual(expected);
     }
     // 体验三步与改造前一样：不写圆角与内边距，走默认的 12 / 6，也不指定卡片贴哪边。
-    for (const phase of ["task-row", "reader", "compose", "reply-done", "ask-compose", "settings-open", "help-dialog", "complete"] as const) {
+    for (const phase of ["task-row", "reader", "compose", "reply-done", "ask-compose", "help-dialog", "complete"] as const) {
       const target = demoGuideTarget(phase);
       expect(target.radius).toBeUndefined();
       expect(target.padding).toBeUndefined();
@@ -238,7 +239,6 @@ describe("demo guide layout", () => {
       "reader",
       "compose",
       "ask-compose",
-      "settings-open",
       "help-dialog"
     ] as const) {
       expect(demoGuideClickTarget(demoGuideTarget(phase)), phase).toBe(demoGuideTarget(phase).stroke);
@@ -258,8 +258,6 @@ describe("demo guide layout", () => {
       "tour-new-task",
       // 协助上手那一屏只亮不点：没有可点的控件。
       "assist-intro",
-      // 第三步只展示「默认已开启」的开关，开关本身不给点。
-      "settings-assist",
       "reply-waiting",
       "reply-done",
       "ask-waiting",

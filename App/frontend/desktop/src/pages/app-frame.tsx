@@ -821,7 +821,12 @@ export function AppFrame(props: AppFrameProps) {
     if (assistIntroShownFor.current === boardProjectId) return;
     // 只在已共享的项目上触发：未共享的本机项目没有「协助」tab，这两屏也就无处可指。
     if (!sharedProjectFor(collabSnapshot.projects, boardProjectId)) return;
-    if (!shouldOfferAssistIntro({ collabEnabled, demoGuideActive, demoEligible: collabSnapshot.demoEligible })) return;
+    // 这个项目上正有一次演示（云端 `demo.active`）：那段时间不叠协助介绍——完整引导里已经讲了协助，
+    // 两段同时出现只会让人不知道在跟哪一条走。
+    const demoInProgress = Boolean(
+      collabSnapshot.projects?.find((project) => project.localProjectId === boardProjectId)?.demo?.active
+    );
+    if (!shouldOfferAssistIntro({ collabEnabled, demoGuideActive, demoEligible: collabSnapshot.demoEligible, demoInProgress })) return;
     assistIntroShownFor.current = boardProjectId;
     startAssistGuide({ localProjectId: boardProjectId });
   }, [collabEnabled, boardProjectId, demoGuideActive, collabSnapshot.demoEligible, collabSnapshot.projects]);
@@ -3147,11 +3152,6 @@ function ProjectRow(props: {
   onNewTask: () => void;
 }) {
   const { t } = useTranslation();
-  // 新手引导的看板导览讲到「侧栏新建任务」时，亮的就是这一行右侧的「＋」：只有演示项目才算。
-  const demoState = useSyncExternalStore(subscribeDemoGuide, getDemoGuideState, getDemoGuideState);
-  const demoNewTaskAnchor = demoState.status === "active"
-    && demoState.phase === "tour-new-task"
-    && demoState.localProjectId === props.project.id;
   return (
     <div
       className={`app-frame-project-row${props.selected ? " app-frame-project-row--selected" : ""}`}
@@ -3212,12 +3212,11 @@ function ProjectRow(props: {
           <SidebarMarqueeText text={props.project.name} className="app-frame-project-title" />
         )}
       </button>
-      {/* 这一行的「＋」平时只在鼠标划过时出现；引导讲到它时要一直露着，否则亮区里空着一块。 */}
-      <div className="app-frame-project-row__actions" style={demoNewTaskAnchor ? { opacity: 1, pointerEvents: "auto" } : undefined}>
+      {/* 这一行的「＋」平时只在鼠标划过时出现。 */}
+      <div className="app-frame-project-row__actions">
         <TaskIconButton
           label={t("appFrame.project.newTask")}
           tooltip={false}
-          demoGuideAnchor={demoNewTaskAnchor ? "sidebar-new-task" : undefined}
           onClick={props.onNewTask}
         >
           <MessageSquarePlus size={14} />

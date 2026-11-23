@@ -7,6 +7,15 @@
   pointer-events: none;
 }
 
+/* 锚点还没到位时的临时压暗：先把页面挡住，避免切页那几帧里人能点到没被蒙版盖住的界面。 */
+.pendingScrim {
+  position: fixed;
+  inset: 0;
+  background: rgba(16, 26, 25, 0.52);
+  pointer-events: auto;
+  cursor: default;
+}
+
 /* 遮罩分成四块，只有四块接住点击：亮区里的事件照常落到下面的页面上。暗色不由这里铺，见 .stroke。 */
 .mask {
   position: fixed;
@@ -370,33 +379,12 @@
   font-weight: 600;
 }
 
-.doneList {
-  margin: 0 0 14px;
-  padding: 0;
-  list-style: none;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.doneItem {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  font-size: 13px;
-  line-height: 1.5;
-}
-
-.doneMark {
-  flex: none;
-  margin-top: 1px;
-  color: var(--color-action-sky);
-}
-
-.left {
-  margin: 0 0 16px;
-  font-size: 12.5px;
-  color: color-mix(in srgb, var(--color-text-ink, #1b2423) 60%, transparent);
+/* 完成弹窗只有一句「接下来做什么」：字号接近正文，颜色比标题浅一档，不再灰到读不清。 */
+.completeLead {
+  margin: 0 0 18px;
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: var(--color-text-ink-2, #45514f);
 }
 
 .completeFoot {

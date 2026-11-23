@@ -1604,7 +1604,8 @@ export function HomePage(props: { hiddenSurface?: boolean } = {}) {
       stopTurnForDemoRef.current?.();
       return;
     }
-    const askSkipped = (previous === "ask-compose" || previous === "ask-waiting") && demoGuide.phase === "settings-open";
+    // 第二步被跳过：那一轮 Agent 还在写请求，先停住，别让它接着把请求发出去。
+    const askSkipped = (previous === "ask-compose" || previous === "ask-waiting") && demoGuide.phase === "help-waiting";
     if (!askSkipped) return;
     stopTurnForDemoRef.current?.();
   }, [demoGuide.phase, demoGuide.status]);

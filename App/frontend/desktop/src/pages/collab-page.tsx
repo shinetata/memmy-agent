@@ -1125,16 +1125,6 @@ const CollabBoard = memo(function CollabBoard(props: {
   }, []);
 
   /**
-   * 引导退回上一屏：设置弹窗要跟着关。
-   *
-   * `settings-open` 那一屏讲的是「去项目设置开一下」——那一屏本来就不该有弹窗。
-   * 从第三步退回来时弹窗是演示自己打开的，不关的话人看见蒙版说「点齿轮」，齿轮却在弹窗后面。
-   */
-  useEffect(() => {
-    if (demoActive && demoGuide.phase === "settings-open" && settingsOpen) setSettingsOpen(false);
-  }, [demoActive, demoGuide.phase, settingsOpen]);
-
-  /**
    * 导览讲到「关联会话」时，真的把关联弹窗打开。
    *
    * 演示期间人点不了这个弹窗（蒙版遮住整张弹窗）：这里只是把能力摆出来，不勾选、不保存。
@@ -1281,7 +1271,13 @@ const CollabBoard = memo(function CollabBoard(props: {
   const assistIntroPreview = useMemo<
     { kind: "row"; key: string } | { kind: "member"; name: string } | { kind: "intro" } | null
   >(() => {
-    if (!demoActive || !demoGuideIsAssistPhase(demoGuide.phase)) return null;
+    // 「协助上手」没有云端演示项目（`demoActive` 要求 projectId 非空，这里必然为假），
+    // 所以不能借它判断：只看引导在走、停在这一段、且就在这个项目上。
+    // 早先这里写的是 `demoActive`，于是升级用户看到的那一屏亮区里什么都没有——而这一屏正是要指「请求协助」。
+    const assistOnThisProject = demoGuide.status === "active"
+      && demoGuideIsAssistPhase(demoGuide.phase)
+      && demoGuide.localProjectId === projectId;
+    if (!assistOnThisProject) return null;
     const others = memberGroups.filter((group) => !group.mine);
     const picked = (demoMemberName ? others.find((group) => group.name === demoMemberName) : undefined) ?? others[0];
     if (picked) return { kind: "row", key: picked.key };
@@ -1289,7 +1285,7 @@ const CollabBoard = memo(function CollabBoard(props: {
     const member = (demoMemberName ? assistReceivers.find((entry) => entry.name === demoMemberName) : undefined)
       ?? assistReceivers[0];
     return member ? { kind: "member", name: member.name } : { kind: "intro" };
-  }, [demoActive, demoGuide.phase, demoMemberName, memberGroups, assistReceivers]);
+  }, [demoGuide.status, demoGuide.phase, demoGuide.localProjectId, projectId, demoMemberName, memberGroups, assistReceivers]);
 
   // Only this project's own tasks: nothing leaves the computer until sharing is on and sessions are chosen.
   const localTasks = useMemo(() => {
@@ -1453,12 +1449,19 @@ const CollabBoard = memo(function CollabBoard(props: {
      * 按钮点不动（蒙版挡着），只是让人看见它长什么样、出现在哪。
      */
     const preview = assistIntroPreview?.kind === "row" && assistIntroPreview.key === group.key;
+    /**
+     * 导览「请求协助」那一站：这一行要把按钮常显出来。
+     *
+     * 那颗按钮平时只在鼠标悬停时才现形，而这一站人只会看不会去悬停——不常显的话亮区里就是一块空白，
+     * 看不出要讲的是哪里。与预览态同一种画法：悬停底色 + 按钮常显，人真去悬停时不会跳一下。
+     */
+    const tourAskStage = demoActive && demoGuide.phase === "tour-tabs";
+    const revealAsk = preview || tourAskStage;
     // 能请谁协助：段头只给其他成员、且她此刻确实接收请求时才出现按钮；请自己无从谈起。
-    // 演示期间照常渲染：导览讲到协助那一站时，亮区就落在这颗按钮上（蒙版挡着，点不到）。
     const listed = group.mine ? null : assistReceivers.find((member) => member.name === group.name) ?? null;
-    // 预演那一段：她没开接收时也把按钮画出来，但只是样子——不接点击、不进 Tab，
+    // 预览与导览这一站：她没开接收时也把按钮画出来，但只是样子——不接点击、不进 Tab，
     // 免得按下去带着一个编出来的 userId 去建草稿。
-    const receiver = listed ?? (preview ? { userId: `intro-${group.key}`, name: group.name, mine: false } : null);
+    const receiver = listed ?? (revealAsk ? { userId: `intro-${group.key}`, name: group.name, mine: false } : null);
     const askable = listed !== null;
     return (
       <section key={group.key} className={styles.memberGroup} data-collab-member-group={group.key}>
@@ -1469,7 +1472,7 @@ const CollabBoard = memo(function CollabBoard(props: {
         <div
           role="button"
           tabIndex={0}
-          className={`${styles.groupHead} ${preview ? styles.groupHeadPreview : ""}`}
+          className={`${styles.groupHead} ${revealAsk ? styles.groupHeadPreview : ""}`}
           aria-expanded={!collapsed}
           aria-label={t("collab.sessions.groupToggle", { name })}
           data-collab-member-toggle={group.key}
@@ -1723,10 +1726,7 @@ const CollabBoard = memo(function CollabBoard(props: {
                       aria-label={t("collab.settings.open")}
                       title={t("collab.settings.open")}
                       data-demo-guide="board-settings"
-                      onClick={() => {
-                        setSettingsOpen(true);
-                        if (demoActive) dispatchDemoGuide({ type: "settings-opened" });
-                      }}
+                      onClick={() => setSettingsOpen(true)}
                     >
                       <Settings size={15} aria-hidden="true" />
                     </Button>
@@ -1830,6 +1830,7 @@ const CollabBoard = memo(function CollabBoard(props: {
                             <Button
                               size="sm"
                               variant="primary"
+                              data-demo-guide="board-new-task"
                               onClick={() => onContinueTask(project.id, null)}
                             >
                               {t("collab.sessions.empty.task.title")}
@@ -1897,6 +1898,20 @@ const CollabBoard = memo(function CollabBoard(props: {
                             <b>{filterEmpty.title}</b>
                             <span>{filterEmpty.body}</span>
                           </div>
+                        </div>
+                      ) : boardRows.length === 0 && assistIntroPreview && assistIntroPreview.kind !== "row" ? (
+                        /* 「协助上手」正好停在这里，而项目里一条任务都没有（从 1.2.7 升级的人常常如此）：
+                         * 这一屏讲的就是成员行尾的「请求协助」，所以只画那一行示意图，位置就在真实的成员分段那。
+                         * 空态那句这时不画——它写的是「项目中还没有任务」，与这一行的「1 个任务」自相矛盾，
+                         * 而且它是个垂直居中的盒子，会把这一行顶到版面中间去。 */
+                        <div className={styles.memberBoard} data-demo-guide="board-list">
+                          <AssistIntroMemberRow
+                            name={assistIntroPreview.kind === "member"
+                              ? assistIntroPreview.name
+                              : t("collab.demo.intro.name")}
+                            // 成员真的在项目里就报真实条数；完全没有可演示的人时按引导剧情写 1。
+                            count={assistIntroPreview.kind === "member" ? 0 : 1}
+                          />
                         </div>
                       ) : boardRows.length === 0 ? (
                         /* 空项目只留一句说明：操作就嵌在这句话里，不摆图标、不加按钮。
@@ -2045,9 +2060,7 @@ const CollabBoard = memo(function CollabBoard(props: {
           demoActive={demoActive}
           onDemoReceivingOn={() => {
             if (!demoActive) return;
-            // 演示第三步：设置收起，卡片先说「正在发来一个请求」，并立即取一次收件箱，不等下一轮轮询。
-            setSettingsOpen(false);
-            dispatchDemoGuide({ type: "receiving-on" });
+            // 演示第三步：有人在这里把接收协助打开了，立刻取一次收件箱，不等下一轮轮询。
             requestAssistInboxRefresh();
           }}
           onPickSessions={() => {
@@ -2899,7 +2912,7 @@ export function ProjectBoardSettingsDialog(props: {
   onOpenAssistRecords: () => void;
   onNotice: (message: string) => void;
   onFailed: (message: string) => void;
-  /** 新手引导的演示中：「协作」这一组是亮区，开关是描边目标，打开后关掉设置去等演示成员的请求。 */
+  /** 新手引导的演示中：停止共享、离开项目这些破坏性入口照常可用，只是背景不再叠一层暗色。 */
   demoActive?: boolean;
   onDemoReceivingOn?: () => void;
 }) {
@@ -3118,7 +3131,7 @@ export function ProjectBoardSettingsDialog(props: {
 
       {/* 协作：与成员有关的设置放在同一组里，一行一项 */}
       <div className={styles.settingsSectionLabel}>{t("collab.settings.sectionCollab")}</div>
-      <div className={styles.settingsGroup} data-demo-guide={props.demoActive ? "settings-assist" : undefined}>
+      <div className={styles.settingsGroup}>
         {!props.shareAvailable ? (
           // API Key 模式没有云端账号：只写明需要登录，原因收进问号，不给开关。
           <div className={`${styles.settingsRow} ${styles.settingsRowMuted}`}>
@@ -3182,9 +3195,6 @@ export function ProjectBoardSettingsDialog(props: {
             projectId={sharedId}
             // 打开设置时就按列表里带回的状态画，不等再读一次云端：先画错再翻过来会看得到一次闪烁。
             initialEnabled={props.shared?.acceptAssist ?? null}
-            demoAnchor={props.demoActive === true}
-            // 引导正讲到这一行：只展示默认开启，开关不给拨。
-            locked={props.demoActive === true}
             onEnabledChange={(enabled) => {
               if (enabled) props.onDemoReceivingOn?.();
             }}

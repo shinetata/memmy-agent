@@ -7,6 +7,7 @@
  * 这里也负责两件云端的事：演示期间每 30 秒一次心跳（步骤变化时立即补一次），以及结束时叫云端把小饭团移出项目。
  */
 import type { CollabClient } from "../api/collab-client.js";
+import { markCollabProjectAssistReceiving } from "./collab-projects-store.js";
 
 /** 引导的每个子状态。
  *
@@ -22,7 +23,7 @@ export type DemoGuidePhase =
   | DemoGuideBeforeProjectPhase
   // 演示刚开始：看板蒙版套住成员徽章，点「继续」才进看板导览。
   | "joined"
-  // 看板导览的五步：任务列表、协助这一个 tab、工具条上的关联任务、关联会话窗口、侧栏新建任务。
+  // 看板导览的五步：任务列表、请求协助、工具条上的关联任务、关联会话窗口、工具条上的新建任务。
   // 全程停在同一个看板上，只亮给人看，不点任何东西，只留「下一步」与「跳过引导」。
   | DemoGuideTourPhase
   | "task-row"
@@ -33,8 +34,7 @@ export type DemoGuidePhase =
   | "ask-compose"
   | "ask-waiting"
   | "ask-done"
-  | "settings-open"
-  | "settings-assist"
+  // 「接收协助请求」默认开启，不再单独用一屏讲它：第二步做完直接等小饭团发来请求。
   | "help-waiting"
   | "help-dialog"
   | "help-running"
@@ -176,24 +176,23 @@ const DEMO_GUIDE_BACK_TARGET: Partial<Record<DemoGuidePhase, DemoGuidePhase>> = 
   "reply-waiting": "compose",
   "ask-compose": "reply-done",
   "ask-waiting": "ask-compose",
-  "settings-open": "ask-done",
-  "settings-assist": "settings-open",
-  // 第三步退回去一律落在 `settings-open`（「去项目设置」那一屏），不落在 `settings-assist`：
-  // 退回 `settings-assist` 意味着设置弹窗得重新打开、开关保持原样，一个刚退回来的人看到弹窗还开着会更迷。
-  // 退到 `settings-open` 时弹窗关掉、开关关回去，他重点一下齿轮就是干净地重来一遍。
-  "help-waiting": "settings-open",
-  "help-dialog": "settings-open"
+  // 第三步（小饭团请这台电脑协助）退回去落在「第二步已完成」那一屏：
+  // 「接收协助请求」默认开着，退回去不必再让人开一次。
+  "help-waiting": "ask-done",
+  "help-dialog": "ask-done"
 };
 
 /**
  * 这一屏点「上一步」退到哪一屏；没有上一步时返回 null（卡片上不出现那个按钮）。
  *
  * 前一屏如果标着「这一步已经做完」，而实际是跳过的，就继续往前退到这一步真正的入口：
- * 跳过第二步的人停在 `settings-open`，退回去该看见「请小饭团协助」的输入框，而不是一张
- * 「第二步已完成」的卡片——他根本没做过。
+ * 跳过第一步的人停在「第二步请输入框」，退回去该看见那条任务，而不是一张「第一步已完成」的卡片——
+ * 他根本没做过。
  */
 export function demoGuideBackTarget(state: Pick<DemoGuideState, "phase" | "skipped">): DemoGuidePhase | null {
-  if (state.phase === "settings-open" && state.skipped.ask) return "ask-compose";
+  // 第三步头一屏（等小饭团发来请求）的上一步本是「第二步完成」；但第二步是跳过的话他根本没做过，
+  // 退回去该看见请小饭团协助的输入框。
+  if (state.phase === "help-waiting" && state.skipped.ask) return "ask-compose";
   if (state.phase === "ask-compose" && state.skipped.task) return "task-row";
   return DEMO_GUIDE_BACK_TARGET[state.phase] ?? null;
 }
@@ -240,8 +239,6 @@ const DEMO_GUIDE_PHASE_ORDER: DemoGuidePhase[] = [
   "ask-compose",
   "ask-waiting",
   "ask-done",
-  "settings-open",
-  "settings-assist",
   "help-waiting",
   "help-dialog",
   "help-running",
@@ -430,8 +427,6 @@ export type DemoGuideEvent =
    * 授权装不上时人要能只放过这一站、继续往下看，所以单给一条只走一格的事件。
    */
   | { type: "pass" }
-  | { type: "settings-opened" }
-  | { type: "receiving-on" }
   | { type: "help-request-seen" }
   | { type: "help-decided"; allow: boolean }
   | { type: "help-finished" }
@@ -629,10 +624,8 @@ export function demoGuideReducer(state: DemoGuideState, event: DemoGuideEvent): 
       if (state.phase === "reply-done") {
         return { ...state, phase: "ask-compose", prefill: nextPrefill(state, event.prefill), error: null };
       }
-      if (state.phase === "ask-done") return { ...state, phase: "settings-open", error: null };
-      // 第三步：接收协助默认开启，这一屏只讲「它开着、你随时可以关」，点「下一步」直接进等请求。
-      // 老项目里曾经关过的情况由看板在派发事件前补开一次，这里只管往下走。
-      if (state.phase === "settings-assist") return { ...state, phase: "help-waiting", error: null };
+      // 第二步做完就直接等小饭团发来请求：接收协助默认开着，中间不再插一屏去项目设置里拨开关。
+      if (state.phase === "ask-done") return { ...state, phase: "help-waiting", error: null };
       if (state.phase === "help-done" || state.phase === "help-rejected") {
         return finishOrSkip(state, { help: state.phase === "help-done" });
       }
@@ -679,7 +672,7 @@ export function demoGuideReducer(state: DemoGuideState, event: DemoGuideEvent): 
       if (step === 2) {
         return {
           ...state,
-          phase: "settings-open",
+          phase: "help-waiting",
           prefill: null,
           error: null,
           done: { ...state.done, ask: false },
@@ -720,12 +713,6 @@ export function demoGuideReducer(state: DemoGuideState, event: DemoGuideEvent): 
       const next = demoGuideNextTourPhase(state.phase);
       return next ? { ...state, phase: next, scan: { status: "idle", count: 0 }, error: null } : state;
     }
-    case "settings-opened":
-      return state.status === "active" && state.phase === "settings-open" ? { ...state, phase: "settings-assist" } : state;
-    case "receiving-on":
-      return state.status === "active" && (state.phase === "settings-assist" || state.phase === "settings-open")
-        ? { ...state, phase: "help-waiting", error: null }
-        : state;
     case "help-request-seen":
       return state.status === "active" && state.phase === "help-waiting" ? { ...state, phase: "help-dialog" } : state;
     case "help-decided":
@@ -950,14 +937,22 @@ export function dispatchDemoGuide(event: DemoGuideEvent): void {
     // 引导真的收场了（完成、退出、跳过、离开看板、云端判定结束）：本机记一笔，之后不再自动带引导。
     // 「协助上手」是另一段引导，记在它自己的标记上：不能因为看完两屏介绍就抹掉完整引导的机会。
     if (before.status === "active" && next.status !== "active") {
-      if (demoGuideIsAssistPhase(before.phase)) markAssistGuideDone();
-      else markDemoGuideDone();
+      if (demoGuideIsAssistPhase(before.phase)) {
+        markAssistGuideDone();
+      } else {
+        markDemoGuideDone();
+        // 完整引导里已经讲过协助（第三步就是处理成员的请求），这段人不需要再看一遍「协助上手」。
+        // 不记的话，走完引导一打开看板就会在同一个项目上再弹一次协助介绍。
+        markAssistGuideDone();
+      }
     }
   }
   if (next !== before && next.status === "active" && next.phase !== before.phase) {
     // 步骤一变立即补一次心跳，并把「云端说已结束」这条兜底接上。
     void sendHeartbeat();
-    if (next.phase === "settings-open" || next.phase === "help-waiting" || next.phase === "help-dialog") startHeartbeat();
+    if (next.phase === "help-waiting" || next.phase === "help-dialog") startHeartbeat();
+    // 进到等成员的请求这一步就把接收协助补开一次：云端正是在这次写入后代演示成员插入那条请求。
+    if (next.phase === "help-waiting") void ensureReceiving();
     if (next.status === "active" && next.phase === "complete") stopHeartbeat();
   }
   // 完成弹窗一出现就叫云端结束演示，不等用户点按钮。
@@ -997,6 +992,8 @@ export function startDemoGuideBeforeProject(options?: { force?: boolean }): void
  *
  * 两段引导互斥：
  * - 完整引导还有机会（云端说这次能演示、本机也没退出过）的人不在这里引导，他会从新建项目那里走完整流程；
+ * - 正在演示中的项目也不碰这里：那段时间云端已经有一条演示记录（`demoEligible` 因此变假），
+ *   若只按这个字段判断，就会在完整引导旁边再叠一张协助介绍，两段引导同时出现在一个看板上；
  * - 其余能确定「用过项目协作」的人——本机已经收场过完整引导，或云端已经有一条演示记录（`demoEligible` 为假）——
  *   才看这两屏。从 1.2.6 升级、从没建过协作项目的人两条都不成立，走完整引导。
  *
@@ -1006,10 +1003,13 @@ export function shouldOfferAssistIntro(options: {
   collabEnabled: boolean;
   demoGuideActive: boolean;
   demoEligible: boolean;
+  /** 当前项目上正有一次演示（云端 `demo.active`）：这段时间不叠协助介绍。 */
+  demoInProgress?: boolean;
   baseDone?: boolean;
   assistDone?: boolean;
 }): boolean {
   if (!options.collabEnabled || options.demoGuideActive) return false;
+  if (options.demoInProgress === true) return false;
   if (options.assistDone ?? readAssistGuideDone()) return false;
   // 完整引导还能走：让那一条先讲完。
   const baseDone = options.baseDone ?? readDemoGuideDone();
@@ -1052,8 +1052,7 @@ export function demoGuideBoundLocalProject(projectId: string, localProjectId: st
   emit(state = { ...state, localProjectId });
 }
 
-/** 心跳说演示已结束（云端返回 `demo: null`）：直接收场，卡片不再留着。 */
-export function demoGuideEndedByCloud(): void {
+/** 心跳说演示已结束（云端返回 `demo: null`）：直接收场，卡片不再留着。 */export function demoGuideEndedByCloud(): void {
   stopHeartbeat();
   dispatchDemoGuide({ type: "cloud-ended" });
 }
@@ -1113,5 +1112,22 @@ async function endDemo(reason: DemoGuideEndReason): Promise<void> {
     await client.demoEnd?.(projectId, reason);
   } catch {
     // 发不出去就靠云端的心跳超时兜底：这里不打扰用户。
+  }
+}
+
+/**
+ * 把本人在这项目里的「接收协助请求」补开一次。
+ *
+ * 新项目默认就是开着的，但云端只在这次写入时才会代演示成员插入那条请求（`offerHelp`），
+ * 所以第三步必须真的调一次；本来就开着时这是一次无变化的写入，不会把用户的设置改回去。
+ */
+async function ensureReceiving(): Promise<void> {
+  const projectId = state.projectId;
+  if (!projectId || !client) return;
+  try {
+    const saved = await client.setAssistReceiving(projectId, true);
+    markCollabProjectAssistReceiving(projectId, saved.enabled);
+  } catch {
+    // 开不起来时卡片会一直停在等待：用户可以跳过这一步，或稍后再进项目设置自己开一次。
   }
 }

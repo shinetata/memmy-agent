@@ -80,21 +80,22 @@ describe("the demo guide preview", () => {
     }
   });
 
-  it("covers the tour steps on the board, ending on the sidebar new-task button", async () => {
+  it("covers the tour steps on the board, ending on the board's new-task button", async () => {
     expect(DEMO_GUIDE_PREVIEW_STEPS["t-board"]).toBe("tour-board");
     expect(DEMO_GUIDE_PREVIEW_STEPS["t-tabs"]).toBe("tour-tabs");
     expect(DEMO_GUIDE_PREVIEW_STEPS["t-associate"]).toBe("tour-associate");
     expect(DEMO_GUIDE_PREVIEW_STEPS["t-associate-pick"]).toBe("tour-associate-pick");
     expect(DEMO_GUIDE_PREVIEW_STEPS["t-new-task"]).toBe("tour-new-task");
 
-    // 每一步的锚点都在预览页上：任务列表那一片、成员行上的「请求协助」、工具条右侧的关联任务、关联会话弹窗、侧栏的「＋」。
+    // 每一步的锚点都在预览页上：任务列表那一片、成员行上的「请求协助」、工具条右侧的关联任务、关联会话弹窗、
+    // 工具条上的「新建任务」（不再用侧栏项目行那个「＋」）。
     // 「项目名与成员」那一步已经删掉，也没有 board-header 这个锚点；看板上的 tab 行也随「协助」一起撤掉了。
     for (const [step, anchor] of [
       ["t-board", "board-list"],
       ["t-tabs", "board-member-ask"],
       ["t-associate", "board-associate"],
       ["t-associate-pick", "associate-pick"],
-      ["t-new-task", "sidebar-new-task"]
+      ["t-new-task", "board-new-task"]
     ] as const) {
       await render(step);
       expect(document.querySelector(`[data-demo-guide='${anchor}']`)).toBeTruthy();
@@ -130,7 +131,8 @@ describe("the demo guide preview", () => {
 
     await render("3-done");
     // 跑完之后：协助 chip 到已完成，底部一行写明结果发给了谁，卡片给出「完成」。
-    expect(document.querySelector("[data-collab-assist-chip]")?.getAttribute("data-state")).toBe("stopped");
+    // 做完了是成功那一档，不能跟「停下」共用一个红色。
+    expect(document.querySelector("[data-collab-assist-chip]")?.getAttribute("data-state")).toBe("done");
     expect(document.querySelector("[data-collab-assist-dock]")?.textContent).toContain("结果已发给小饭团");
     expect(document.body.textContent).toContain("完成");
   });

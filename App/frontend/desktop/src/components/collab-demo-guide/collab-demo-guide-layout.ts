@@ -72,15 +72,17 @@ const TARGETS: Record<DemoGuidePhase, DemoGuideTarget> = {
   // 看板导览：纯介绍，只亮区域、不描边、不接点击（`blockRest` 让亮区里也点不动）。
   // 第一站只框任务列表那一片：看板头部与工具条不属于这一步要讲的东西。
   "tour-board": { region: "board-list", stroke: null, blockRest: true, radius: 14, padding: 6, prefer: "right" },
-  // 第二站讲「请成员协助」：亮区落在成员段头上那颗「请求协助」按钮；这个项目还没有可请的人时退回任务列表。
-  "tour-tabs": { region: "board-member-ask", stroke: null, blockRest: true, radius: 10, padding: 6, prefer: "right", fallback: "board-list" },
+  // 第二站讲「请成员协助」：亮区落在成员段头上那颗「请求协助」按钮。
+  // 这颗按钮平时只在鼠标悬停时出现，看板在演示的这一站把它常显（否则亮区里空着一块，看不出要讲哪里）。
+  "tour-tabs": { region: "board-member-ask", stroke: null, blockRest: true, radius: 8, padding: 6, prefer: "right", fallback: "board-list" },
   // 「关联任务」这一步只亮给人看：不描边、点了也不打开弹窗、不写任何数据。
   "tour-associate": { region: "board-associate", stroke: null, blockRest: true, radius: 10, padding: 6, prefer: "bottom" },
   // 「关联会话」：整张弹窗作为亮区，亮区里一个控件都不给点（blockRest 且不描边）；
   // 卡片贴到弹窗左边，把扫描出来的列表完整留在右边。
   "tour-associate-pick": { region: "associate-pick", stroke: null, blockRest: true, radius: 16, padding: 6, prefer: "left" },
-  // 侧栏当前项目右侧的「＋」：亮给它，同样点不动。
-  "tour-new-task": { region: "sidebar-new-task", stroke: null, blockRest: true, radius: 9, padding: 5, prefer: "bottom" },
+  // 工具条右侧的「新建任务」：亮给它，同样点不动。
+  // 用看板上这颗而不是侧栏项目行尾部的「＋」：这里是人真的会看的那一颗，也更醒目。
+  "tour-new-task": { region: "board-new-task", stroke: null, blockRest: true, radius: 9, padding: 6, prefer: "bottom", fallback: "board-list" },
   // 体验三步：圆角与内边距沿用默认值（12 / 6），与改造前一致。
   "task-row": { region: "board-task-row", stroke: "board-task-row", blockRest: false },
   // 只读面板可以滚动阅读，但只有头部那个「继续任务」能点。
@@ -91,15 +93,16 @@ const TARGETS: Record<DemoGuidePhase, DemoGuideTarget> = {
   "ask-compose": { region: "composer", stroke: "composer-send", blockRest: true },
   "ask-waiting": { region: "conversation", stroke: null, blockRest: true },
   "ask-done": { region: "conversation", stroke: null, blockRest: true },
-  "settings-open": { region: "board-settings", stroke: "board-settings", blockRest: false },
-  // 第三步：接收协助默认开启，这一屏只讲「它开着、随时可以关」——描边标出开关，开关本身不给点。
-  "settings-assist": { region: "settings-assist", stroke: "settings-assist-switch", blockRest: true, blockStroke: true },
   "help-waiting": { region: "board-main", stroke: null, blockRest: true },
   "help-dialog": { region: "assist-dialog", stroke: "assist-allow", blockRest: true },
   // 允许之后人站到那条 Memmy 任务里：亮整个任务页，协助条、执行过程与结果都在里面；人若是留在看板上，改亮那条协助。
+  // 这一步已经办成、只等人看：整块亮区都不接点击（`blockRest`），否则人顺手点「停止」或输入框就把正在跑的这一步打断了。
   // 底部要留出来：任务页最下面是「结果已发给谁」那一行，正是这一步要看的东西。
-  "help-running": { region: "assist-task", stroke: null, blockRest: false, fallback: "board-main", cardBottomReserve: 150 },
-  "help-done": { region: "assist-task", stroke: null, blockRest: false, fallback: "board-main", cardBottomReserve: 150 },
+  // 允许之后人就在那条 Memmy 任务里：亮整个任务页，协助条、执行过程与结果都在里面。
+  // 这一步已经办成、只等人看：整块亮区都不接点击，免得人顺手点「停止」或输入框把正在跑的这一步打断。
+  // 底部要留出来：任务页最下面是「结果已发给谁」那一行，正是这一步要看的东西。
+  "help-running": { region: "assist-task", stroke: null, blockRest: true, fallback: "board-main", cardBottomReserve: 150 },
+  "help-done": { region: "assist-task", stroke: null, blockRest: true, fallback: "board-main", cardBottomReserve: 150 },
   // 拒绝之后没有任务可看：留在看板上，亮整块看板，卡片说这次请求已经结束。
   "help-rejected": { region: "board-main", stroke: null, blockRest: true },
   complete: { region: "board-main", stroke: null, blockRest: false }

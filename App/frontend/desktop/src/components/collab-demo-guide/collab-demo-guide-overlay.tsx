@@ -9,7 +9,6 @@
  * 底部左边是「退出引导」、右边是「上一步」与主按钮；「跳过这一步」是次要动作，放在正文下面一行。
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { Check } from "lucide-react";
 import { Memmy, type MemmyPose } from "../mascot/memmy.js";
 import {
   DEMO_GUIDE_ASSIST_PHASES,
@@ -111,8 +110,6 @@ const POSES: Partial<Record<DemoGuidePhase, MemmyPose>> = {
   "ask-compose": "chat",
   "ask-waiting": "think",
   "ask-done": "celebrate",
-  "settings-open": "wrench",
-  "settings-assist": "shield",
   "help-waiting": "peek",
   "help-dialog": "shield",
   "help-running": "work",
@@ -252,12 +249,6 @@ export function demoGuideCard(state: DemoGuideState, t: Translate): DemoGuideCar
       });
     case "ask-done":
       return base(2, t("collab.demo.ask.body", { name }), { title: t("collab.demo.ask.title"), action: "next" });
-    case "settings-open":
-      // 这句按定稿写死了演示成员的名字，不带占位符：传了值也不会被替换，测试里也钉住了原句。
-      return base(3, t("collab.demo.settings.body"));
-    case "settings-assist":
-      // 默认已开启，这一屏不再让人去拨开关：卡片上的「下一步」直接往下走。
-      return base(3, t("collab.demo.assist.body"), { action: "next" });
     case "help-waiting":
       return base(3, "", { status: t("collab.demo.help.incoming", { name }) });
     case "help-dialog":
@@ -280,8 +271,25 @@ export function demoGuideCard(state: DemoGuideState, t: Translate): DemoGuideCar
  * 导览段的卡片：纯介绍，头部是「介绍」徽章 + 步骤名，没有「跳过这一步」，最后一步的按钮是「开始协作」。
  * 形状由结构那边决定，这里只决定第几步说什么。
  */
+/**
+ * 「请求协助」那一站的正文：与升级用户的协助上手同一句话，其中「请求协助」用重字。
+ *
+ * 两处讲的是同一件事，留两套写法迟早会走偏：导览这一站直接取那一套。
+ */
+const ASSIST_SENTENCE_PARTS: Array<
+  [MessageKey, boolean]
+> = [
+  ["collab.demo.assistGuide.body.1.beforeAction", false],
+  ["collab.demo.assistGuide.body.1.action", true],
+  ["collab.demo.assistGuide.body.1.trail", false]
+];
+
 export function demoGuideTourCard(index: number, t: Translate): DemoGuideCard {
   const key = String(index + 1) as "1" | "2" | "3" | "4" | "5";
+  // 第二站（请求协助）用那句短的：讲清「在哪点、点完怎样」，不再一口气说四件事。
+  const assistParts = index === 1
+    ? ASSIST_SENTENCE_PARTS.map(([messageKey, strong]) => ({ text: t(messageKey), strong }))
+    : null;
   return {
     step: null,
     badge: t("collab.demo.tour.label"),
@@ -289,7 +297,10 @@ export function demoGuideTourCard(index: number, t: Translate): DemoGuideCard {
     pose: TOUR_POSES[index] ?? "hum",
     wide: false,
     title: null,
-    body: t(("collab.demo.tour.body." + key) as MessageKey),
+    body: assistParts
+      ? assistParts.map((part) => part.text).join("")
+      : t(("collab.demo.tour.body." + key) as MessageKey),
+    ...(assistParts ? { bodyParts: assistParts } : {}),
     status: null,
     action: null,
     // 导览第一屏前面只有「已加入」提示窗，没有可退的一屏；由调用方按阶段再算一次。
@@ -328,13 +339,12 @@ const DEMO_GUIDE_HOLE_RADIUS = 12;
  * 亮区里再点一个控件时，第二圈描边的圆角。
  *
  * `layout` 的 `stroke` 只描述锚点名、不描述圆角，而这两个控件的形状又和它所在的区块不一样：
- * 圆角跟着控件自己的形状走：输入框里的发送按钮是胶囊（`.composer-action-submit` 的 `border-radius: 999px`），
- * 协助开关也是胶囊。所以在这里按阶段直写；其余控件用 {@link INNER_RING_RADIUS_DEFAULT}。
+ * 圆角跟着控件自己的形状走：输入框里的发送按钮是胶囊（`.composer-action-submit` 的 `border-radius: 999px`）。
+ * 所以在这里按阶段直写；其余控件用 {@link INNER_RING_RADIUS_DEFAULT}。
  */
 const INNER_RING_RADIUS: Partial<Record<DemoGuidePhase, number>> = {
   compose: 999,
-  "ask-compose": 999,
-  "settings-assist": 999
+  "ask-compose": 999
 };
 const INNER_RING_RADIUS_DEFAULT = 999;
 
@@ -434,6 +444,13 @@ export function CollabDemoGuideOverlay(props: {
   /** 窗口缩放、滚动、动画结束都会让它加一：测量随之一并重跑。 */
   const [measureTick, setMeasureTick] = useState(0);
   const cardRef = useRef<HTMLDivElement | null>(null);
+  /**
+   * 最近一帧量到的位置。
+   *
+   * 切页时新锚点要等页面渲染好才出现（授权弹窗等云端把请求读回来、任务页等打开那条会话），
+   * 这几百毫秒里沿用这一份，蒙版与说明卡都不消失。
+   */
+  const lastLayoutRef = useRef<{ hole: Rect; stroke: Rect | null; viewport: Viewport } | null>(null);
   /** 上一次把锚点滚进视野的时间：锚点没露出就隔一会儿再滚一次，不跟每帧的测量抢。 */
   const scrolledPhaseRef = useRef(0);
   /** 蒙版自己铺满整个窗口：视口尺寸量它，而不是问 window——两处在截图与内嵌环境里可能不一致。 */
@@ -496,6 +513,11 @@ export function CollabDemoGuideOverlay(props: {
     if (!masking || typeof window === "undefined") return;
     setLayout(measure().layout);
   }, [masking, measure, state.phase]);
+
+  // 记住最近一帧的有效位置：切页那几帧里锚点还没出现，用它顶上，蒙版不会整块消失。
+  useEffect(() => {
+    if (layout) lastLayoutRef.current = layout;
+  }, [layout]);
 
   useEffect(() => {
     if (!masking) {
@@ -586,35 +608,19 @@ export function CollabDemoGuideOverlay(props: {
   }, [state.phase, state.status]);
 
   const card = useMemo(() => demoGuideCard(state, t), [state, t]);
-  // 完成弹窗也讲剧本里做过的那件事：与卡片用同一份文案，取不到时同样退回缺省。
-  const copy = state.copy ?? DEMO_GUIDE_COPY_FALLBACK;
 
+  /**
+   * 完成弹窗只留一句「接下来做什么」。
+   *
+   * 早先这里列了这一步做过哪几件事、再补一段共享与协助的说明；但人刚亲手做完，清单只是重复一遍，
+   * 说明也该由前面的导览承担。现在只写下一步：把同事请进项目。
+   */
   if (state.status === "complete") {
     return (
       <div className={styles.completeLayer} role="dialog" aria-modal="true" aria-label={t("collab.demo.complete.title")}>
         <div className={styles.complete}>
           <h2 className={styles.completeTitle}>{t("collab.demo.complete.title")}</h2>
-          <ul className={styles.doneList}>
-            {state.done.task ? (
-              <li className={styles.doneItem}>
-                <Check size={15} className={styles.doneMark} aria-hidden="true" />
-                <span>{t("collab.demo.complete.task", { name: state.memberName, next: copy.taskNext })}</span>
-              </li>
-            ) : null}
-            {state.done.ask ? (
-              <li className={styles.doneItem}>
-                <Check size={15} className={styles.doneMark} aria-hidden="true" />
-                <span>{t("collab.demo.complete.ask", { name: state.memberName })}</span>
-              </li>
-            ) : null}
-            {state.done.help ? (
-              <li className={styles.doneItem}>
-                <Check size={15} className={styles.doneMark} aria-hidden="true" />
-                <span>{t("collab.demo.complete.help", { name: state.memberName })}</span>
-              </li>
-            ) : null}
-          </ul>
-          <p className={styles.left}>{t("collab.demo.complete.left")}</p>
+          <p className={styles.completeLead}>{t("collab.demo.complete.lead")}</p>
           <div className={styles.completeFoot}>
             <button type="button" className={styles.actionGhost} onClick={props.onInvite}>
               {t("collab.demo.complete.invite")}
@@ -630,12 +636,23 @@ export function CollabDemoGuideOverlay(props: {
 
   if (!visible) return null;
 
-  if (!layout) {
-    // 锚点还没到位或还没量出位置：先只摆一个空的容器，量尺寸用的就是它。
-    return <div ref={rootRef} className={styles.root} />;
+  /**
+   * 切页的瞬间锚点还没渲染出来（授权弹窗要等云端把请求读回来、任务页要等打开那条会话）。
+   *
+   * 以前这里直接返回一个空的容器，于是那几帧里蒙版、说明卡一起消失，页面亮着还能点——
+   * 人看到的就是「引导闪没了」。改成先沿用上一帧的位置，锚点一到位再换过去；
+   * 连上一帧都没有（刚进引导）时至少压一层暗色，页面不会被误点。
+   */
+  const shown = layout ?? lastLayoutRef.current;
+  if (!shown) {
+    return (
+      <div ref={rootRef} className={styles.root}>
+        <div className={styles.pendingScrim} onClick={bump} aria-hidden="true" />
+      </div>
+    );
   }
 
-  const { hole, stroke, viewport } = layout;
+  const { hole, stroke, viewport } = shown;
   // 窄窗口下卡片收窄到窗口以内，绝不横向溢出。
   const fullCardWidth = Math.min(card.wide ? DEMO_GUIDE_CARD_WIDTH_WIDE : DEMO_GUIDE_CARD_WIDTH, viewport.width - 24);
   // 亮区左右两侧各剩多少：放得下整张卡片时按原宽度，放不下但收窄后能放下就用收窄的宽度。

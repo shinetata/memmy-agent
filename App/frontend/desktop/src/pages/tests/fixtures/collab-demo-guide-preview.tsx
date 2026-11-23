@@ -5,7 +5,7 @@
  * 这样不连本机接口也能逐步检查亮区位置、说明卡会不会挡住目标、窄窗口下是否溢出。
  */
 import type { CSSProperties, ReactNode } from "react";
-import { Check, ChevronDown, LifeBuoy, Link2, MessageSquarePlus, Search, Settings, Send, UserPlus } from "lucide-react";
+import { Check, ChevronDown, LifeBuoy, Link2, Search, Settings, Send, UserPlus } from "lucide-react";
 import { I18nProvider } from "../../../i18n/i18n-provider.js";
 import { CollabDemoGuideOverlay } from "../../../components/collab-demo-guide/collab-demo-guide-overlay.js";
 import { demoGuideIsAssistPhase, demoGuideIsTourPhase, type DemoGuidePhase, type DemoGuideState } from "../../../app/collab-demo-guide-store.js";
@@ -42,8 +42,6 @@ export const DEMO_GUIDE_PREVIEW_STEPS = {
   "2-done": "ask-done",
   // 已经用过项目协作的人第一次看到协助时的两屏（看板上的介绍）。
   "a-intro": "assist-intro",
-  "3-gear": "settings-open",
-  "3-settings": "settings-assist",
   "3-waiting": "help-waiting",
   "3-dialog": "help-dialog",
   "3-running": "help-running",
@@ -110,54 +108,15 @@ const card: CSSProperties = {
   boxShadow: "0 1px 2px rgba(16,26,25,.06)"
 };
 
-/**
- * 侧栏：真实客户端里它在看板左边，项目名一行右侧就是「＋新建任务」。
- * 只有导览讲到「侧栏新建任务」时才摆出来，其他步骤的截图仍按原来的满宽看板。
- */
-function PreviewSidebar() {
-  return (
-    <div
-      style={{
-        position: "absolute",
-        left: 0,
-        top: 0,
-        bottom: 0,
-        width: 216,
-        padding: "18px 10px",
-        background: "color-mix(in srgb, #f4f7f6 70%, #fff)",
-        borderRight: "1px solid rgba(16,26,25,.06)"
-      }}
-    >
-      <div style={{ fontSize: 12, color: "rgba(16,26,25,.42)", padding: "0 8px 8px" }}>项目</div>
-      <div className="app-frame-project-row" style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 8px", borderRadius: 8, background: "rgba(16,26,25,.05)" }}>
-        <span aria-hidden="true" style={{ fontSize: 12, color: "rgba(16,26,25,.5)" }}>▾</span>
-        <span style={{ flex: 1, fontSize: 13, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-          项目协作体验
-        </span>
-        <button
-          type="button"
-          aria-label="新建任务"
-          data-demo-guide="sidebar-new-task"
-          className="task-icon-button"
-          style={{ width: 24, height: 24, display: "inline-flex", alignItems: "center", justifyContent: "center", borderRadius: 8, border: 0, background: "transparent", cursor: "pointer" }}
-        >
-          <MessageSquarePlus size={14} aria-hidden="true" />
-        </button>
-      </div>
-      <div style={{ marginTop: 10, fontSize: 12.5, color: "rgba(16,26,25,.5)", padding: "0 8px" }}>下周五的团队分享会</div>
-    </div>
-  );
-}
-
 /** 看板的一列：标题、任务行、右侧项目配置，与真实看板同一套类名与外观。 */
-function BoardSurface(props: { withSettings: boolean; withSidebar?: boolean; withMembersAnchor?: boolean; assistIntroRow?: boolean }) {
+function BoardSurface(props: { withSettings: boolean; withMembersAnchor?: boolean; assistIntroRow?: boolean }) {
   return (
     <div
       className={board.page}
       data-demo-guide="board-main"
       style={{
         position: "absolute",
-        inset: props.withSidebar ? "0 0 0 216px" : 0,
+        inset: 0,
         background: "var(--color-canvas-oat, #f4f7f6)"
       }}
     >
@@ -200,6 +159,10 @@ function BoardSurface(props: { withSettings: boolean; withSidebar?: boolean; wit
               <input readOnly placeholder="搜索任务" className={board.search} />
             </label>
             <span className={board.grow} />
+            {/* 「新建任务」：导览最后一站亮它。 */}
+            <button type="button" className="button button-primary button-sm" data-demo-guide="board-new-task">
+              新建任务
+            </button>
             {/* 「关联任务」：演示第二步唯一亮起来的控件。 */}
             <button type="button" className="button button-primary button-sm" data-demo-guide="board-associate">
               <Link2 size={14} aria-hidden="true" />关联任务
@@ -383,36 +346,6 @@ function ChatSurface(props: { phase: DemoGuidePhase }) {
   );
 }
 
-/** 项目设置里「协作」的一组：接收协助请求的开关。 */
-function SettingsSurface() {
-  return (
-    <div style={{ position: "absolute", inset: 0, background: "rgba(16,26,25,.06)", display: "flex", alignItems: "center", justifyContent: "center" }}>
-      <div style={{ width: 520, background: "#fff", borderRadius: 16, padding: 22, boxShadow: "0 18px 44px rgba(16,26,25,.18)" }}>
-        <b style={{ fontSize: 15 }}>项目设置</b>
-        <div className={board.settingsSectionLabel}>文件夹</div>
-        <div className={board.settingsGroup}>
-          <div className={board.settingsRow}>
-            <span className={board.settingsRowLabel}>项目协作体验</span>
-          </div>
-        </div>
-        <div className={board.settingsSectionLabel}>协作</div>
-        <div className={board.settingsGroup} data-demo-guide="settings-assist">
-          <div className={board.settingsRow}>
-            <span className={board.settingsRowLabel}>共享给成员的任务</span>
-            <span className={board.settingsRowValue}>1 / 1</span>
-          </div>
-          <div className={board.settingsRow}>
-            <span className={board.settingsRowLabel}>接收协助请求</span>
-            <span className={board.settingsRowControl}>
-              <button type="button" role="switch" aria-checked="false" className={board.settingsSwitch} data-demo-guide="settings-assist-switch" />
-            </span>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 /**
  * 关联会话弹窗：标题、Agent 列与扫出来的会话列表；展示模式没有底部。
  *
@@ -529,8 +462,9 @@ function AssistTaskSurface(props: { done: boolean }) {
     maxWidth: "100%",
     padding: "5px 12px 5px 10px",
     borderRadius: 999,
-    background: props.done ? "color-mix(in srgb, #f87b8e 10%, #fff)" : "color-mix(in srgb, #5cbfae 11%, #fff)",
-    color: props.done ? "#c4485c" : "#3aa893",
+    // 进行中与已完成都是薄荷绿（完成后停止呼吸），只有停下与失败才是红的。
+    background: props.done ? "color-mix(in srgb, #5cbfae 12%, #fff)" : "color-mix(in srgb, #5cbfae 11%, #fff)",
+    color: "#3aa893",
     fontSize: 12.5
   } as const;
   const pulseBar = (height: number, opacity: number): CSSProperties => ({
@@ -588,8 +522,8 @@ function AssistTaskSurface(props: { done: boolean }) {
           <Send size={13} aria-hidden="true" />
           <span>{props.done ? `结果已发给${MEMBER}` : `执行中，结果会发给${MEMBER}`}</span>
         </div>
-        {/* 执行方的协助 chip：只写是谁的请求，进行中与停下是两种颜色，贴着输入框上方。 */}
-        <div style={chip} data-collab-assist-chip="" data-state={props.done ? "stopped" : "running"}>
+        {/* 执行方的协助 chip：只写是谁的请求，进行中与已完成都是绿的（后者不呼吸），停下才变红。 */}
+        <div style={chip} data-collab-assist-chip="" data-state={props.done ? "done" : "running"}>
           <span style={{ display: "inline-flex", alignItems: "center", gap: 2, height: 12 }} aria-hidden="true">
             <i style={pulseBar(4, 0.55)} />
             <i style={pulseBar(11, 1)} />
@@ -636,14 +570,12 @@ export function DemoGuidePreview(props: { step: DemoGuidePreviewStep }) {
   else if (tour) {
     surface = (
       <>
-        <BoardSurface withSettings withSidebar={phase === "tour-new-task"} />
-        {phase === "tour-new-task" ? <PreviewSidebar /> : null}
+        <BoardSurface withSettings />
         {phase === "tour-associate-pick" ? <AssociatePickSurface locked={props.step === "t-associate-lock"} /> : null}
       </>
     );
   }
   else if (phase === "reader") surface = (<><BoardSurface withSettings={false} /><ReaderSurface /></>);
-  else if (phase === "settings-assist") surface = <SettingsSurface />;
   // 协助上手：两屏都落在看板上（第二屏亮 tab 那一行）。
   else if (demoGuideIsAssistPhase(phase)) surface = <BoardSurface withSettings assistIntroRow />;
   else if (phase === "help-dialog") surface = <AssistDialogSurface />;

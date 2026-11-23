@@ -97,14 +97,14 @@ function atAskDone(): DemoGuideState {
   return run(atAskCompose(), [{ type: "composer-sent" }, { type: "assist-delivered" }, { type: "agent-settled" }]);
 }
 
-/** 走到第三步的项目设置。 */
-function atSettings(): DemoGuideState {
+/** 走到第三步：第二步做完就直接等小饭团发来请求，中间不再有项目设置那一屏。 */
+function atHelpWaiting(): DemoGuideState {
   return run(atAskDone(), [{ type: "next" }]);
 }
 
 /** 走到第三步的授权弹窗。 */
 function atHelpDialog(): DemoGuideState {
-  return run(atSettings(), [{ type: "settings-opened" }, { type: "receiving-on" }, { type: "help-request-seen" }]);
+  return run(atHelpWaiting(), [{ type: "help-request-seen" }]);
 }
 
 describe("demo guide state machine", () => {
@@ -319,11 +319,9 @@ describe("demo guide state machine", () => {
     expect(demoGuideReducer(seen, { type: "assist-seen" })).toBe(seen);
   });
 
-  it("walks the last step from settings to the finished assist", () => {
-    const settings = atSettings();
-    expect(settings.phase).toBe("settings-open");
-    expect(demoGuideReducer(settings, { type: "settings-opened" }).phase).toBe("settings-assist");
-    const waiting = demoGuideReducer(settings, { type: "receiving-on" });
+  it("walks the last step from the request arriving to the finished assist", () => {
+    // 第二步做完直接就等请求：接收协助默认开着，不再插一屏让人去项目设置里拨开关。
+    const waiting = atHelpWaiting();
     expect(waiting.phase).toBe("help-waiting");
     const dialog = demoGuideReducer(waiting, { type: "help-request-seen" });
     expect(dialog.phase).toBe("help-dialog");
@@ -354,18 +352,17 @@ describe("demo guide state machine", () => {
     expect(skippedTask.done.task).toBe(false);
     expect(skippedTask.prefill?.text).toBe(ASK_SENTENCE);
 
-    // 跳过请成员协助：去项目设置，那句话一并收走。
-    const settings = demoGuideReducer(skippedTask, { type: "skip" });
-    expect(settings.phase).toBe("settings-open");
-    expect(settings.skipped.ask).toBe(true);
-    expect(settings.prefill).toBeNull();
+    // 跳过请成员协助：直接等小饭团发来请求，那句话一并收走。
+    const waiting = demoGuideReducer(skippedTask, { type: "skip" });
+    expect(waiting.phase).toBe("help-waiting");
+    expect(waiting.skipped.ask).toBe(true);
+    expect(waiting.prefill).toBeNull();
   });
 
   it("ends without the completion dialog when every step was skipped", () => {
     const state = run(started(), [
       { type: "skip" },
       { type: "skip" },
-      { type: "settings-opened" },
       { type: "skip" }
     ]);
     expect(state.status).toBe("ended");
@@ -378,8 +375,6 @@ describe("demo guide state machine", () => {
       ...FIRST_STEP,
       { type: "next" },
       { type: "skip" },
-      { type: "settings-opened" },
-      { type: "receiving-on" },
       { type: "help-request-seen" },
       { type: "help-decided", allow: true },
       { type: "help-finished" },
@@ -436,7 +431,8 @@ describe("demo guide state machine", () => {
     expect(demoGuideHeartbeatStep("tour-board")).toBe("1");
     expect(demoGuideHeartbeatStep("reader")).toBe("1");
     expect(demoGuideHeartbeatStep("ask-done")).toBe("2");
-    expect(demoGuideHeartbeatStep("settings-open")).toBe("3");
+    expect(demoGuideHeartbeatStep("ask-done")).toBe("2");
+    expect(demoGuideHeartbeatStep("help-waiting")).toBe("3");
     expect(demoGuideHeartbeatStep("help-running")).toBe("3");
     expect(demoGuideHeartbeatStep("complete")).toBe("finish");
   });
@@ -570,16 +566,11 @@ describe("demo guide state machine", () => {
     expect(demoGuideReducer(running, { type: "back" })).toBe(running);
   });
 
-  it("backs the third step all the way to the settings screen and not into the waiting one", () => {
+  it("backs the third step to the done screen of the asking step", () => {
     // 授权弹窗已经在收件箱里了：退回「等请求」会立刻又被轮询发现、再弹一次，来回跳。
-    expect(demoGuideReducer(atHelpDialog(), { type: "back" }).phase).toBe("settings-open");
-    const waiting = run(atSettings(), [{ type: "settings-opened" }, { type: "receiving-on" }]);
-    expect(waiting.phase).toBe("help-waiting");
-    expect(demoGuideReducer(waiting, { type: "back" }).phase).toBe("settings-open");
-    // 设置里开开关那一屏退回看板（齿轮那一屏），弹窗随之关掉。
-    const settings = run(atSettings(), [{ type: "settings-opened" }]);
-    expect(settings.phase).toBe("settings-assist");
-    expect(demoGuideReducer(settings, { type: "back" }).phase).toBe("settings-open");
+    expect(demoGuideReducer(atHelpDialog(), { type: "back" }).phase).toBe("ask-done");
+    // 「等请求」那一屏退回第二步完成的卡片：接收协助默认开着，退回去不必再让人开一次。
+    expect(demoGuideReducer(atHelpWaiting(), { type: "back" }).phase).toBe("ask-done");
   });
 
   it("refills the sentence when going back to a screen that asks for one", () => {
@@ -596,9 +587,10 @@ describe("demo guide state machine", () => {
   });
 
   it("lands on the real entry of a step that was skipped instead of its done screen", () => {
-    // 跳过第二步 → 停在「去项目设置」。那一屏的上一屏本来是「第二步完成」，但他没做过，该退回输入框。
+    // 跳过第二步 → 停在「等小饭团发来请求」。再退回该看见「请小饭团协助」的输入框，而不是一张
+    // 「第二步已完成」的卡片——他根本没做过。
     const skipped = run(atAskCompose(), [{ type: "skip", prefill: ASK_SENTENCE }]);
-    expect(skipped.phase).toBe("settings-open");
+    expect(skipped.phase).toBe("help-waiting");
     expect(skipped.skipped.ask).toBe(true);
     expect(demoGuideReducer(skipped, { type: "back" }).phase).toBe("ask-compose");
     // 连第一步也跳过时，从第二步输入框再退就要退到任务行，而不是一张「第一步完成」的卡片。
@@ -797,6 +789,39 @@ describe("the assistance intro for people who already used projects", () => {
       .toBe(false);
   });
 
+  it("stays out of the way while a demo is running on that project", () => {
+    // 演示期间云端已经有那条记录，`demoEligible` 因此是假：只看这一个字段就会在完整引导旁边
+    // 再叠一张协助介绍。看板有 `demo.active` 时不进。
+    expect(shouldOfferAssistIntro({
+      collabEnabled: true,
+      demoGuideActive: false,
+      demoEligible: false,
+      demoInProgress: true,
+      assistDone: false,
+      baseDone: false
+    })).toBe(false);
+    // 演示收场、且这次是走完整引导的人：那一次的第三步已经讲过协助，标记也该记上，
+    // 见下一条用例；这里只确认没有演示时可以进来。
+    expect(shouldOfferAssistIntro({
+      collabEnabled: true,
+      demoGuideActive: false,
+      demoEligible: false,
+      demoInProgress: false,
+      assistDone: false,
+      baseDone: true
+    })).toBe(true);
+  });
+
+  it("does not show up again after the full walkthrough, which covers assistance", () => {
+    // 完整引导的第三步就是处理成员的请求：走完（或退出）之后，那段协助介绍没有必要再来一次。
+    setDemoGuideStorageForTest(storage);
+    dispatchDemoGuide({ type: "start-before-project" });
+    dispatchDemoGuide({ type: "next" });
+    void endDemoGuide("exited");
+    expect(readDemoGuideDone(storage)).toBe(true);
+    expect(readAssistGuideDone(storage)).toBe(true);
+  });
+
   it("does not start again on this machine once it was seen", () => {
     startAssistGuide({ localProjectId: "local-1" });
     dispatchDemoGuide({ type: "next" });
@@ -809,11 +834,13 @@ describe("the assistance intro for people who already used projects", () => {
   });
 });
 
-describe("accepting assistance is explained, not switched on by hand", () => {
-  it("moves on from the settings screen without asking for a click on the switch", () => {
+describe("accepting assistance needs no screen of its own", () => {
+  it("goes from the asking step straight to waiting for the request", () => {
     const state = started();
-    const waiting = demoGuideReducer({ ...state, phase: "settings-assist" }, { type: "next" });
+    const waiting = demoGuideReducer({ ...state, phase: "ask-done" }, { type: "next" });
     expect(waiting.phase).toBe("help-waiting");
     expect(waiting.status).toBe("active");
+    // 中间没有「去项目设置」那一屏：第三步只有等请求、授权弹窗、执行与结果。
+    expect(demoGuideStepNumberOf(waiting.phase)).toBe(3);
   });
 });

@@ -341,9 +341,9 @@ describe("the demo guide host", () => {
     expect(cancelAssist).toHaveBeenCalledWith("req-1");
   });
 
-  it("turns receiving back off when the person goes back out of the third step", async () => {
-    // 「接收协助请求」是这一步自己打开的：退回去要关回原样，不能留在开着。
-    const setAssistReceiving = vi.fn().mockResolvedValue({ enabled: false, grants: [] });
+  it("keeps receiving on when the person goes back out of the third step", async () => {
+    // 「接收协助请求」默认开着：退回去不能把它关掉，那等于把人自己的设置改坏了。
+    const setAssistReceiving = vi.fn().mockResolvedValue({ enabled: true });
     const collab = client({ setAssistReceiving });
     stubAnchor("board-main", { left: 100, top: 60, width: 1000, height: 620 });
     await mount(collab, demoState("help-waiting"));
@@ -359,8 +359,9 @@ describe("the demo guide host", () => {
       await Promise.resolve();
     });
 
-    expect(getDemoGuideState().phase).toBe("settings-open");
-    expect(setAssistReceiving).toHaveBeenCalledWith("cloud-1", false);
+    expect(getDemoGuideState().phase).toBe("ask-done");
+    // 只补开、不关：退回去时一次 `false` 都不能写。
+    expect(setAssistReceiving).not.toHaveBeenCalledWith("cloud-1", false);
   });
 
   it("refills the sentence when the person backs into the first step's composer", async () => {
@@ -381,12 +382,12 @@ describe("the demo guide host", () => {
   });
 
   it("goes back to the page the previous screen lives on", async () => {
-    // 项目设置那一屏在看板上，上一屏是第二步的结果（「协助请求已返回」）：它在任务里。
+    // 「等小饭团发来请求」那一屏在看板上，上一屏是第二步的结果（「协助请求已返回」）：它在任务里。
     // 不跳回去的话，`conversation` 锚点在看板上根本不存在，蒙版就一片空白（看起来就是引导没了）。
     const openTaskPage = vi.fn();
     const openBoard = vi.fn();
-    stubAnchor("board-settings", { left: 900, top: 60, width: 28, height: 28 });
-    await mount(client({}), demoState("settings-open"), { route: "/collab", openTaskPage, openBoard });
+    stubAnchor("board-main", { left: 100, top: 60, width: 1000, height: 620 });
+    await mount(client({}), demoState("help-waiting"), { route: "/collab", openTaskPage, openBoard });
     await act(async () => {
       await vi.advanceTimersByTimeAsync(500);
     });

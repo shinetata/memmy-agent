@@ -21,7 +21,7 @@ import {
   isDemoGuideActive,
   subscribeDemoGuide
 } from "../../app/collab-demo-guide-store.js";
-import { loadCollabProjects, markCollabProjectAssistReceiving } from "../../app/collab-projects-store.js";
+import { loadCollabProjects } from "../../app/collab-projects-store.js";
 import { useTranslation } from "../../i18n/use-translation.js";
 import { CollabDemoGuideOverlay } from "./collab-demo-guide-overlay.js";
 import styles from "./collab-demo-guide.module.css";
@@ -135,10 +135,17 @@ export function CollabDemoGuideHost(props: {
     }
   }, [state.status, state.phase, state.localProjectId, props.route]);
 
-  // 第二步（请成员协助）结束后回到看板：下一步是从看板的项目设置开始。
+  // 第二步（请成员协助）结束后回到看板：第三步那条请求要人在看板上接。
+  // 只看「等请求」刚出现的那一拍：人自己走开一下再回来，不至于被反复拽回去。
+  const openedBoardForWaitRef = useRef<string | null>(null);
   useEffect(() => {
-    if (state.status !== "active" || state.phase !== "settings-open") return;
+    if (state.status !== "active" || state.phase !== "help-waiting") {
+      openedBoardForWaitRef.current = null;
+      return;
+    }
     if (!state.localProjectId) return;
+    if (openedBoardForWaitRef.current === state.localProjectId) return;
+    openedBoardForWaitRef.current = state.localProjectId;
     if (props.route === "/collab") return;
     openBoardRef.current(state.localProjectId);
   }, [state.phase, state.status, state.localProjectId, props.route]);
@@ -331,15 +338,8 @@ export function CollabDemoGuideHost(props: {
       });
       return;
     }
-    // 第三步的「接收协助请求」是自己打开的：退回去要关回原样，不然人以为退回去就等于没开过。
-    if (phase === "settings-assist" || phase === "help-waiting" || phase === "help-dialog") {
-      void client.setAssistReceiving(projectId, false).then(() => {
-        // 项目设置里的开关按列表那一份先画：不写回的话，退回后打开设置还会显示开着。
-        markCollabProjectAssistReceiving(projectId, false);
-      }).catch(() => {
-        // 关不掉也不用拦人：下一次进项目设置时那一行会重新读一遍，看到的仍是开着的。
-      });
-    }
+    // 「接收协助请求」不在这里收回：它默认就是开着的（第三步等请求时会补开一次），
+    // 退回去把它关掉才是把人自己的设置改坏了。
   };
 
   return (
@@ -349,14 +349,6 @@ export function CollabDemoGuideHost(props: {
       onSkipJoinEntry={() => dispatchDemoGuide({ type: "skip-join-entry" })}
       onBack={onBack}
       onNext={() => {
-        // 第三步「接收协助」这一屏讲的是默认开启：老项目里可能曾经关过，往下走之前补开一次，
-        // 免得后面一直等不到演示成员的请求。本来开着时这是一次无变化的写入。
-        if (state.phase === "settings-assist" && props.collab && state.projectId) {
-          const projectId = state.projectId;
-          void props.collab.setAssistReceiving(projectId, true).then(() => {
-            markCollabProjectAssistReceiving(projectId, true);
-          }).catch(() => undefined);
-        }
         dispatchDemoGuide(state.phase === "joined"
           // 加入那一屏的主按钮是「继续」：与旧的「开始体验」同一个事件，进看板导览。
           ? { type: "joined-confirmed" }
@@ -378,13 +370,12 @@ export function CollabDemoGuideHost(props: {
       onExit={() => void endDemoGuide("exited")}
       onRetry={() => dispatchDemoGuide({ type: "retry" })}
       onCloseComplete={() => {
-        // 完成弹窗关掉：回这个项目的看板「协助」，两条记录留在眼前（刚才是从任务页过来的）。
+        // 完成弹窗关掉：回这个项目的看板。
+        // 不再展开那次协助的详情：演示一收场，小饭团的会话与协助记录都会删掉，
+        // 展开一个刚被删掉的东西只会让人看到一片空。
         const localProjectId = state.localProjectId;
-        const projectId = state.projectId;
-        const threadId = helpThreadRef.current;
         dispatchDemoGuide({ type: "close-complete" });
         if (!localProjectId) return;
-        if (projectId && threadId) requestAssistFocus({ projectId, threadId });
         openBoardRef.current(localProjectId);
       }}
       onInvite={() => {
