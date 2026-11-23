@@ -5,6 +5,7 @@
  */
 import type { SourceRegistry } from "@memmy/agent-source-readers/adapters/source-registry";
 import type { ConversationMessage, SourceAdapter } from "@memmy/agent-source-readers/adapters/types";
+import { collectToolMessage, parseRenderedTool, type ToolStep } from "../../../../shared/collab-session-digest.js";
 import { rankLocalSessions } from "./local-session-rank.js";
 import { readRecentSessionsFromMetadata } from "./session-metadata/index.js";
 import { createSessionGrouper, type LocalSessionGroup, type SessionGrouper } from "./session-group.js";
@@ -36,7 +37,8 @@ export const MAX_READ_MANY = 50;
 export interface LocalSessionTurn {
   question: string;
   reply: string;
-  steps: string[];
+  /** 工具调用摘要：调用什么、参数要点、输出要点，一轮的原文已按 T0 压过。 */
+  steps: ToolStep[];
   startedAt: string;
 }
 
@@ -431,7 +433,7 @@ function appendMessage(builder: SessionBuilder, message: ConversationMessage): v
     }
     return;
   }
-  turn.steps.push(toolName(message));
+  appendToolMessage(turn, message);
 }
 
 function toCandidate(session: LocalSession): LocalSessionCandidate {
@@ -453,5 +455,23 @@ function toolName(message: ConversationMessage): string {
   if (typeof fromMeta === "string" && fromMeta.trim()) {
     return fromMeta.trim();
   }
-  return /^Tool:\s*(\S+)/u.exec(message.content)?.[1] ?? "tool";
+  return parseRenderedTool(message.content).name ?? "tool";
+}
+
+/**
+ * 一次调用在原生记录里是两条消息：call 写入了入参，result 写入了输出，两条的 toolCallId 相同。
+ * 这里只原样攒着，回合读完时由 finishSession 合并——同一次调用算一步，不是两步。
+ */
+function appendToolMessage(turn: LocalSessionTurn, message: ConversationMessage): void {
+  const parsed = parseRenderedTool(message.content);
+  const meta = message.rawMeta ?? {};
+  // id 优先取原生元数据，codex 的 tool 消息没有它，只能从正文的 `Call ID:` 行读。
+  const metaId = typeof meta.toolCallId === "string" ? meta.toolCallId.trim() : "";
+  const callId = metaId || parsed.callId || "";
+  collectToolMessage(turn, {
+    ...(callId ? { callId } : {}),
+    name: toolName(message),
+    input: parsed.input,
+    output: parsed.output
+  });
 }

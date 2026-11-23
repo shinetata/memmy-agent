@@ -17,6 +17,7 @@ import {
   type CollabSessionTurn,
   type CollabSyncProgress,
   type CollabSyncResult,
+  type CollabToolStep,
   type LocalAgentSession,
   type LocalSessionGroup
 } from "../api/collab-client.js";
@@ -3130,9 +3131,11 @@ function folderNameOf(path: string): string {
 }
 
 /**
- * A cloud session read as a conversation: the person's question, then the Agent's answer.
- * Tool steps stay in the stored transcript and are not drawn here. Members can read each other's
- * sessions, but only the person who shared one can delete it, which the board's row menu already enforces.
+ * A cloud session read as a conversation: the person's question, then the Agent's answer, then a folded
+ * list of the tool calls that turn made. Tool text in the shared copy is already summarised and may have been
+ * shortened to fit the size limit, so the list says where it was compressed instead of pretending to be complete.
+ * Members can read each other's sessions, but only the person who shared one can delete it, which the board's row
+ * menu already enforces.
  *
  * It floats on the right of the board rather than opening as a dialog: the list stays visible, so reading
  * someone else's task never loses the place it came from.
@@ -3173,7 +3176,9 @@ function SessionReaderPanel(props: {
   const spoken = (data.turns.flatMap((turn) => {
     const question = visibleQuestion(turn.question);
     const reply = visibleReply(turn.reply);
-    return question || reply ? [{ question, reply, startedAt: turn.startedAt }] : [];
+    return question || reply
+      ? [{ question, reply, startedAt: turn.startedAt, steps: turn.steps, omittedBefore: turn.omittedBefore ?? 0 }]
+      : [];
   })).map((turn, index) => ({ ...turn, number: index + 1 }));
   // 一个任务只来自一个 Agent：名字与图标只标一次，回复正文保持干净。
   const firstAgent = spoken.findIndex((turn) => turn.reply);
@@ -3250,8 +3255,22 @@ function SessionReaderPanel(props: {
             // 打开面板时只有开头几轮真在屏上：其余的先按估算高度占位，滚到附近再由 AgentMessageContent
             // 自己展开。否则一个长任务的全部 Markdown、代码块会在同一次提交里算完，点击要等几百毫秒。
             const defer = index >= READER_IMMEDIATE_TURNS && Boolean(turn.reply) && isLikelyExpensiveAgentMarkdown(turn.reply);
+            // 工具步骤的标题先说清有几个真步骤；全被丢弃时改说略去了几次调用。
+            const toolCounts = countToolSteps(turn.steps);
+            const toolsTitle = toolCounts.drawn > 0
+              ? toolCounts.drawn === 1
+                ? t("collab.reader.tools.summaryOne")
+                : t("collab.reader.tools.summary", { count: String(toolCounts.drawn) })
+              : toolCounts.omittedCalls > 0
+                ? t("collab.reader.tools.omittedCalls", { count: String(toolCounts.omittedCalls) })
+                : t("collab.reader.tools.summary", { count: String(turn.steps.length) });
             return (
               <article key={`${turn.startedAt}-${turn.number}`} className={styles.readerTurn}>
+                {turn.omittedBefore > 0 ? (
+                  <span className={styles.readerTurnOmitted}>
+                    {t("collab.reader.turns.omitted", { count: String(turn.omittedBefore) })}
+                  </span>
+                ) : null}
                 {spoken.length > 1 ? (
                   <span className={styles.readerTurnIndex}>{t("collab.reader.turn", { index: String(turn.number) })}</span>
                 ) : null}
@@ -3282,6 +3301,36 @@ function SessionReaderPanel(props: {
                     />
                   </div>
                 ) : null}
+                {turn.steps.length === 0 ? null : (
+                  <details className={styles.readerTools}>
+                    <summary className={styles.readerToolsSummary}>{toolsTitle}</summary>
+                    <ol className={styles.readerToolList}>
+                      {turn.steps.map((step, stepIndex) => {
+                        const omitted = step.name ? 0 : omittedCallCount(step);
+                        if (omitted > 0) {
+                          return (
+                            <li key={`omitted-${stepIndex}`} className={styles.readerToolOmitted}>
+                              {t("collab.reader.tools.omittedCalls", { count: String(omitted) })}
+                            </li>
+                          );
+                        }
+                        return (
+                          <li key={`step-${stepIndex}`} className={styles.readerToolStep}>
+                            <span className={styles.readerToolHead}>
+                              {/* 工具名可能带命名空间或路径，等宽字体、单行省略，不折行 */}
+                              {step.name ? <span className={styles.readerToolName}>{step.name}</span> : null}
+                              {step.truncated ? (
+                                <span className={styles.readerToolNote}>{t("collab.reader.tools.truncated")}</span>
+                              ) : null}
+                            </span>
+                            {step.input ? <span className={styles.readerToolInput}>{step.input}</span> : null}
+                            {step.output ? <span className={styles.readerToolOutput}>{step.output}</span> : null}
+                          </li>
+                        );
+                      })}
+                    </ol>
+                  </details>
+                )}
               </article>
             );
           })}
@@ -3291,6 +3340,28 @@ function SessionReaderPanel(props: {
     </div>,
     document.body
   );
+}
+
+/**
+ * 被整次丢弃的工具调用合成一步：工具名为空，output 是「[... N tool calls omitted ...]」。
+ * 这个标记是共享副本自己写的，不是工具输出，所以按固定形状解。
+ */
+const OMITTED_CALLS_PATTERN = /\[\.\.\.\s*(\d+)\s+tool calls omitted\s*\.\.\.\]/u;
+
+function omittedCallCount(step: CollabToolStep): number {
+  const match = OMITTED_CALLS_PATTERN.exec(step.output);
+  return match ? Number(match[1]) : 0;
+}
+
+/** 一轮的工具步骤：drawn 是真正列出来的步数，omittedCalls 是被丢弃的调用次数。 */
+function countToolSteps(steps: CollabToolStep[]): { drawn: number; omittedCalls: number } {
+  let drawn = 0;
+  let omittedCalls = 0;
+  for (const step of steps) {
+    if (step.name) drawn += 1;
+    else omittedCalls += omittedCallCount(step);
+  }
+  return { drawn, omittedCalls };
 }
 
 /**

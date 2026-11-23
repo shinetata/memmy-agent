@@ -135,8 +135,10 @@ describe("local session reader", () => {
   it("reads one session's turns with replies and tool steps, without injected context", async () => {
     const reader = readerWith([fakeAdapter("claude_code", "Claude Code", [
       message("claude_code", "s-1", "user", "<memmy_memory_context>旧记忆</memmy_memory_context>修复权限弹窗卡死", "2026-10-21T07:00:00.000Z", "/repo"),
-      message("claude_code", "s-1", "tool", "Tool: Bash\n\nInput: ls", "2026-10-21T07:00:01.000Z", "/repo", { toolName: "Bash" }),
-      message("claude_code", "s-1", "tool", "Tool: Edit\n\nInput: {}", "2026-10-21T07:00:03.000Z", "/repo"),
+      // 一次调用是两条消息：call 带入参，result 带输出，两条共用同一个 toolCallId。
+      message("claude_code", "s-1", "tool", "Tool: Bash\n\nCall ID: call-1\n\nInput:\n{\n  \"command\": \"ls\"\n}", "2026-10-21T07:00:01.000Z", "/repo", { toolName: "Bash", toolCallId: "call-1" }),
+      message("claude_code", "s-1", "tool", "Tool: Bash\n\nCall ID: call-1\n\nOutput:\na.txt", "2026-10-21T07:00:02.000Z", "/repo", { toolName: "Bash", toolCallId: "call-1" }),
+      message("claude_code", "s-1", "tool", "Tool: Edit\n\nCall ID: call-2\n\nInput:\n{}", "2026-10-21T07:00:03.000Z", "/repo", { toolName: "Edit", toolCallId: "call-2" }),
       message("claude_code", "s-1", "assistant", "检测请求加了超时。", "2026-10-21T07:00:04.000Z", "/repo"),
       message("claude_code", "s-2", "user", "别的会话", "2026-10-21T08:00:00.000Z", "/repo")
     ])]);
@@ -147,7 +149,11 @@ describe("local session reader", () => {
     expect(session.turns).toEqual([{
       question: "修复权限弹窗卡死",
       reply: "检测请求加了超时。",
-      steps: ["Bash", "Edit"],
+      // 同一次调用的 call 与 result 合成一步，入参与输出压成一行接口。
+      steps: [
+        { name: "Bash", input: "{ \"command\": \"ls\" }", output: "a.txt" },
+        { name: "Edit", input: "{}", output: "" }
+      ],
       startedAt: "2026-10-21T07:00:00.000Z"
     }]);
     await expect(reader.read({ sourceId: "claude_code", conversationId: "missing" })).rejects.toThrow(/Session not found/u);

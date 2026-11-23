@@ -1290,6 +1290,127 @@
   letter-spacing: 0.02em;
 }
 
+/* 轮次合并的痕迹：这一轮之前有几轮被略去，贴在标号上方，比正文安静一档 */
+.readerTurnOmitted {
+  align-self: center;
+  color: var(--collab-ter);
+  font-size: 11.5px;
+}
+
+/* 工具步骤：正文之后的一段折叠摘要，用浅底分层，不画线 */
+.readerTools {
+  min-width: 0;
+  padding: 4px 10px 6px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--collab-ink) 3.5%, var(--color-background-paper, #fff));
+  color: var(--collab-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.readerToolsSummary {
+  padding: 4px 2px;
+  color: var(--collab-muted);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  list-style: none;
+}
+
+.readerToolsSummary::-webkit-details-marker {
+  display: none;
+}
+
+/* 收起时给一个三角标记，展开时朝下；只换字形，不做旋转动画 */
+.readerToolsSummary::before {
+  content: "▸";
+  display: inline-block;
+  width: 12px;
+  color: var(--collab-ter);
+  font-size: 10px;
+}
+
+.readerTools[open] .readerToolsSummary::before {
+  content: "▾";
+}
+
+.readerToolsSummary:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--collab-accent) 45%, transparent);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+.readerToolList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 2px 0 0;
+  padding: 0 0 0 12px;
+  list-style: none;
+}
+
+.readerToolStep {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.readerToolHead {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+/* 工具名可能带命名空间：等宽字体、单行省略，不折行也不撑宽面板 */
+.readerToolName {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--collab-ink-2);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11.5px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.readerToolNote {
+  flex: none;
+  color: var(--collab-ter);
+  font-size: 11px;
+}
+
+/* 入参只露首行：它常常是一长串参数 */
+.readerToolInput {
+  overflow: hidden;
+  color: var(--collab-muted);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 输出最多两行，超出就裁切，避免长日志把面板拉长 */
+.readerToolOutput {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--collab-ter);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11.5px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+}
+
+/* 被丢弃的调用：单独一行说明，不假装是工具输出 */
+.readerToolOmitted {
+  color: var(--collab-ter);
+  font-size: 11.5px;
+}
+
 .readerUser {
   display: flex;
   justify-content: flex-end;

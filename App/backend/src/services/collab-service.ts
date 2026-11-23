@@ -10,6 +10,12 @@ import { homedir } from "node:os";
 import { dirname, join, posix, win32 } from "node:path";
 import { loadCollabAgents, submittedConversationId } from "./collab-added-agents.js";
 import { locateRecordFile, readRecordFile, type RecordBinding } from "./collab-record-file.js";
+import {
+  mergeToolMessages,
+  shapeToolSteps,
+  type RenderedToolMessage,
+  type ToolStep
+} from "../shared/collab-session-digest.js";
 import type { ApiErrorCode } from "./error-envelope.js";
 import { LocalSessionReadError, type LocalSessionReader } from "../adapters/outbound/agent-source/session-reference/local-session-reader.js";
 import {
@@ -84,6 +90,11 @@ const MAX_UPLOAD_TURNS = 300;
 const MAX_QUESTION_CHARS = 4_000;
 const MAX_REPLY_CHARS = 8_000;
 const MAX_STEPS_PER_TURN = 40;
+/** 「执行步骤」一行里每步留多少字：够看出当时干了什么，又不把整段输出搬进概览。 */
+const STEP_INPUT_CHARS = 60;
+const STEP_OUTPUT_CHARS = 80;
+/** 「执行步骤」一行里最多列多少步，其余只报数量。 */
+const MAX_STEP_PARTS = 8;
 /** 会话标题缺失时的兜底：Agent 写回会话的完成通知不算人问的事，跳过它们取第一条真问题。 */
 const NOTIFICATION_TURN_PREFIXES = ["<timestamp>", "<system_notification>", "<task>"];
 const SESSION_ID_PATTERN = /^[A-Za-z0-9-]{1,36}$/u;
@@ -279,8 +290,11 @@ export interface CollabSessionPage {
 export interface CollabSessionTurn {
   question: string;
   reply: string;
-  steps: string[];
+  /** 工具调用摘要；旧云端数据里只有工具名，读到时会补成空入参的对象。 */
+  steps: ToolStep[];
   startedAt: string;
+  /** 这一轮之前云端的降级略去了 N 轮，只有轮次被合并时才有。 */
+  omittedBefore?: number;
 }
 
 /** The agent's project or workspace a session belongs to, or its directory. */
@@ -2942,6 +2956,13 @@ async function readSessionRecords(path: string): Promise<MemmySessionRecords | n
   let lastQuestion = "";
   const turns: CollabSessionTurn[] = [];
   let current: CollabSessionTurn | null = null;
+  // 一次调用在会话文件里是两行：assistant 行的 tool_calls 带入参，tool 行带输出，两行共用 tool_call_id。
+  const toolMessages = new Map<CollabSessionTurn, RenderedToolMessage[]>();
+  const collectTool = (turn: CollabSessionTurn, message: RenderedToolMessage): void => {
+    const collected = toolMessages.get(turn) ?? [];
+    collected.push(message);
+    toolMessages.set(turn, collected);
+  };
 
   for (const line of content.split("\n")) {
     const trimmed = line.trim();
@@ -2981,12 +3002,19 @@ async function readSessionRecords(path: string): Promise<MemmySessionRecords | n
     if (role === "assistant") {
       if (!current) current = { question: "", reply: "", steps: [], startedAt: timestamp };
       current.reply = current.reply ? `${current.reply}\n\n${text(raw.content)}` : text(raw.content);
+      for (const call of list(raw.tool_calls).map(record)) {
+        const fn = record(call.function);
+        collectTool(current, { callId: text(call.id), name: text(fn.name), input: text(fn.arguments) });
+      }
       continue;
     }
     if (role === "tool" && current) {
-      const name = text(raw.name);
-      if (name) current.steps.push(name);
+      collectTool(current, { callId: text(raw.tool_call_id), name: text(raw.name), output: text(raw.content) });
     }
+  }
+  // 回合读完后才压摘要：本轮的工具段总预算要看到全部调用才能决定丢哪几个。
+  for (const [turn, collected] of toolMessages) {
+    turn.steps = shapeToolSteps(mergeToolMessages(collected));
   }
   if (current) turns.push(current);
   if (!turns.length && !title) return null;
@@ -3258,11 +3286,30 @@ function toGroup(raw: unknown): LocalSessionGroup | null {
 
 function toTurn(raw: unknown): CollabSessionTurn {
   const turn = record(raw);
+  const omittedBefore = number(turn.omittedBefore);
   return {
     question: text(turn.question),
     reply: text(turn.reply),
-    steps: list(turn.steps).filter((step): step is string => typeof step === "string"),
-    startedAt: text(turn.startedAt)
+    steps: list(turn.steps).map(toToolStep).filter((step): step is ToolStep => step !== null),
+    startedAt: text(turn.startedAt),
+    ...(omittedBefore > 0 ? { omittedBefore } : {})
+  };
+}
+
+/**
+ * 已上传过的旧任务里，steps 是只有工具名的字符串数组。读到旧数据不能报错：补成空入参、空输出的一步。
+ */
+function toToolStep(raw: unknown): ToolStep | null {
+  if (typeof raw === "string") {
+    return { name: raw, input: "", output: "" };
+  }
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const step = record(raw);
+  return {
+    name: text(step.name),
+    input: text(step.input),
+    output: text(step.output),
+    ...(step.truncated === true ? { truncated: true } : {})
   };
 }
 
@@ -3276,11 +3323,35 @@ function toUploadTurn(raw: unknown): CollabSessionTurn {
   };
 }
 
-/** Collapses repeated tool names, e.g. Bash ×3、Edit. */
-function summarizeSteps(steps: readonly string[]): string {
-  const counts = new Map<string, number>();
-  for (const step of steps) counts.set(step, (counts.get(step) ?? 0) + 1);
-  return [...counts.entries()].map(([name, count]) => (count > 1 ? `${name} ×${count}` : name)).join("、");
+/**
+ * 「执行步骤：」那一行：连续的同一个工具合成 `Bash ×3`，其余每步写清入参与输出要点。
+ * 旧任务的步骤只有工具名，所以空入参、空输出时只写名字，不凭空补一对括号。
+ */
+function summarizeSteps(steps: readonly ToolStep[]): string {
+  const parts: string[] = [];
+  let index = 0;
+  while (index < steps.length) {
+    const step = steps[index]!;
+    let count = 1;
+    if (step.name) {
+      while (index + count < steps.length && steps[index + count]!.name === step.name) count += 1;
+    }
+    parts.push(count > 1 ? `${step.name} ×${count}` : stepText(step));
+    index += count;
+  }
+  const shown = parts.slice(0, MAX_STEP_PARTS);
+  return [...shown, ...(parts.length > shown.length ? [`……等 ${parts.length} 步`] : [])].join("；");
+}
+
+/** 一步的一行：`Bash(npm test) -> 3 passed`；被压缩过的步带上标记。 */
+function stepText(step: ToolStep): string {
+  // 整次调用被丢弃时的那一步没有工具名，只有那句说明。
+  if (!step.name) return oneLine(step.output, STEP_OUTPUT_CHARS);
+  const input = oneLine(step.input, STEP_INPUT_CHARS);
+  const output = oneLine(step.output, STEP_OUTPUT_CHARS);
+  const call = input ? `${step.name}(${input})` : step.name;
+  const text = output ? `${call} -> ${output}` : call;
+  return step.truncated ? `${text}（部分输出已压缩）` : text;
 }
 
 /**

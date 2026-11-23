@@ -155,7 +155,35 @@ describe("collab service", () => {
     expect(reference.text).toContain("共 18 轮，云端保留最近 1 轮。");
     // The cloud says it dropped earlier turns to fit the session cap, so the reader says what it is showing.
     expect(reference.text).toContain("该任务仅保留近期记录");
-    expect(reference.text).toContain("### 第 18 轮\n用户C：重复分享时接口返回 500，怎么处理？\n回复：改为返回 HTTP 409。\n执行步骤：Edit、Bash ×2");
+    // 旧任务里 steps 只有工具名：读到时补成空入参的对象，概览行只写名字，连续的同一个工具合成一处。
+    expect(reference.text).toContain("### 第 18 轮\n用户C：重复分享时接口返回 500，怎么处理？\n回复：改为返回 HTTP 409。\n执行步骤：Edit；Bash ×2");
+  });
+
+  it("prints each step with its arguments and output, and says when one was compressed", async () => {
+    const { fetcher } = fakeFetch({
+      [`GET /api/collab/sessions/${cloudSession.id}`]: () => ({
+        code: 0,
+        data: {
+          session: {
+            ...cloudSession,
+            turns: [{
+              question: "跑一下测试",
+              reply: "测试通过。",
+              steps: [
+                { name: "Bash", input: "{\"command\":\"npm test\"}", output: "3 passed" },
+                { name: "Read", input: "{\"path\":\"/a\"}", output: "文件内容", truncated: true },
+                // 整次调用被云端丢弃时的那一步：没有工具名，只有一句说明。
+                { name: "", input: "", output: "[... 4 tool calls omitted ...]" }
+              ],
+              startedAt: ""
+            }]
+          }
+        }
+      })
+    });
+    const reference = await service(fetcher).readSession(cloudSession.id);
+
+    expect(reference.text).toContain("执行步骤：Bash({\"command\":\"npm test\"}) -> 3 passed；Read({\"path\":\"/a\"}) -> 文件内容（部分输出已压缩）；[... 4 tool calls omitted ...]");
   });
 
   it("prints the turns a read view asks for without saving the whole record", async () => {
@@ -739,11 +767,60 @@ describe("collab service", () => {
     expect(await svc.setTaskSharing("p-9", "task-1", true)).toMatchObject({ shared: true, started: 1 });
     await waitForUploads(svc, "p-9");
 
-    const upload = calls.find((call) => call.method === "PUT")!.body as { sessions: Array<{ source: string; title: string; turns: Array<{ question: string; reply: string; steps: string[] }> }> };
+    const upload = calls.find((call) => call.method === "PUT")!.body as { sessions: Array<{ source: string; title: string; turns: Array<{ question: string; reply: string; steps: unknown[] }> }> };
     expect(upload.sessions[0]).toMatchObject({ source: "memmy", title: "部署记录" });
     expect(upload.sessions[0]!.turns).toEqual([
-      { question: "帮我看下部署", reply: "已确认可以部署。", steps: ["read_file"], startedAt: "2026-10-22T03:00:00.000Z" }
+      {
+        question: "帮我看下部署",
+        reply: "已确认可以部署。",
+        // 这次调用没有入参与输出（记录里只有工具名），仍照实传一步。
+        steps: [{ name: "read_file", input: "", output: "" }],
+        startedAt: "2026-10-22T03:00:00.000Z"
+      }
     ]);
+  });
+
+  it("uploads a Memmy task's tool calls with their arguments and output", async () => {
+    const root = mkdtempSync(join(tmpdir(), "memmy-collab-home-"));
+    roots.push(root);
+    const agentSessions = join(root, "workspace", "sessions");
+    mkdirSync(agentSessions, { recursive: true });
+    const longOutput = `${"A".repeat(600)}${"B".repeat(600)}`;
+    writeMemmyTask(agentSessions, "task-1", "local-9", "跑测试", [
+      { role: "user", content: "跑一下测试", timestamp: "2026-10-22T03:00:00.000Z" },
+      // Memmy 自己写的会话文件：入参在 assistant 行的 tool_calls 里，输出在下一行 tool 记录里。
+      {
+        role: "assistant",
+        content: "",
+        timestamp: "2026-10-22T03:00:01.000Z",
+        tool_calls: [{ id: "call-1", type: "function", function: { name: "Bash", arguments: "{\"command\":\"npm test\"}" } }]
+      },
+      { role: "tool", tool_call_id: "call-1", name: "Bash", content: longOutput, timestamp: "2026-10-22T03:00:02.000Z" },
+      { role: "assistant", content: "测试通过。", timestamp: "2026-10-22T03:00:03.000Z" }
+    ]);
+    const { fetcher, calls } = fakeFetch({
+      "GET /api/collab/projects": () => ({ code: 0, data: { projects: [{ id: "p-9", name: "Memmy 开发", role: "owner", memberCount: 1, sessionCount: 0, createdAt: null }] } }),
+      "PUT /api/collab/projects/p-9/sessions": (call) => {
+        const upload = (call.body as { sessions: Array<{ sourceSessionId: string }> }).sessions[0]!;
+        return { code: 0, data: { sessions: [{ id: `id-${upload.sourceSessionId}` }] } };
+      }
+    });
+    const svc = service(fetcher, { projectsDir: join(root, "projects"), agentSessionsDir: agentSessions });
+    await svc.bindLocalProject("p-9", "local-9");
+    calls.length = 0;
+    await svc.setTaskSharing("p-9", "task-1", true);
+    await waitForUploads(svc, "p-9");
+
+    const upload = calls.find((call) => call.method === "PUT")!.body as {
+      sessions: Array<{ turns: Array<{ steps: Array<{ name: string; input: string; output: string; truncated?: boolean }> }> }>;
+    };
+    // 一次调用只算一步：入参与输出按 tool_call_id 合成，超长输出留头尾并标出被压过。
+    expect(upload.sessions[0]!.turns[0]!.steps).toEqual([{
+      name: "Bash",
+      input: "{\"command\":\"npm test\"}",
+      output: `${"A".repeat(500)} …[omitted]… ${"B".repeat(500)}`,
+      truncated: true
+    }]);
   });
 
   it("titles a task without a generated title by its first question, not by the latest one", async () => {

@@ -140,11 +140,39 @@ const ProjectSessionsResponseSchema = z.object({
   /** Every session matching the query, which may be more than this page. */
   total: z.number().optional()
 });
+/**
+ * 一轮里的一个工具调用摘要。云端从 1.2.7 起给对象（工具名 + 入参摘要 + 输出摘要 + 是否被截断）。
+ * 更早上传的任务副本里只有工具名，读取时补成空串，旧任务照常能读。
+ */
+const ToolStepSchema = z.object({
+  name: z.string(),
+  input: z.string().nullish().transform((value) => value ?? ""),
+  output: z.string().nullish().transform((value) => value ?? ""),
+  /** 入参或输出被压缩过；界面据此提示「部分输出已压缩」。 */
+  truncated: z.boolean().optional()
+});
+export type CollabToolStep = z.infer<typeof ToolStepSchema>;
+const SessionStepSchema = z.preprocess((value) => {
+  if (typeof value === "string") return { name: value, input: "", output: "" };
+  // 早期的对象形式可能缺 input / output：补成空串，不因此让整份会话解析失败。
+  if (value && typeof value === "object") {
+    const step = value as Record<string, unknown>;
+    return {
+      name: typeof step.name === "string" ? step.name : "",
+      input: typeof step.input === "string" ? step.input : "",
+      output: typeof step.output === "string" ? step.output : "",
+      truncated: typeof step.truncated === "boolean" ? step.truncated : undefined
+    };
+  }
+  return value;
+}, ToolStepSchema);
 const SessionTurnSchema = z.object({
   question: z.string(),
   reply: z.string(),
-  steps: z.array(z.string()),
-  startedAt: z.string()
+  steps: z.array(SessionStepSchema),
+  startedAt: z.string(),
+  /** 这一轮之前被合并掉、没有单独保留的轮数；没有该字段表示一轮也没略去。 */
+  omittedBefore: z.number().optional()
 });
 const SessionDetailResponseSchema = z.object({ session: ProjectSessionSchema, turns: z.array(SessionTurnSchema) });
 const LocalSessionsResponseSchema = z.object({
