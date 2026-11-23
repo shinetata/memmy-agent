@@ -81,6 +81,9 @@ describe("project knowledge dialog", () => {
     await render();
     // 只有一个弹窗，已关联的和可关联的在同一份列表里：勾着的是已关联。
     expect(document.querySelectorAll('[role="dialog"]')).toHaveLength(1);
+    // 提示语只留前半句：说清成员能检索，不再解释原文权限。
+    expect(document.body.textContent).toContain("关联后，项目成员的 Agent 可检索所选知识库");
+    expect(document.body.textContent).not.toContain("原文访问权限保持不变");
     expect(document.body.textContent).toContain("已关联 2 个知识库");
     expect(document.body.textContent).toContain("还可关联 8 个");
     expect(checkbox("已关联资料").checked).toBe(true);
