@@ -809,8 +809,7 @@ export const zhCNMessages = {
   /* 项目设置里的协助记录：看板不再单开「协助」tab，历史都在这里看 */
   "collab.assist.recordsRow": "协助记录",
   "collab.assist.recordsTitle": "协助记录",
-  "collab.assist.recordsLead": "只列你参与过的协助（你发起的、或请在你的电脑上执行的），项目里其他成员看不到。",
-  "collab.assist.recordsEmpty": "还没有协助。在任务面板的成员一行上点「请求协助」，或者在 Agent 对话里说明请哪位成员协助。",
+  "collab.assist.recordsLead": "记录你参与过的协助过程",
   // 与「发起协助」同构：一行小标题 + 一句话；「项目设置」是那句话里的链接，点开项目设置弹窗，两侧留空格。
   "collab.assist.state.pending": "等待授权",
   "collab.assist.state.running": "执行中",
@@ -4142,8 +4141,7 @@ export const enUSMessages: Record<keyof typeof zhCNMessages, string> = {
   "collab.assist.askButton": "Request help",
   "collab.assist.recordsRow": "Assist history",
   "collab.assist.recordsTitle": "Assist history",
-  "collab.assist.recordsLead": "Only assists you took part in, either as the requester or as the one running it on your computer. Other members cannot see them.",
-  "collab.assist.recordsEmpty": "No assists yet. Use Request help on a member's row in the task panel, or describe the request in an agent conversation.",
+  "collab.assist.recordsLead": "Assists you took part in",
   // Same shape as "Request an assist": a heading line plus one sentence; "project settings" is the link inside it.
   "collab.assist.state.pending": "Waiting for permission",
   "collab.assist.state.running": "Running",

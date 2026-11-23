@@ -912,19 +912,17 @@
   line-height: 1.6;
 }
 
-/* 协助记录弹窗：开头一句说清可见范围，空态也只有一句话 */
+/* 协助记录弹窗的正文：内容比项目设置短，底部多留一截，卡片才不显得头重脚轻。 */
+:global(.modal-body).assistRecordsBody {
+  padding: 0 24px 22px;
+  gap: 0;
+}
+
 .assistRecordsLead {
-  margin: 0 0 10px;
+  margin: 0 0 12px;
   color: var(--collab-muted);
   font-size: 12.5px;
   line-height: 1.65;
-}
-
-.assistRecordsEmpty {
-  margin: 2px 0 0;
-  color: var(--collab-ter);
-  font-size: 12.5px;
-  line-height: 1.7;
 }
 
 .configKnowledgeList {

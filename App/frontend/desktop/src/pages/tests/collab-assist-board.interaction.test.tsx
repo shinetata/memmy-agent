@@ -268,13 +268,14 @@ describe("assists on the project board", () => {
     expect(records()).toHaveLength(1);
   });
 
-  it("says there is no assist yet, and where to start one", async () => {
+  it("shows only the one-line description when there is no assist yet", async () => {
     await renderBoard([]);
     await openRecords();
 
+    // 没有记录时不另起一段空态：弹窗里只剩那行说明，卡片也不会被撑高。
     expect(records()).toHaveLength(0);
-    expect(document.body.textContent).toContain("还没有协助");
-    expect(document.body.textContent).toContain("在任务面板的成员一行上点「请求协助」");
+    expect(document.body.textContent).toContain("记录你参与过的协助过程");
+    expect(document.body.textContent).not.toContain("还没有协助");
   });
 
   it("deletes a finished assist from the row menu, which offers nothing else", async () => {

@@ -2397,7 +2397,8 @@ export function AssistRecordsDialog(props: {
       closeContent={<X size={16} aria-hidden="true" />}
       className={`${styles.createModal} ${styles.simpleCreateModal} ${styles.settingsModal}`}
       backdropClassName={styles.backdrop}
-      bodyClassName={styles.settingsBody}
+      // 与项目设置同一份底部留白会显得头重脚轻：这弹窗内容更短，底部要自己多留一截。
+      bodyClassName={styles.assistRecordsBody}
     >
       <p className={styles.assistRecordsLead}>{t("collab.assist.recordsLead")}</p>
       {rows.length ? (
@@ -2414,9 +2415,7 @@ export function AssistRecordsDialog(props: {
             />
           ))}
         </ul>
-      ) : (
-        <p className={styles.assistRecordsEmpty}>{t("collab.assist.recordsEmpty")}</p>
-      )}
+      ) : null}
       {unrun.length ? (
         <button
           type="button"

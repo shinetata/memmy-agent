@@ -780,7 +780,7 @@ function Preview() {
       <div className={board.page} style={{ height: "100vh" }}>
         <div className={board.scroller}>
           <div className={board.wrap}>
-            <p className={board.assistRecordsLead}>只列你参与过的协助（你发起的、或请在你的电脑上执行的），项目里其他成员看不到。</p>
+            <p className={board.assistRecordsLead}>记录你参与过的协助过程</p>
             <ul className={`${board.list} ${board.stream} ${board.flatStream}`}>
               <AssistBoardRow thread={THREADS[1]!} selecting={false} onOpen={() => undefined} />
               <AssistBoardRow thread={running} selecting={false} onOpen={() => undefined} />
