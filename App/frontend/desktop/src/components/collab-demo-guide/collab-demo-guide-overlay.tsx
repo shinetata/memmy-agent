@@ -11,10 +11,8 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { Memmy, type MemmyPose } from "../mascot/memmy.js";
 import {
-  DEMO_GUIDE_ASSIST_PHASES,
   DEMO_GUIDE_COPY_FALLBACK,
   demoGuideBackTarget,
-  demoGuideIsAssistPhase,
   demoGuideIsBeforeProjectPhase,
   demoGuideIsTourPhase,
   demoGuideStartsExperience,
@@ -94,7 +92,6 @@ export const DEMO_GUIDE_STEPS = [1, 2, 3] as const;
  * 用部分映射而不是全集，导览段与以后新增的阶段没登记时就退回中性的那一张。
  */
 const POSES: Partial<Record<DemoGuidePhase, MemmyPose>> = {
-  "assist-intro": "wave",
   intro: "wave",
   name: "peek",
   folder: "peek",
@@ -148,34 +145,6 @@ export function demoGuideCard(state: DemoGuideState, t: Translate): DemoGuideCar
     canGoBack: demoGuideBackTarget(state) !== null,
     ...extra
   });
-  // 协助上手一屏：与看板导览同样只介绍，头部是「介绍」徽章，讲完就「完成」。
-  if (demoGuideIsAssistPhase(state.phase)) {
-    const index = DEMO_GUIDE_ASSIST_PHASES.indexOf(state.phase);
-    const key = String(index + 1) as "1";
-    // 这一屏只讲一件事就不再绕：直接用一句话说清那颗按钮在哪、点下去会怎样。
-    const bodyParts: DemoGuideBodyPart[] = [
-      { text: t("collab.demo.assistGuide.body.1.beforeAction") },
-      { text: t("collab.demo.assistGuide.body.1.action"), strong: true },
-      { text: t("collab.demo.assistGuide.body.1.trail") }
-    ];
-    return {
-      step: null,
-      badge: t("collab.demo.assistGuide.label"),
-      stepName: t(("collab.demo.assistGuide.stepName." + key) as MessageKey),
-      pose: POSES[state.phase] ?? "hum",
-      wide: false,
-      title: null,
-      // 整句只由分段拼成：不另写一份，免得两处文案走偏。
-      body: bodyParts.map((part) => part.text).join(""),
-      bodyParts,
-      status: null,
-      // 只有这一屏：讲完就收场，不留「下一步」。
-      action: "done",
-      // 前面没有可退的一屏。
-      canGoBack: demoGuideBackTarget(state) !== null,
-      actionDisabled: false
-    };
-  }
   // 看板导览：纯介绍，头部是「介绍」徽章，最后一步的按钮是「开始协作」。
   if (demoGuideIsTourPhase(state.phase)) {
     const tour = demoGuideTourCard(demoGuideTourIndex(state.phase), t);
@@ -272,16 +241,16 @@ export function demoGuideCard(state: DemoGuideState, t: Translate): DemoGuideCar
  * 形状由结构那边决定，这里只决定第几步说什么。
  */
 /**
- * 「请求协助」那一站的正文：与升级用户的协助上手同一句话，其中「请求协助」用重字。
+ * 「请求协助」那一站的正文：拆成几段，其中「请求协助」用重字（它说的就是那颗按钮上写的字）。
  *
- * 两处讲的是同一件事，留两套写法迟早会走偏：导览这一站直接取那一套。
+ * 装成数组是为了让加粗只落在那一处，整句仍由这几段拼出来，不另写一份。
  */
 const ASSIST_SENTENCE_PARTS: Array<
   [MessageKey, boolean]
 > = [
-  ["collab.demo.assistGuide.body.1.beforeAction", false],
-  ["collab.demo.assistGuide.body.1.action", true],
-  ["collab.demo.assistGuide.body.1.trail", false]
+  ["collab.demo.tour.body.2.beforeAction", false],
+  ["collab.demo.tour.body.2.action", true],
+  ["collab.demo.tour.body.2.trail", false]
 ];
 
 export function demoGuideTourCard(index: number, t: Translate): DemoGuideCard {
@@ -312,8 +281,6 @@ export function demoGuideTourCard(index: number, t: Translate): DemoGuideCard {
 
 /** 哪几个子状态可以跳过这一步：出结果之后的「下一步」不是跳过的地方。 */
 export function demoGuideSkippable(phase: DemoGuidePhase): boolean {
-  // 协助上手只有两屏介绍，没有「跳过这一步」：要么看完，要么直接退出引导。
-  if (demoGuideIsAssistPhase(phase)) return false;
   // 建项目之前没有可跳过的内容：不建项目就没有后面的演示；加入那一屏也不是一步。
   if (demoGuideIsBeforeProjectPhase(phase) || phase === "joined") return false;
   // 「关联会话」不是一步、而是导览里的一站：授权装不上时也要能只放过这一站，所以这里给一个「跳过这一站」。

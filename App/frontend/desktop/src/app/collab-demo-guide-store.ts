@@ -11,14 +11,12 @@ import { markCollabProjectAssistReceiving } from "./collab-projects-store.js";
 
 /** 引导的每个子状态。
  *
- * 分四段：先是「建项目之前」的新建弹窗六屏，再是「看板导览」（`tour-*`，纯介绍，不让人操作），
- * 然后是「动手体验」（三步，各自有若干子状态）；另有一段独立的「协助上手」（`assist-*`），
- * 只在已经用过项目协作、没赶上协助功能的人身上触发。
+ * 分三段：先是「建项目之前」的新建弹窗六屏，再是「看板导览」（`tour-*`，纯介绍，不让人操作），
+ * 然后是「动手体验」（三步，各自有若干子状态）。
+ * 只有这一条完整流程：不再为「已经用过项目协作、只是没赶上协助」的人单独做一条引导。
  * 体验段的「1 / 3」由 {@link demoGuideStepNumberOf} 给出，其余几段没有进度可讲。
  */
 export type DemoGuidePhase =
-  // 协助上手：已经用过项目协作（1.2.7 及更早）的人第一次看到协助时的两屏介绍，没有云端项目、没有心跳。
-  | DemoGuideAssistPhase
   // 建项目之前的那一段：新建弹窗刚打开，一路在弹窗上走完六屏，还没有云端项目。
   | DemoGuideBeforeProjectPhase
   // 演示刚开始：看板蒙版套住成员徽章，点「继续」才进看板导览。
@@ -63,31 +61,6 @@ export const DEMO_GUIDE_BEFORE_PROJECT_PHASES = [
 ] as const;
 
 export type DemoGuideBeforeProjectPhase = (typeof DEMO_GUIDE_BEFORE_PROJECT_PHASES)[number];
-
-/**
- * 「协助上手」只有一屏。
- *
- * 给已经用过项目协作的人：他们见过任务列表、关联任务这些，只在 1.2.7 里没赶上协助。
- * 所以不讲项目本体，只讲这一块新东西，而且一次讲完——协助是什么、两个方向、记录在哪里，
- * 拆成两屏反而要人多点一次。这一屏在「协助」tab 上，只亮列表那一片，与任务面板的导览同一套尺寸。
- */
-export const DEMO_GUIDE_ASSIST_PHASES = [
-  /** 「协助」tab 的列表区：协助是什么、两个方向（请成员 / 被成员请）、双方的记录都在这里。 */
-  "assist-intro"
-] as const;
-
-export type DemoGuideAssistPhase = (typeof DEMO_GUIDE_ASSIST_PHASES)[number];
-
-/** 这一屏属于「协助上手」（已经用过项目协作的人的两屏介绍）。 */
-export function demoGuideIsAssistPhase(phase: DemoGuidePhase): phase is DemoGuideAssistPhase {
-  return (DEMO_GUIDE_ASSIST_PHASES as readonly string[]).includes(phase);
-}
-
-/** 「协助上手」两屏里的下一屏；最后一屏之后收场，返回 null。 */
-export function demoGuideNextAssistPhase(phase: DemoGuideAssistPhase): DemoGuideAssistPhase | null {
-  const index = (DEMO_GUIDE_ASSIST_PHASES as readonly string[]).indexOf(phase);
-  return DEMO_GUIDE_ASSIST_PHASES[index + 1] ?? null;
-}
 
 /** 这个子状态属于「建项目之前」（新建弹窗上的六屏）。 */
 export function demoGuideIsBeforeProjectPhase(phase: DemoGuidePhase): phase is DemoGuideBeforeProjectPhase {
@@ -227,7 +200,6 @@ export function demoGuideLivesOnTaskPage(phase: DemoGuidePhase): boolean {
  * 从而先把正在跑的那一轮叫停，而不是等它跑完再被当成「这一步做完了」。
  */
 const DEMO_GUIDE_PHASE_ORDER: DemoGuidePhase[] = [
-  ...DEMO_GUIDE_ASSIST_PHASES,
   ...DEMO_GUIDE_BEFORE_PROJECT_PHASES,
   "joined",
   ...DEMO_GUIDE_TOUR_PHASES,
@@ -384,12 +356,6 @@ export type DemoGuideEvent =
   | { type: "start"; input: Omit<DemoGuideStart, "client"> }
   /** 从大卡或侧栏进来：先在新建弹窗上走完六屏，还没有云端项目。 */
   | { type: "start-before-project" }
-  /**
-   * 已经用过项目协作的人第一次看到协助：只看两屏介绍，不建项目、不加入演示成员。
-   *
-   * `localProjectId` 是他正打开的那个项目：两屏都在它的看板上，不需要云端项目 id。
-   */
-  | { type: "start-assist"; input: { localProjectId: string | null } }
   /** 「{name}加入了项目」那一屏点了「继续」：才开始第一步。 */
   | { type: "joined-confirmed" }
   /** 「加入项目」这一屏没有对应的按钮（API Key 模式）时由界面发它：直接进「创建项目」。 */
@@ -462,8 +428,6 @@ const IDLE: DemoGuideState = {
  * 建项目之前、加入提示窗与看板导览都还没有进度可讲，返回 null：卡片上不出现进度条，改用一个「介绍」标签。
  */
 export function demoGuideStepNumberOf(phase: DemoGuidePhase): 1 | 2 | 3 | null {
-  // 协助上手是独立的一段介绍，不占用体验的三步进度。
-  if (demoGuideIsAssistPhase(phase)) return null;
   // 建项目之前的六屏都还没有进度可讲。
   if (demoGuideIsBeforeProjectPhase(phase)) return null;
   // 加入那一屏与看板导览都还不是一步：前者讲完就得进导览，后者讲完才进第一步。
@@ -508,14 +472,6 @@ export function demoGuideReducer(state: DemoGuideState, event: DemoGuideEvent): 
         status: "active",
         // 从出场那一屏开始：新建弹窗上一路走下去，最后才轮到人点「创建项目」。
         phase: DEMO_GUIDE_BEFORE_PROJECT_PHASES[0]
-      };
-    case "start-assist":
-      return {
-        ...IDLE,
-        status: "active",
-        // 这两屏都在看板上：没有云端项目、没有演示成员，所以既没有心跳也不叫云端结束。
-        phase: DEMO_GUIDE_ASSIST_PHASES[0],
-        localProjectId: event.input.localProjectId
       };
     case "start":
       return {
@@ -593,12 +549,6 @@ export function demoGuideReducer(state: DemoGuideState, event: DemoGuideEvent): 
       return state;
     case "next":
       if (state.status !== "active") return state;
-      // 协助上手：第一屏讲完切到「协助」tab；第二屏的「完成」收场，不留完成弹窗（本来就没做任何事）。
-      if (demoGuideIsAssistPhase(state.phase)) {
-        const next = demoGuideNextAssistPhase(state.phase);
-        if (next) return { ...state, phase: next, error: null };
-        return { ...state, status: "ended", phase: "complete", endReason: "finished", prefill: null, error: null };
-      }
       // 建项目之前的六屏：一屏一屏往下走；最后一屏靠人点真实的「创建项目」，没有「下一步」。
       if (demoGuideIsBeforeProjectPhase(state.phase)) {
         const next = demoGuideNextBeforeProjectPhase(state.phase);
@@ -856,40 +806,6 @@ let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 /** 已经叫过云端结束的项目：多次结束只发一次请求，幂等也省得重复打扰。 */
 const endedProjects = new Set<string>();
 
-/**
- * 机器级标记：「协助上手」两屏已经看过。
- *
- * 与完整引导的标记分开存：一个只讲项目本体，一个只讲协助，两段互不消耗对方的机会。
- */
-const ASSIST_GUIDE_DONE_STORAGE_KEY = "memmy.collabAssistGuide.v1";
-
-/** 这台机器是否已经看过「协助上手」。 */
-export function readAssistGuideDone(storage?: Storage): boolean {
-  try {
-    return demoGuideStorage(storage)?.getItem(ASSIST_GUIDE_DONE_STORAGE_KEY) === "1";
-  } catch {
-    return false;
-  }
-}
-
-/** 记下「协助上手」已经看过。 */
-export function markAssistGuideDone(storage?: Storage): void {
-  try {
-    demoGuideStorage(storage)?.setItem(ASSIST_GUIDE_DONE_STORAGE_KEY, "1");
-  } catch {
-    // 写不进去就算了：最多下次再看一遍。
-  }
-}
-
-/** 清掉「协助上手」标记。只给测试、预览页与自助重置用。 */
-export function clearAssistGuideDone(storage?: Storage): void {
-  try {
-    demoGuideStorage(storage)?.removeItem(ASSIST_GUIDE_DONE_STORAGE_KEY);
-  } catch {
-    // 清不掉时下一次读到的仍是旧的标记。
-  }
-}
-
 export function getDemoGuideState(): DemoGuideState {
   return state;
 }
@@ -925,7 +841,7 @@ function emit(next: DemoGuideState): void {
 
 /** 发一个事件；与云端有关的收尾（心跳、结束演示）在这里一并处理。 */
 export function dispatchDemoGuide(event: DemoGuideEvent): void {
-  if (event.type === "start" || event.type === "start-before-project" || event.type === "start-assist") {
+  if (event.type === "start" || event.type === "start-before-project") {
     stopHeartbeat();
     emit(state = demoGuideReducer({ ...state, ...IDLE }, event));
     return;
@@ -935,17 +851,7 @@ export function dispatchDemoGuide(event: DemoGuideEvent): void {
   if (next !== before) {
     emit(next);
     // 引导真的收场了（完成、退出、跳过、离开看板、云端判定结束）：本机记一笔，之后不再自动带引导。
-    // 「协助上手」是另一段引导，记在它自己的标记上：不能因为看完两屏介绍就抹掉完整引导的机会。
-    if (before.status === "active" && next.status !== "active") {
-      if (demoGuideIsAssistPhase(before.phase)) {
-        markAssistGuideDone();
-      } else {
-        markDemoGuideDone();
-        // 完整引导里已经讲过协助（第三步就是处理成员的请求），这段人不需要再看一遍「协助上手」。
-        // 不记的话，走完引导一打开看板就会在同一个项目上再弹一次协助介绍。
-        markAssistGuideDone();
-      }
-    }
+    if (before.status === "active" && next.status !== "active") markDemoGuideDone();
   }
   if (next !== before && next.status === "active" && next.phase !== before.phase) {
     // 步骤一变立即补一次心跳，并把「云端说已结束」这条兜底接上。
@@ -985,50 +891,6 @@ export function startDemoGuideBeforeProject(options?: { force?: boolean }): void
   if (!options?.force && readDemoGuideDone()) return;
   if (state.status === "active") return;
   dispatchDemoGuide({ type: "start-before-project" });
-}
-
-/**
- * 这个人要不要进「协助上手」：已经用过项目协作、但还没看过协助的那两屏。
- *
- * 两段引导互斥：
- * - 完整引导还有机会（云端说这次能演示、本机也没退出过）的人不在这里引导，他会从新建项目那里走完整流程；
- * - 正在演示中的项目也不碰这里：那段时间云端已经有一条演示记录（`demoEligible` 因此变假），
- *   若只按这个字段判断，就会在完整引导旁边再叠一张协助介绍，两段引导同时出现在一个看板上；
- * - 其余能确定「用过项目协作」的人——本机已经收场过完整引导，或云端已经有一条演示记录（`demoEligible` 为假）——
- *   才看这两屏。从 1.2.6 升级、从没建过协作项目的人两条都不成立，走完整引导。
- *
- * `demoEligible` 不传按 false 处理：旧云端没有这个字段时，只能靠本机标记判断。
- */
-export function shouldOfferAssistIntro(options: {
-  collabEnabled: boolean;
-  demoGuideActive: boolean;
-  demoEligible: boolean;
-  /** 当前项目上正有一次演示（云端 `demo.active`）：这段时间不叠协助介绍。 */
-  demoInProgress?: boolean;
-  baseDone?: boolean;
-  assistDone?: boolean;
-}): boolean {
-  if (!options.collabEnabled || options.demoGuideActive) return false;
-  if (options.demoInProgress === true) return false;
-  if (options.assistDone ?? readAssistGuideDone()) return false;
-  // 完整引导还能走：让那一条先讲完。
-  const baseDone = options.baseDone ?? readDemoGuideDone();
-  if (!baseDone && options.demoEligible) return false;
-  return true;
-}
-
-/**
- * 开始「协助上手」：两屏介绍，不建项目、不加演示成员、不发心跳。
- *
- * 退出、看完都写它自己的标记，不影响完整引导的标记。
- *
- * @param options.force 只给预览与自助重置用：已经看过也再走一遍。
- * @param options.localProjectId 用户正打开的那个项目：两屏亮区的锚点都在它的看板上。
- */
-export function startAssistGuide(options?: { force?: boolean; localProjectId?: string | null }): void {
-  if (!options?.force && readAssistGuideDone()) return;
-  if (state.status === "active") return;
-  dispatchDemoGuide({ type: "start-assist", input: { localProjectId: options?.localProjectId ?? null } });
 }
 
 /**
@@ -1073,7 +935,6 @@ export function resetDemoGuideStore(): void {
   listeners.clear();
   // 测试与预览共用这一份状态：退出标记与临时存储也一并清掉，免得上一个用例影响下一个。
   clearDemoGuideDone();
-  clearAssistGuideDone();
   injectedStorage = null;
 }
 

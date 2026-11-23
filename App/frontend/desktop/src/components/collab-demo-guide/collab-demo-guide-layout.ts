@@ -49,10 +49,6 @@ export interface DemoGuideTarget {
 }
 
 const TARGETS: Record<DemoGuidePhase, DemoGuideTarget> = {
-  // 「协助上手」一屏（已经用过项目协作的人）：亮区框住被预演的那位成员那一行——
-  // 那一行是「鼠标停在上面」的样子，「请求协助」就在行尾，说的和看到的才对得上。
-  // 没有其他成员可演示时为那一行假成员，锚点相同；它还没渲染出来时退回整块任务列表。
-  "assist-intro": { region: "board-assist-intro-row", stroke: null, blockRest: true, radius: 10, padding: 6, prefer: "right", fallback: "board-list" },
   // 建项目之前的六屏：都在新建弹窗上，一屏一个亮区；按控件自己的形状给圆角。
   // 这一段只介绍、不让人动手：整张弹窗（`intro`）与每一项设置都不接点击，只能按卡片上的「下一步」。
   // 出场那一步只压暗、不描边，让人先看整张弹窗。

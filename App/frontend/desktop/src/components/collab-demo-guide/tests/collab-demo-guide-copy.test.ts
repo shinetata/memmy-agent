@@ -27,8 +27,6 @@ function translate(language: "zh-CN" | "en-US"): Translate {
 const PHASES: DemoGuidePhase[] = [
   "create-project",
   "joined",
-  // 协助上手那一屏：只介绍协助，讲完就收场。
-  "assist-intro",
   "tour-board",
   "tour-tabs",
   "tour-associate",
@@ -97,25 +95,10 @@ describe("the demo guide copy", () => {
       .toBe("正在本机执行，完成后结果会回传给小饭团。");
   });
 
-  it("keeps the assist intro to one short sentence, with the button name emphasised", () => {
-    const card = demoGuideCard(stateFor("assist-intro"), translate("zh-CN"));
-    // 整句与产品定稿逐字一致：这是这一屏唯一的一句话。
-    expect(card.body).toBe(
-      "成员那边的本地文件或环境无法访问时，点击「请求协助」可以让对方本地的Agent帮助你执行任务，执行结果自动回传"
-    );
-    // 只有「请求协助」加粗：它说的就是那颗按钮上写的字。
-    expect(card.bodyParts?.filter((part) => part.strong).map((part) => part.text)).toEqual(["请求协助"]);
-    // 分段拼起来就是整句：不另写一份文案。
-    expect(card.bodyParts?.map((part) => part.text).join("")).toBe(card.body);
-    // 这一屏只有一页：讲完就收场，没有「下一步」。
-    expect(card.action).toBe("done");
-    expect(card.badge).toBe("介绍");
-  });
-
   it("keeps the five tour steps in the approved words", () => {
     const zh = [0, 1, 2, 3, 4].map((index) => demoGuideTourCard(index, translate("zh-CN")));
     expect(zh.map((card) => card.stepName)).toEqual(["任务列表", "请求协助", "关联任务", "关联会话", "新建任务"]);
-    // 「请求协助」这一站用与升级用户同样的那句短话：把鼠标移到哪、点完谁去执行、结果回到哪。
+    // 「请求协助」这一站用一句短话：在哪点、点完谁去执行、结果回到哪。
     expect(zh.map((card) => card.body)).toEqual([
       "成员共享的任务都在这里。每项任务的完整对话与进展都能读到，也可以接着往下推进，不用反复同步背景。",
       "成员那边的本地文件或环境无法访问时，点击「请求协助」可以让对方本地的Agent帮助你执行任务，执行结果自动回传",

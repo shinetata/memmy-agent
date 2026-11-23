@@ -35,7 +35,6 @@ import {
   subscribeCollabProjects
 } from "../app/collab-projects-store.js";
 import {
-  demoGuideIsAssistPhase,
   dispatchDemoGuide,
   getDemoGuideState,
   subscribeDemoGuide
@@ -1256,37 +1255,6 @@ const CollabBoard = memo(function CollabBoard(props: {
     return ranked.sort((left, right) => (order.get(left.key) ?? 0) - (order.get(right.key) ?? 0));
   }, [project?.id, sessions, sharedId]);
 
-  /**
-   * 「协助上手」那一屏要预演的那一行。这一屏只介绍协助，没有人会去悬停，按常态画出来的行上
-   * 看不到「请求协助」，人看完不知道按钮在哪——所以那一行按「鼠标停在上面」的样子画。
-   *
-   * 三档，越靠前越贴近真实：
-   * 1. `row`：项目里已经有其他成员的任务段。直接用那一段（优先演示成员小饭团），名字、条数、头像全是真实的，
-   *    与前面完整引导里见过的小饭团一模一样。
-   * 2. `member`：成员在项目里、只是还没有可看的任务（比如引导收场时她的演示任务被清掉了）。
-   *    用她的真实名字与头像，条数是真实的 0——不凭空捏一个任务数。
-   * 3. `intro`：项目里一个其他成员都没有（从 1.2.6 升级、没走完整引导的人）。
-   *    借演示成员的名字与头像画一行示意，条数按引导剧情写成 1，与「她刚留下一条任务」的印象一致。
-   */
-  const assistIntroPreview = useMemo<
-    { kind: "row"; key: string } | { kind: "member"; name: string } | { kind: "intro" } | null
-  >(() => {
-    // 「协助上手」没有云端演示项目（`demoActive` 要求 projectId 非空，这里必然为假），
-    // 所以不能借它判断：只看引导在走、停在这一段、且就在这个项目上。
-    // 早先这里写的是 `demoActive`，于是升级用户看到的那一屏亮区里什么都没有——而这一屏正是要指「请求协助」。
-    const assistOnThisProject = demoGuide.status === "active"
-      && demoGuideIsAssistPhase(demoGuide.phase)
-      && demoGuide.localProjectId === projectId;
-    if (!assistOnThisProject) return null;
-    const others = memberGroups.filter((group) => !group.mine);
-    const picked = (demoMemberName ? others.find((group) => group.name === demoMemberName) : undefined) ?? others[0];
-    if (picked) return { kind: "row", key: picked.key };
-    // 没有任务段：看她是不是还在项目里（开着接收协助的成员名单里有她）。
-    const member = (demoMemberName ? assistReceivers.find((entry) => entry.name === demoMemberName) : undefined)
-      ?? assistReceivers[0];
-    return member ? { kind: "member", name: member.name } : { kind: "intro" };
-  }, [demoGuide.status, demoGuide.phase, demoGuide.localProjectId, projectId, demoMemberName, memberGroups, assistReceivers]);
-
   // Only this project's own tasks: nothing leaves the computer until sharing is on and sessions are chosen.
   const localTasks = useMemo(() => {
     if (!projectId) return [];
@@ -1448,15 +1416,13 @@ const CollabBoard = memo(function CollabBoard(props: {
      * 这一段还要顶替「她开着接收」这个真实条件——介绍时不该因为对方没开就在画面上缺席，
      * 按钮点不动（蒙版挡着），只是让人看见它长什么样、出现在哪。
      */
-    const preview = assistIntroPreview?.kind === "row" && assistIntroPreview.key === group.key;
     /**
      * 导览「请求协助」那一站：这一行要把按钮常显出来。
      *
      * 那颗按钮平时只在鼠标悬停时才现形，而这一站人只会看不会去悬停——不常显的话亮区里就是一块空白，
-     * 看不出要讲的是哪里。与预览态同一种画法：悬停底色 + 按钮常显，人真去悬停时不会跳一下。
+     * 看不出要讲的是哪里。与悬停态同一种画法：悬停底色 + 按钮常显，人真去悬停时不会跳一下。
      */
-    const tourAskStage = demoActive && demoGuide.phase === "tour-tabs";
-    const revealAsk = preview || tourAskStage;
+    const revealAsk = demoActive && demoGuide.phase === "tour-tabs";
     // 能请谁协助：段头只给其他成员、且她此刻确实接收请求时才出现按钮；请自己无从谈起。
     const listed = group.mine ? null : assistReceivers.find((member) => member.name === group.name) ?? null;
     // 预览与导览这一站：她没开接收时也把按钮画出来，但只是样子——不接点击、不进 Tab，
@@ -1476,7 +1442,6 @@ const CollabBoard = memo(function CollabBoard(props: {
           aria-expanded={!collapsed}
           aria-label={t("collab.sessions.groupToggle", { name })}
           data-collab-member-toggle={group.key}
-          data-demo-guide={preview ? "board-assist-intro-row" : undefined}
           onClick={() => toggleGroupCollapsed(group.key)}
           onKeyDown={(event) => {
             // 只认段头自己的键：里面的「请求协助」是另一个按钮，它的回车不能顺手把这段收起。
@@ -1899,20 +1864,6 @@ const CollabBoard = memo(function CollabBoard(props: {
                             <span>{filterEmpty.body}</span>
                           </div>
                         </div>
-                      ) : boardRows.length === 0 && assistIntroPreview && assistIntroPreview.kind !== "row" ? (
-                        /* 「协助上手」正好停在这里，而项目里一条任务都没有（从 1.2.7 升级的人常常如此）：
-                         * 这一屏讲的就是成员行尾的「请求协助」，所以只画那一行示意图，位置就在真实的成员分段那。
-                         * 空态那句这时不画——它写的是「项目中还没有任务」，与这一行的「1 个任务」自相矛盾，
-                         * 而且它是个垂直居中的盒子，会把这一行顶到版面中间去。 */
-                        <div className={styles.memberBoard} data-demo-guide="board-list">
-                          <AssistIntroMemberRow
-                            name={assistIntroPreview.kind === "member"
-                              ? assistIntroPreview.name
-                              : t("collab.demo.intro.name")}
-                            // 成员真的在项目里就报真实条数；完全没有可演示的人时按引导剧情写 1。
-                            count={assistIntroPreview.kind === "member" ? 0 : 1}
-                          />
-                        </div>
                       ) : boardRows.length === 0 ? (
                         /* 空项目只留一句说明：操作就嵌在这句话里，不摆图标、不加按钮。
                          * 本机项目没有可关联的东西，只讲新建任务；共享给成员的项目两种都讲。 */
@@ -1953,15 +1904,6 @@ const CollabBoard = memo(function CollabBoard(props: {
                         /* 导览第一步框住的就是这一块：成员分段本身，不含上面的 tab 行与工具条。 */
                         <div className={styles.memberBoard} data-demo-guide="board-list">
                           {memberGroups.map(renderMemberGroup)}
-                          {assistIntroPreview && assistIntroPreview.kind !== "row" ? (
-                            <AssistIntroMemberRow
-                              name={assistIntroPreview.kind === "member"
-                                ? assistIntroPreview.name
-                                : t("collab.demo.intro.name")}
-                              // 成员真的在项目里就报真实条数；完全没有可演示的人时按引导剧情写 1。
-                              count={assistIntroPreview.kind === "member" ? 0 : 1}
-                            />
-                          ) : null}
                         </div>
                       )}
                     </div>
@@ -2219,45 +2161,6 @@ const CollabBoard = memo(function CollabBoard(props: {
     </AppFrame>
   );
 });
-
-/**
- * 「协助上手」里没有现成任务段可亮时的那一行：只有段头，撑起一颗「请求协助」给人看。
- *
- * 段头与真实的成员段头同一套类名、同一个取色（`memberColor`），所以名字与头像看着就是同一个人——
- * 刚走完完整引导的人认得这个「小饭团」。行本身不可点：按下去没有这段任务，只会让人以为能展开。
- *
- * @param name 显示的名字：成员还在项目里时用她的真名，否则是演示成员。
- * @param count 真实的条数：成员在项目里但没有任务时为 0，不凭空捏一个。
- */
-function AssistIntroMemberRow(props: { name: string; count: number }) {
-  const { t } = useTranslation();
-  return (
-    <section className={styles.memberGroup}>
-      <div
-        role="presentation"
-        className={`${styles.groupHead} ${styles.groupHeadPreview}`}
-        data-demo-guide="board-assist-intro-row"
-      >
-        <span
-          className={`${styles.avatar} ${styles.avatarSoft} ${styles.groupHeadAvatar}`}
-          style={{ "--member": memberColor(props.name) } as CSSProperties}
-          aria-hidden="true"
-        >
-          {Array.from(props.name)[0] ?? "?"}
-        </span>
-        <span className={styles.groupHeadName}>{props.name}</span>
-        <span className={styles.groupHeadCount}>
-          {t("collab.sessions.groupCount", { count: String(props.count) })}
-        </span>
-        <span className={styles.grow} />
-        <button type="button" className={styles.groupHeadAsk} tabIndex={-1} aria-hidden="true">
-          {t("collab.assist.askButton")}
-        </button>
-        <ChevronDown size={14} aria-hidden="true" className={styles.groupHeadCaret} />
-      </div>
-    </section>
-  );
-}
 
 /**
  * 看板上的一行协助：「协助」标签 + 要做的事，行尾写清谁请谁、由哪个 Agent 执行、现在的状态。

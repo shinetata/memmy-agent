@@ -52,8 +52,6 @@ import {
   getDemoGuideState,
   isDemoGuideActive,
   readDemoGuideDone,
-  shouldOfferAssistIntro,
-  startAssistGuide,
   startDemoGuide,
   startDemoGuideBeforeProject,
   subscribeDemoGuide
@@ -808,28 +806,6 @@ export function AppFrame(props: AppFrameProps) {
 
   /** The project whose board is open, named by its local project id. */
   const boardProjectId = state.navigation.currentPath === "/collab" ? collabSnapshot.selectedId : null;
-
-  /**
-   * 已经用过项目协作、但没赶上协助的人（从 1.2.7 升级）：第一次打开任意项目看板时，给两屏介绍。
-   *
-   * 与新建项目那条完整引导互斥，判断都在 `shouldOfferAssistIntro` 里：完整引导还有机会的人不在这里拦。
-   * 每个项目只触发一次，退出后本机记下标记就不再出现。
-   */
-  const assistIntroShownFor = useRef<string | null>(null);
-  useEffect(() => {
-    if (!collabEnabled || !boardProjectId || demoGuideActive) return;
-    if (assistIntroShownFor.current === boardProjectId) return;
-    // 只在已共享的项目上触发：未共享的本机项目没有「协助」tab，这两屏也就无处可指。
-    if (!sharedProjectFor(collabSnapshot.projects, boardProjectId)) return;
-    // 这个项目上正有一次演示（云端 `demo.active`）：那段时间不叠协助介绍——完整引导里已经讲了协助，
-    // 两段同时出现只会让人不知道在跟哪一条走。
-    const demoInProgress = Boolean(
-      collabSnapshot.projects?.find((project) => project.localProjectId === boardProjectId)?.demo?.active
-    );
-    if (!shouldOfferAssistIntro({ collabEnabled, demoGuideActive, demoEligible: collabSnapshot.demoEligible, demoInProgress })) return;
-    assistIntroShownFor.current = boardProjectId;
-    startAssistGuide({ localProjectId: boardProjectId });
-  }, [collabEnabled, boardProjectId, demoGuideActive, collabSnapshot.demoEligible, collabSnapshot.projects]);
 
   const selectedSidebarProjectId = resolveSelectedSidebarProjectId(state.agent, state.navigation.currentPath);
 

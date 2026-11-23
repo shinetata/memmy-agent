@@ -165,8 +165,6 @@ describe("demo guide layout", () => {
       ["join-entry", { region: "create-join", stroke: "create-join", blockRest: true, blockStroke: true, radius: 10, padding: 6, prefer: "top" }],
       ["create-project", { region: "create-project-submit", stroke: "create-project-submit", blockRest: false, radius: 10, padding: 7, prefer: "right" }],
       ["joined", { region: "board-members", stroke: null, blockRest: false, radius: 10, padding: 7, prefer: "right" }],
-      // 协助上手：亮区落在被预演的那位成员那一行（那一行常显「请求协助」），没有时退回任务列表。
-      ["assist-intro", { region: "board-assist-intro-row", stroke: null, blockRest: true, radius: 10, padding: 6, prefer: "right", fallback: "board-list" }],
       ["tour-board", { region: "board-list", stroke: null, blockRest: true, radius: 14, padding: 6, prefer: "right" }],
       // 「请求协助」这一站：亮区落在成员段头上那颗按钮上，看板在演示的这一站把它常显。
       ["tour-tabs", { region: "board-member-ask", stroke: null, blockRest: true, radius: 8, padding: 6, prefer: "right", fallback: "board-list" }],
@@ -256,8 +254,6 @@ describe("demo guide layout", () => {
       "tour-associate",
       "tour-associate-pick",
       "tour-new-task",
-      // 协助上手那一屏只亮不点：没有可点的控件。
-      "assist-intro",
       "reply-waiting",
       "reply-done",
       "ask-waiting",

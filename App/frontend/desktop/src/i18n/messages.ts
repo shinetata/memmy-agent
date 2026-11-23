@@ -933,14 +933,10 @@ export const zhCNMessages = {
   "collab.demo.tour.body.5": "需要开展新工作时，从这里新建任务。项目内新建的任务默认对成员可见，方便他们查看进展、接着推进或发起协助。",
   // 「关联会话」这一步：整条引导里唯一需要授权的地方。没授权时弹窗只给授权说明，
   // 卡片的「授权并查看」就地授权，装完再真的扫；扫出结果之前不给「下一步」。
-  // 协助上手：给已经用过项目协作、但没赶上协助的人（从 1.2.7 升级）看的一屏。
-  // 协助是什么、两个方向、记录在哪里，都在这一屏讲完。
-  "collab.demo.assistGuide.label": "介绍",
-  "collab.demo.assistGuide.stepName.1": "成员协助",
-  /* 协助上手那一屏的正文：拆成几段，其中「请求协助」用重字。整句由这几段拼成，见 overlay 的 bodyParts。 */
-  "collab.demo.assistGuide.body.1.beforeAction": "成员那边的本地文件或环境无法访问时，点击「",
-  "collab.demo.assistGuide.body.1.action": "请求协助",
-  "collab.demo.assistGuide.body.1.trail": "」可以让对方本地的Agent帮助你执行任务，执行结果自动回传",
+  /* 导览第二站（请求协助）的正文：拆成几段，其中「请求协助」用重字，见 overlay 的 bodyParts。 */
+  "collab.demo.tour.body.2.beforeAction": "成员那边的本地文件或环境无法访问时，点击「",
+  "collab.demo.tour.body.2.action": "请求协助",
+  "collab.demo.tour.body.2.trail": "」可以让对方本地的Agent帮助你执行任务，执行结果自动回传",
   "collab.demo.scan.locked": "关联会话要读取这台电脑上的 Agent 记录，先授权一次即可。",
   "collab.demo.scan.grant": "授权并查看",
   "collab.demo.scan.granting": "正在接入这台电脑上的 Agent…",
@@ -4257,13 +4253,10 @@ export const enUSMessages: Record<keyof typeof zhCNMessages, string> = {
   "collab.demo.tour.body.4": "Later you can pick which sessions to share with members here. For now, let's move on to the next part.",
   "collab.demo.tour.stepName.5": "New task",
   "collab.demo.tour.body.5": "Start new work here. New tasks in this project are visible to members by default, so they can follow progress, carry on, or ask for assistance.",
-  // Assistance intro: one screen for people who used projects before this feature existed (upgrading from 1.2.7).
-  // What assistance is, both directions and where the records live are all covered here.
-  "collab.demo.assistGuide.label": "Intro",
-  "collab.demo.assistGuide.stepName.1": "Member assistance",
-  "collab.demo.assistGuide.body.1.beforeAction": "When a member's local files or environment can't be reached, click ",
-  "collab.demo.assistGuide.body.1.action": "Request help",
-  "collab.demo.assistGuide.body.1.trail": " and the agent on her computer runs the task for you, with the result sent back automatically.",
+  /* Tour stop 2 (request help): split into parts so only the button name is emphasised. */
+  "collab.demo.tour.body.2.beforeAction": "When a member's local files or environment can't be reached, click ",
+  "collab.demo.tour.body.2.action": "Request help",
+  "collab.demo.tour.body.2.trail": " and the agent on her computer runs the task for you, with the result sent back automatically.",
   "collab.demo.scan.locked": "Linking sessions reads this computer's agent history. Authorize once to look.",
   "collab.demo.scan.grant": "Authorize and look",
   "collab.demo.scan.granting": "Setting up the agents on this computer…",

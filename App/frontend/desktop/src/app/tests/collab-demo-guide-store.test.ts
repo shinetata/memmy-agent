@@ -24,11 +24,8 @@ import {
   endDemoGuide,
   getDemoGuideState,
   markDemoGuideDone,
-  readAssistGuideDone,
   readDemoGuideDone,
   resetDemoGuideStore,
-  shouldOfferAssistIntro,
-  startAssistGuide,
   setDemoGuideStorageForTest,
   startDemoGuideBeforeProject,
   type DemoGuideEvent,
@@ -729,108 +726,6 @@ describe("a walkthrough that ended stays ended on this machine", () => {
     markDemoGuideDone(storage);
     startDemoGuideBeforeProject();
     expect(getDemoGuideState().status).toBe("ended");
-  });
-});
-
-describe("the assistance intro for people who already used projects", () => {
-  let storage: Storage;
-
-  beforeEach(() => {
-    storage = memoryStorage();
-    resetDemoGuideStore();
-    setDemoGuideStorageForTest(storage);
-  });
-
-  afterEach(() => {
-    resetDemoGuideStore();
-  });
-
-  it("shows one screen on the board without a cloud project or a demo member", () => {
-    startAssistGuide({ localProjectId: "local-1" });
-    const first = getDemoGuideState();
-    expect(first.status).toBe("active");
-    expect(first.phase).toBe("assist-intro");
-    // 没有云端项目与演示成员：不发心跳、不叫云端结束。
-    expect(first.projectId).toBeNull();
-    expect(first.memberUserId).toBeNull();
-    expect(first.localProjectId).toBe("local-1");
-    expect(demoGuideStepNumberOf(first.phase)).toBeNull();
-    // 只有这一屏：没有可退的上一屏，点「完成」就收场。
-    expect(demoGuideBackTarget(first)).toBeNull();
-
-    dispatchDemoGuide({ type: "next" });
-    expect(getDemoGuideState().status).toBe("ended");
-  });
-
-  it("remembers only its own marker, so the full walkthrough is still available", () => {
-    startAssistGuide({ localProjectId: "local-1" });
-    dispatchDemoGuide({ type: "next" });
-    expect(readAssistGuideDone(storage)).toBe(true);
-    // 看完这一屏不能顺手把完整引导也算作看过。
-    expect(readDemoGuideDone(storage)).toBe(false);
-  });
-
-  it("keeps the full walkthrough for people who never used projects", () => {
-    // 云端还能演示、本机也没退出过：这是从 1.2.6 升级的人，走完整引导。
-    expect(shouldOfferAssistIntro({ collabEnabled: true, demoGuideActive: false, demoEligible: true, assistDone: false, baseDone: false }))
-      .toBe(false);
-    // 云端已经有一条演示记录（demoEligible 为假）：1.2.7 升级上来的人，只看协助这两屏。
-    expect(shouldOfferAssistIntro({ collabEnabled: true, demoGuideActive: false, demoEligible: false, assistDone: false, baseDone: false }))
-      .toBe(true);
-    // 本机已经把完整引导走完过：同样只看协助。
-    expect(shouldOfferAssistIntro({ collabEnabled: true, demoGuideActive: false, demoEligible: true, assistDone: false, baseDone: true }))
-      .toBe(true);
-    // 已经看过、正在别的引导里、或协作不可用时都不进。
-    expect(shouldOfferAssistIntro({ collabEnabled: true, demoGuideActive: false, demoEligible: false, assistDone: true, baseDone: true }))
-      .toBe(false);
-    expect(shouldOfferAssistIntro({ collabEnabled: true, demoGuideActive: true, demoEligible: false, assistDone: false, baseDone: true }))
-      .toBe(false);
-    expect(shouldOfferAssistIntro({ collabEnabled: false, demoGuideActive: false, demoEligible: false, assistDone: false, baseDone: true }))
-      .toBe(false);
-  });
-
-  it("stays out of the way while a demo is running on that project", () => {
-    // 演示期间云端已经有那条记录，`demoEligible` 因此是假：只看这一个字段就会在完整引导旁边
-    // 再叠一张协助介绍。看板有 `demo.active` 时不进。
-    expect(shouldOfferAssistIntro({
-      collabEnabled: true,
-      demoGuideActive: false,
-      demoEligible: false,
-      demoInProgress: true,
-      assistDone: false,
-      baseDone: false
-    })).toBe(false);
-    // 演示收场、且这次是走完整引导的人：那一次的第三步已经讲过协助，标记也该记上，
-    // 见下一条用例；这里只确认没有演示时可以进来。
-    expect(shouldOfferAssistIntro({
-      collabEnabled: true,
-      demoGuideActive: false,
-      demoEligible: false,
-      demoInProgress: false,
-      assistDone: false,
-      baseDone: true
-    })).toBe(true);
-  });
-
-  it("does not show up again after the full walkthrough, which covers assistance", () => {
-    // 完整引导的第三步就是处理成员的请求：走完（或退出）之后，那段协助介绍没有必要再来一次。
-    setDemoGuideStorageForTest(storage);
-    dispatchDemoGuide({ type: "start-before-project" });
-    dispatchDemoGuide({ type: "next" });
-    void endDemoGuide("exited");
-    expect(readDemoGuideDone(storage)).toBe(true);
-    expect(readAssistGuideDone(storage)).toBe(true);
-  });
-
-  it("does not start again on this machine once it was seen", () => {
-    startAssistGuide({ localProjectId: "local-1" });
-    dispatchDemoGuide({ type: "next" });
-    dispatchDemoGuide({ type: "next" });
-    startAssistGuide({ localProjectId: "local-2" });
-    expect(getDemoGuideState().status).toBe("ended");
-    // force 只给预览与自助重置：看过也能再来一遍。
-    startAssistGuide({ force: true, localProjectId: "local-2" });
-    expect(getDemoGuideState().status).toBe("active");
   });
 });
 
