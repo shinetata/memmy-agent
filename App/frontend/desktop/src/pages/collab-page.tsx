@@ -56,7 +56,7 @@ import { agentChatScopeKey, shouldCreateNewAgentDraft } from "../state/agent-com
 import type { AgentTaskView, ComposerMention } from "../state/agent-chat-slice.js";
 import { useOptionalAppState, type AppStateContextValue } from "../state/app-state.js";
 import { ApiRequestError } from "../api/http.js";
-import { ProjectKnowledgeDialog, ProjectKnowledgeManageDialog } from "./collab-knowledge-dialog.js";
+import { ProjectKnowledgeDialog } from "./collab-knowledge-dialog.js";
 import {
   readProjectInstructions,
   saveProjectInstructions,
@@ -590,7 +590,6 @@ const CollabBoard = memo(function CollabBoard(props: {
   /** 项目关联的知识库：只影响本项目的检索，成员都能关联，解除限本人添加或所有者、管理员。 */
   const [knowledge, setKnowledge] = useState<CollabKnowledgeView | null>(null);
   const [knowledgeOpen, setKnowledgeOpen] = useState(false);
-  const [knowledgeManageOpen, setKnowledgeManageOpen] = useState(false);
   /** 「邀请」in the header and「项目成员」in the sidebar menu open the same dialog. */
   const [membersOpen, setMembersOpen] = useState(false);
   /** 待审核的加入申请数：弹窗没开时也轮询，别人提交申请后「邀请」入口上直接出现角标。 */
@@ -1973,7 +1972,6 @@ const CollabBoard = memo(function CollabBoard(props: {
                 knowledgeAvailable={Boolean(shared)}
                 onEdit={() => setInstructionsOpen(true)}
                 onAddKnowledge={() => setKnowledgeOpen(true)}
-                onManageKnowledge={() => setKnowledgeManageOpen(true)}
                 onCollapse={() => chooseConfig(false)}
               />
             ) : null}
@@ -2004,23 +2002,13 @@ const CollabBoard = memo(function CollabBoard(props: {
         />
       ) : null}
       {project ? (
-        <ProjectKnowledgeManageDialog
-          open={knowledgeManageOpen}
-          knowledge={knowledge}
-          onClose={() => setKnowledgeManageOpen(false)}
-          onAdd={() => { setKnowledgeManageOpen(false); setKnowledgeOpen(true); }}
-          onRemove={removeKnowledge}
-        />
-      ) : null}
-      {project ? (
         <ProjectKnowledgeDialog
           open={knowledgeOpen}
-          linked={knowledge?.bases ?? []}
-          maxBases={knowledge?.maxBases ?? 10}
+          knowledge={knowledge}
           config={runtimeConfig}
-          onClose={() => { setKnowledgeOpen(false); setKnowledgeManageOpen(true); }}
+          onClose={() => setKnowledgeOpen(false)}
           onAdd={addKnowledge}
-          onAdded={(count) => showToast(t("collab.knowledge.added", { count: String(count) }))}
+          onRemove={removeKnowledge}
         />
       ) : null}
       {project ? (
@@ -2697,7 +2685,6 @@ function ProjectConfigPanel(props: {
   knowledgeAvailable: boolean;
   onEdit: () => void;
   onAddKnowledge: () => void;
-  onManageKnowledge: () => void;
   onCollapse: () => void;
 }) {
   const { t } = useTranslation();
@@ -2748,33 +2735,27 @@ function ProjectConfigPanel(props: {
                 {t("collab.config.knowledge")}
                 {props.knowledge?.bases.length ? <span className={styles.configKnowledgeCount}>{props.knowledge.bases.length}</span> : null}
               </span>
-              {props.knowledge?.bases.length ? (
-                <button type="button" className={styles.configKnowledgeAction} onClick={props.onManageKnowledge}>
-                  {t("collab.config.knowledgeManage")}
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  className={styles.configIcon}
-                  aria-label={t("collab.config.knowledgeAdd")}
-                  title={t("collab.config.knowledgeAdd")}
-                  onClick={props.onAddKnowledge}
-                >
-                  <Plus size={14} aria-hidden="true" />
-                </button>
-              )}
+              <button
+                type="button"
+                className={styles.configIcon}
+                aria-label={t("collab.config.knowledgeAdd")}
+                title={t("collab.config.knowledgeAdd")}
+                onClick={props.onAddKnowledge}
+              >
+                <Plus size={14} aria-hidden="true" />
+              </button>
             </div>
             {props.knowledge?.bases.length ? (
-              <div className={styles.configCardBody}>
-                <ul className={styles.configKnowledgeList}>
+              <button type="button" className={styles.configCardBody} onClick={props.onAddKnowledge}>
+                <span className={styles.configKnowledgeList}>
                   {props.knowledge.bases.slice(0, 3).map((base) => (
-                    <li key={base.id} className={styles.configKnowledgeRow}>
+                    <span key={base.id} className={styles.configKnowledgeRow}>
                       <BookOpen size={12} aria-hidden="true" />
                       <span className={styles.configKnowledgeName} title={base.name}>{base.name}</span>
-                    </li>
+                    </span>
                   ))}
-                </ul>
-              </div>
+                </span>
+              </button>
             ) : (
               <button type="button" className={styles.configCardBody} onClick={props.onAddKnowledge}>
                 <span className={styles.configEmpty}>{t("collab.config.knowledgeEmpty")}</span>

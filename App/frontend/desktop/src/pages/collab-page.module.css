@@ -960,18 +960,6 @@
   font-weight: 400;
 }
 
-.configKnowledgeAction {
-  border: 0;
-  padding: 0;
-  background: transparent;
-  color: var(--collab-accent-deep);
-  font: inherit;
-  font-size: 12px;
-  cursor: pointer;
-}
-
-.configKnowledgeAction:hover { text-decoration: underline; }
-
 .searchBox {
   display: flex;
   /* 与成员筛选下拉同排：搜索先给宽度，窄窗口下按下面容器的规则收缩 */

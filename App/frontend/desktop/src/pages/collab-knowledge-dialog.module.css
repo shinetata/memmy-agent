@@ -209,12 +209,6 @@
   white-space: nowrap;
 }
 
-.linked {
-  flex: none;
-  color: color-mix(in srgb, var(--color-text-ink) 48%, transparent);
-  font-size: 12px;
-}
-
 .empty {
   display: flex;
   align-items: center;
@@ -262,42 +256,12 @@
   .row { gap: 9px; padding: 10px 8px; }
 }
 
-.manageTools { display: flex; align-items: center; gap: 10px; margin: 8px 0 16px; }
-.manageTools .search { flex: 1; width: auto; }
-.manageTools :global(.button) { flex: none; }
-.manageResults { min-height: 0; max-height: min(360px, 42dvh); overflow-y: auto; overscroll-behavior: contain; }
-.manageRow { display: flex; align-items: center; gap: 10px; min-height: 48px; padding: 8px 4px; border-bottom: 1px solid color-mix(in srgb, var(--color-border-stone) 65%, transparent); color: var(--color-text-ink); }
-.manageRow > svg { flex: none; color: color-mix(in srgb, var(--color-text-ink) 55%, transparent); }
-.manageName { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.manageRemove { flex: none; border: 0; padding: 6px 4px; background: transparent; color: color-mix(in srgb, var(--color-text-ink) 58%, transparent); font: inherit; font-size: 12px; cursor: pointer; }
-.manageRemove:hover:not(:disabled) { color: var(--color-danger); }
-.manageRemove:disabled { opacity: 0.5; cursor: default; }
-@media (max-width: 480px) { .manageTools { flex-wrap: wrap; } .manageTools .search { flex-basis: 100%; } }
+.row[data-busy="true"] { opacity: 0.6; }
+.row[data-busy="true"] .checkbox { cursor: progress; }
 
-/* Management is a compact view of existing links, distinct from the multi-select picker. */
-:global(.modal).manageDialog { width: min(480px, calc(100vw - 32px)); }
-.manageDialog :global(.modal-header) { padding: 20px 22px 8px; }
-.manageDialog :global(.modal-header) h2 { font-size: 16px; }
-.manageDialog .body { padding: 0 22px 20px; }
-.manageDialog .manageTools { margin: 12px 0 12px; }
-.manageDialog .manageTools .search { height: 36px; }
-.manageDialog .manageTools :global(.button) { gap: 5px; box-shadow: none; white-space: nowrap; }
-.manageDialog .manageResults { max-height: min(320px, 42dvh); }
-.manageDialog .list { gap: 0; }
-.manageDialog .manageRow { min-height: 42px; padding: 6px 4px; font-size: 13px; }
-.manageDialog .manageRow:last-child { border-bottom: 0; }
-@media (max-width: 480px) {
-  .manageDialog :global(.modal-header) { padding: 18px 16px 8px; }
-  .manageDialog .body { padding: 0 16px 16px; }
-  .manageDialog .manageTools { flex-wrap: nowrap; }
-  .manageDialog .manageTools .search { flex-basis: 0; }
+/* 已关联的行不随容量变灰：它是当前状态，不是选不动的候选。 */
+.row[data-linked="true"][data-disabled="true"] { opacity: 1; }
+.row[data-linked="true"]:hover:not([data-disabled="true"]) {
+  background: color-mix(in srgb, var(--color-text-ink) 3%, var(--color-background-paper));
 }
-
-.manageSelectionBar { display: flex; align-items: center; justify-content: flex-end; gap: 2px; min-height: 32px; margin-bottom: 4px; }
-.manageSelectionBar :global(.button) { display: inline-flex; align-items: center; gap: 4px; padding: 5px 7px; white-space: nowrap; }
-.manageSelectionCount { margin-right: auto; color: color-mix(in srgb, var(--color-text-ink) 60%, transparent); font-size: 12px; white-space: nowrap; }
-.manageSelectionBar :global(.button).manageBulkRemove { color: var(--color-danger); }
-.manageSelectable { display: flex; flex: 1; min-width: 0; align-items: center; gap: 10px; cursor: pointer; }
-.manageSelectable > svg { flex: none; color: color-mix(in srgb, var(--color-text-ink) 55%, transparent); }
-.manageRowSelected { background: var(--color-nav-active-bg); border-radius: 6px; }
-@media (max-width: 400px) { .manageSelectionBar { flex-wrap: wrap; } }
+.row[data-linked="true"] .icon { color: var(--color-accent-deep); }

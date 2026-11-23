@@ -222,6 +222,8 @@ export interface CollabKnowledgeBase {
   name: string;
   /** 这个库是本机用户关联的：本人可以解除，别人的只有所有者与管理员能解除。 */
   mine: boolean;
+  /** 关联人的昵称：别的成员关联的库界面要说清是谁关联的；旧云端不返回时为 null。 */
+  addedByName: string | null;
 }
 
 /** 项目配置里的知识库卡片：列表加一条「还能加几个」。 */
@@ -3190,7 +3192,12 @@ function toKnowledge(raw: unknown): CollabKnowledgeView {
     maxBases: typeof view.maxBases === "number" ? view.maxBases : 10,
     bases: list(view.bases).map((value) => {
       const base = record(value);
-      return { id: text(base.id), name: text(base.name), mine: base.mine === true };
+      return {
+        id: text(base.id),
+        name: text(base.name),
+        mine: base.mine === true,
+        addedByName: nullableText(base.addedByName)
+      };
     })
   };
 }

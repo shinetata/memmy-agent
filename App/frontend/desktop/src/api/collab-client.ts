@@ -60,7 +60,9 @@ const KnowledgeViewSchema = z.object({
   bases: z.array(z.object({
     id: z.string(),
     name: z.string(),
-    mine: z.boolean().nullish().transform((value) => value ?? false)
+    mine: z.boolean().nullish().transform((value) => value ?? false),
+    /** 关联人的昵称：别人关联的库要说明是谁关联的，旧云端不返回时按「其他成员」显示。 */
+    addedByName: z.string().nullish().transform((value) => (value == null ? null : value))
   })).nullish().transform((value) => value ?? [])
 });
 
