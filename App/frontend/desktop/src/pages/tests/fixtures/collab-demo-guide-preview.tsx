@@ -5,7 +5,7 @@
  * 这样不连本机接口也能逐步检查亮区位置、说明卡会不会挡住目标、窄窗口下是否溢出。
  */
 import type { CSSProperties, ReactNode } from "react";
-import { Check, LifeBuoy, Link2, MessageSquarePlus, Search, Settings, Send, UserPlus } from "lucide-react";
+import { Check, ChevronDown, LifeBuoy, Link2, MessageSquarePlus, Search, Settings, Send, UserPlus } from "lucide-react";
 import { I18nProvider } from "../../../i18n/i18n-provider.js";
 import { CollabDemoGuideOverlay } from "../../../components/collab-demo-guide/collab-demo-guide-overlay.js";
 import { demoGuideIsAssistPhase, demoGuideIsTourPhase, type DemoGuidePhase, type DemoGuideState } from "../../../app/collab-demo-guide-store.js";
@@ -150,7 +150,7 @@ function PreviewSidebar() {
 }
 
 /** 看板的一列：标题、任务行、右侧项目配置，与真实看板同一套类名与外观。 */
-function BoardSurface(props: { withSettings: boolean; withAssistRow: boolean; withSidebar?: boolean; withMembersAnchor?: boolean }) {
+function BoardSurface(props: { withSettings: boolean; withSidebar?: boolean; withMembersAnchor?: boolean }) {
   return (
     <div
       className={board.page}
@@ -174,11 +174,16 @@ function BoardSurface(props: { withSettings: boolean; withAssistRow: boolean; wi
               <Settings size={15} aria-hidden="true" />
             </button>
           </header>
-          <div className={board.boardTabs} role="tablist" data-demo-guide="board-tabs">
-            <button type="button" role="tab" aria-selected className={`${board.boardTab} ${board.boardTabOn}`}>任务</button>
-            <button type="button" role="tab" aria-selected={false} className={board.boardTab}>
-              协助<span className={board.segCount}>{props.withAssistRow ? "2" : "0"}</span>
-            </button>
+          {/* 成员段头：名字、条数与折叠箭头；鼠标移上来时右侧出现「请求协助」，导览第二站就亮这颗按钮。 */}
+          <div className={board.groupHead} role="button" tabIndex={0} aria-expanded>
+            <span className={`${board.avatar} ${board.avatarSoft} ${board.groupHeadAvatar}`} style={{ "--member": "#c98b2f" } as CSSProperties} aria-hidden="true">
+              丰
+            </span>
+            <span className={board.groupHeadName}>{MEMBER}的任务</span>
+            <span className={board.groupHeadCount}>1 个任务</span>
+            <span className={board.grow} />
+            <button type="button" className={board.groupHeadAsk} data-demo-guide="board-member-ask">请求协助</button>
+            <ChevronDown size={14} aria-hidden="true" className={board.groupHeadCaret} />
           </div>
           <div className={board.toolbar}>
             <label className={board.searchBox}>
@@ -203,30 +208,7 @@ function BoardSurface(props: { withSettings: boolean; withAssistRow: boolean; wi
               </div>
               <span className={board.meta}>{MEMBER} · 10:24</span>
             </li>
-            {props.withAssistRow ? (
-              <>
-                <li className={`${board.row} ${board.rowOpenable}`} data-demo-guide="assist-row">
-                  <span className={`${board.avatar} ${board.assistIcon}`} aria-hidden="true">
-                    <LifeBuoy size={15} />
-                  </span>
-                  <div className={board.rowText}>
-                    <span className={board.rowTitle}>确认这台电脑的系统版本</span>
-                    <span className={board.rowSummary}>分享会要现场演示，他想先确认这台电脑的系统版本。</span>
-                  </div>
-                  <span className={`${board.meta} ${board.assistMetaOpen}`}>{MEMBER} → 你 · Memmy · 执行中</span>
-                </li>
-                <li className={`${board.row} ${board.rowOpenable}`}>
-                  <span className={`${board.avatar} ${board.assistIcon}`} aria-hidden="true">
-                    <LifeBuoy size={15} />
-                  </span>
-                  <div className={board.rowText}>
-                    <span className={board.rowTitle}>查一下上次分享会来了多少人</span>
-                    <span className={board.rowSummary}>签到表在{MEMBER}的电脑上，他的 Agent 去查。</span>
-                  </div>
-                  <span className={`${board.meta} ${board.assistMetaOpen}`}>你 → {MEMBER} · Memmy · 已完成</span>
-                </li>
-              </>
-            ) : null}
+
           </ul>
         </div>
       </div>
@@ -640,18 +622,18 @@ export function DemoGuidePreview(props: { step: DemoGuidePreviewStep }) {
   // 建项目之前的六个阶段全在新建弹窗上，只换亮区。
   if (PRE_PROJECT_PHASES.includes(phase)) surface = <CreateProjectSurface />;
   // 加入之后人已经在看板上：亮区只套住头部的成员徽章，没有独立的提示窗。
-  else if (phase === "joined") surface = <BoardSurface withSettings withAssistRow={false} withMembersAnchor />;
+  else if (phase === "joined") surface = <BoardSurface withSettings withMembersAnchor />;
   else if (chat) surface = <ChatSurface phase={phase} />;
   else if (tour) {
     surface = (
       <>
-        <BoardSurface withSettings withAssistRow={false} withSidebar={phase === "tour-new-task"} />
+        <BoardSurface withSettings withSidebar={phase === "tour-new-task"} />
         {phase === "tour-new-task" ? <PreviewSidebar /> : null}
         {phase === "tour-associate-pick" ? <AssociatePickSurface locked={props.step === "t-associate-lock"} /> : null}
       </>
     );
   }
-  else if (phase === "reader") surface = (<><BoardSurface withSettings={false} withAssistRow={false} /><ReaderSurface /></>);
+  else if (phase === "reader") surface = (<><BoardSurface withSettings={false} /><ReaderSurface /></>);
   else if (phase === "settings-assist") surface = <SettingsSurface />;
   // 协助上手：两屏都落在看板上（第二屏亮 tab 那一行）。
   else if (demoGuideIsAssistPhase(phase)) surface = <BoardSurface withSettings />;
@@ -659,7 +641,7 @@ export function DemoGuidePreview(props: { step: DemoGuidePreviewStep }) {
   // 允许之后人就在那条任务里：协助 chip、执行过程与「结果已发给谁」都在这一页。
   else if (phase === "help-running") surface = <AssistTaskSurface done={false} />;
   else if (phase === "help-done") surface = <AssistTaskSurface done />;
-  else surface = <BoardSurface withSettings withAssistRow={phase === "help-running" || phase === "help-done" || phase === "help-rejected"} />;
+  else surface = <BoardSurface withSettings />;
 
   return (
     <I18nProvider language="zh-CN">

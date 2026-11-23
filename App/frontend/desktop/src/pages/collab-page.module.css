@@ -155,67 +155,6 @@
   margin-top: 18px;
 }
 
-/*
- * 「任务」与「协助」两个 tab：看板内容的分区，不是筛选。
- * 一行文字 + 底部细线，选中项用加深的文字与 2px 强调色下划线，不用胶囊，免得与下面成员筛选的三段胶囊混淆。
- */
-.boardTabs {
-  display: flex;
-  align-items: center;
-  gap: 20px;
-  margin-top: 16px;
-  border-bottom: 1px solid var(--collab-line-soft);
-}
-
-.boardTab {
-  position: relative;
-  padding: 0 1px 9px;
-  border: 0;
-  background: transparent;
-  color: var(--collab-muted);
-  font: inherit;
-  font-size: 13.5px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: color 120ms ease;
-}
-
-.boardTab:hover:not(.boardTabOn) {
-  color: var(--collab-ink-2);
-}
-
-.boardTabOn {
-  color: var(--collab-ink);
-  font-weight: 700;
-}
-
-/* 下划线压在分隔线上的位置：比细线粗 2px，颜色用主题强调色 */
-.boardTabOn::after {
-  content: "";
-  position: absolute;
-  right: 0;
-  bottom: -1px;
-  left: 0;
-  height: 2px;
-  border-radius: 1px;
-  background: var(--collab-accent-deep);
-}
-
-/*
- * 键盘焦点：细一档、半透明，鼠标点击 tab 后不再出现粗方框。
- * 点击不落到 :focus-visible（tab 也没有被代码主动 focus），只有键盘切到它时才出现。
- */
-.boardTab:focus-visible {
-  border-radius: 6px;
-  outline: 1.5px solid color-mix(in srgb, var(--collab-accent-deep) 55%, transparent);
-  outline-offset: 3px;
-}
-
-/* 「协助」的工具条：左边一句可见范围说明，右边只留刷新与多选，所以不必换行 */
-.assistToolbar {
-  flex-wrap: nowrap;
-}
-
 .grow {
   flex: 1;
   min-width: 0;
@@ -523,7 +462,8 @@
   min-width: 0;
   overflow: hidden;
   color: var(--collab-ink);
-  font-size: 13.5px;
+  /* 段头是这一段的标识，字号比下面的任务标题大一档（15 / 13.5），扫列表时先看到他属于谁。 */
+  font-size: 15px;
   font-weight: 650;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -541,6 +481,44 @@
   flex: none;
   color: var(--collab-ter);
   transition: transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+/*
+ * 段头上的「请求协助」：常态不出现，只看名字与条数；鼠标进到这一行（或键盘走进去）才在
+ * 折叠箭头左侧现出。框线 + 文字都用中锅灰，不拿主色，避免每一行都挂一个绿色按钮抢注意力。
+ * 常驻占位（opacity 不可见而不是 display:none）：出现时不会把箭头往左挤。
+ */
+.groupHeadAsk {
+  flex: none;
+  height: 24px;
+  padding: 0 9px;
+  border: 1px solid var(--collab-line);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--collab-muted);
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 400;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+
+.groupHead:hover .groupHeadAsk,
+.groupHead:focus-within .groupHeadAsk {
+  opacity: 1;
+}
+
+.groupHeadAsk:hover {
+  border-color: color-mix(in srgb, var(--collab-muted) 45%, transparent);
+  color: var(--collab-ink-2);
+}
+
+.groupHeadAsk:focus-visible {
+  outline: 1.5px solid color-mix(in srgb, var(--collab-accent-deep) 55%, transparent);
+  outline-offset: 1px;
 }
 
 .groupHeadCaretShut {
@@ -636,20 +614,22 @@
   font-size: 12.5px;
 }
 
-/* 任务行：标题比摘要重、也更深一级，扫列表时先看到任务名 */
+/* 任务行：标题比摘要重、也更深一级，扫列表时先看到任务名。
+   字号压在成员段头之下（13.5 / 12.5）：一段里的任务是段头的从属内容，标题不该比所在成员的名字还显眼。 */
 .stream .rowTitle {
-  font-size: 14.5px;
+  font-size: 13.5px;
   font-weight: 600;
 }
 
 /* 摘要只是提示内容，比标题浅一档；不要和标题一个颜色，否则两行分不出主次 */
 .stream .rowSummary {
-  font-size: 13px;
+  font-size: 12.5px;
   color: color-mix(in srgb, var(--collab-muted) 78%, var(--color-background-paper, #fff));
 }
 
 .stream .meta {
-  font-size: 12.5px;
+  /* 时间比摘要再轻一档：它只是行尾的排序信息，不该和正文一样重。 */
+  font-size: 12px;
   font-variant-numeric: tabular-nums;
   transition: opacity 120ms ease;
 }
@@ -787,100 +767,6 @@
   list-style: none;
 }
 
-/*
- * 「协助」里现在就能请的人：只有一串头像。没有标题、昵称与在线点——
- * 这一行存在本身就说明她们此刻可以被请，名字只在悬停时给；点一下直接进会话页。
- * 头像从 28px 提到 32px：现在它独自承担点击目标。
- */
-.assistPeople {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin: 14px 0 22px;
-}
-
-.assistPerson {
-  position: relative;
-  display: grid;
-  place-items: center;
-  width: 34px;
-  height: 34px;
-  padding: 0;
-  border: 0;
-  border-radius: 999px;
-  background: transparent;
-  cursor: pointer;
-}
-
-/* 成员自身颜色的浅底与字色，与看板其他头像同一套 */
-.assistPersonAvatar {
-  width: 32px;
-  height: 32px;
-  background: color-mix(in srgb, var(--member) 14%, var(--color-background-paper, #fff));
-  color: var(--member);
-  font-size: 12.5px;
-  font-weight: 600;
-  transition: transform 150ms ease, box-shadow 150ms ease;
-}
-
-/* 悬停只做两件事：头像抬 1px、外圈出一圈强调色。不加缩放、不堆阴影。 */
-.assistPerson:hover .assistPersonAvatar,
-.assistPerson:focus-visible .assistPersonAvatar {
-  transform: translateY(-1px);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--collab-accent-deep) 45%, transparent);
-}
-
-.assistPerson:focus-visible {
-  outline: none;
-}
-
-/* 气泡开在头像右侧：上方是 tab、下方是正文，只有右边是空的。 */
-.assistPersonTip {
-  position: absolute;
-  left: calc(100% + 7px);
-  top: 50%;
-  z-index: 5;
-  padding: 5px 9px;
-  border: 1px solid color-mix(in srgb, var(--collab-line-soft) 100%, transparent);
-  border-radius: 8px;
-  background: var(--color-background-paper, #fff);
-  box-shadow: 0 6px 18px rgba(17, 29, 28, .09);
-  color: var(--collab-ink-2);
-  font-size: 12px;
-  line-height: 1.4;
-  white-space: nowrap;
-  opacity: 0;
-  transform: translate(-3px, -50%);
-  pointer-events: none;
-  transition: opacity 150ms ease, transform 150ms ease;
-}
-
-.assistPersonTip::after {
-  content: "";
-  position: absolute;
-  left: -4.5px;
-  top: 50%;
-  width: 8px;
-  height: 8px;
-  margin-top: -4px;
-  border-left: 1px solid color-mix(in srgb, var(--collab-line-soft) 100%, transparent);
-  border-bottom: 1px solid color-mix(in srgb, var(--collab-line-soft) 100%, transparent);
-  background: var(--color-background-paper, #fff);
-  transform: rotate(45deg);
-}
-
-.assistPerson:hover .assistPersonTip,
-.assistPerson:focus-visible .assistPersonTip {
-  opacity: 1;
-  transform: translate(0, -50%);
-}
-
-/* 空看板里的说明列表：直接落在页面白底上，与工具条左缘对齐，不套卡片 */
-/* 协助空状态的说明：没有工具条撑着，自己与上面的 tab 留出距离 */
-.assistEmpty {
-  margin-top: 18px;
-}
-
 .guideListBare {
   margin: 0;
 }
@@ -990,18 +876,6 @@
   background: color-mix(in srgb, var(--collab-accent) 16%, transparent);
 }
 
-/* 「协助」列表底部：收起的未执行请求与上限说明，都是一行小字。
- * 不设左右内边距：工具条没有内边距、列表行用 -14/+14 抵消，这里也贴齐内容左边缘。
- * 那段留白不能靠调工具条或列表行来凑，否则整块列表会往左偏。 */
-.assistFooter {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 4px;
-  margin-top: 8px;
-  padding: 0;
-}
-
 .assistFooterToggle {
   padding: 4px 0;
   border: 0;
@@ -1022,6 +896,21 @@
   color: var(--collab-ter);
   font-size: 12px;
   line-height: 1.6;
+}
+
+/* 协助记录弹窗：开头一句说清可见范围，空态也只有一句话 */
+.assistRecordsLead {
+  margin: 0 0 10px;
+  color: var(--collab-muted);
+  font-size: 12.5px;
+  line-height: 1.65;
+}
+
+.assistRecordsEmpty {
+  margin: 2px 0 0;
+  color: var(--collab-ter);
+  font-size: 12.5px;
+  line-height: 1.7;
 }
 
 .configKnowledgeList {
@@ -3221,21 +3110,6 @@
 /* 还没结束的协助：状态用主题色，一眼看得出哪几条还在进行。 */
 .assistMetaOpen {
   color: var(--color-accent-deep, #2f8f7f);
-}
-
-/* 筛选栏「协助」后面的待处理数量。 */
-.segCount {
-  display: inline-block;
-  min-width: 16px;
-  margin-left: 5px;
-  padding: 0 5px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--color-accent-mint, #5cbfae) 18%, transparent);
-  color: var(--color-accent-deep, #2f8f7f);
-  font-size: 11px;
-  font-weight: 600;
-  line-height: 16px;
-  text-align: center;
 }
 
 /* 限时授权：接收协助请求下面每位成员一行，左侧首字头像、名字与「哪个 Agent · 还剩多久」，右侧结束 */

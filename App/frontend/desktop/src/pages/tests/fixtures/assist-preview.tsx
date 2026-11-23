@@ -7,7 +7,7 @@
  */
 import type { ReactNode } from "react";
 import { createRoot } from "react-dom/client";
-import { Link2, ListChecks, PanelRight, RefreshCw, Search, Settings, User, UserPlus } from "lucide-react";
+import { ChevronDown, Link2, ListChecks, PanelRight, RefreshCw, Search, Settings, User, UserPlus } from "lucide-react";
 import type { AssistExecution, AssistGrant, AssistInboxItem, AssistRequest, AssistThread, CollabClient } from "../../../api/collab-client.js";
 import { I18nProvider } from "../../../i18n/i18n-provider.js";
 import { CollabAssistDialog } from "../../collab-assist-dialog.js";
@@ -715,6 +715,8 @@ function Preview() {
             collab={settingsClient}
             shareAvailable
             taskCount={3}
+            assistCount={2}
+            onOpenAssistRecords={() => undefined}
             onClose={() => undefined}
             onShared={() => undefined}
             onUnshared={() => undefined}
@@ -752,9 +754,16 @@ function Preview() {
                 </Button>
               </span>
             </header>
-            <div className={board.boardTabs} role="tablist" aria-label="看板内容">
-              <button type="button" role="tab" aria-selected="true" className={`${board.boardTab} ${board.boardTabOn}`}>任务</button>
-              <button type="button" role="tab" aria-selected="false" className={board.boardTab}>协助</button>
+            {/* 成员段头：鼠标移上来时右侧出现「请求协助」，协助不再有自己的 tab。 */}
+            <div className={board.groupHead} role="button" tabIndex={0} aria-expanded>
+              <span className={`${board.avatar} ${board.avatarSoft} ${board.groupHeadAvatar}`} style={{ "--member": "#c98b2f" } as CSSProperties} aria-hidden="true">
+                孙
+              </span>
+              <span className={board.groupHeadName}>孙起的任务</span>
+              <span className={board.groupHeadCount}>3 个任务</span>
+              <span className={board.grow} />
+              <button type="button" className={board.groupHeadAsk}>请求协助</button>
+              <ChevronDown size={14} aria-hidden="true" className={board.groupHeadCaret} />
             </div>
           </div>
         </div>
@@ -763,7 +772,7 @@ function Preview() {
   }
 
   if (view === "board") {
-    // 看板分成「任务」「协助」两个 tab：这里展示「协助」tab，几条数据分别是等你确认、还在跑、已完成。
+    // 看板上不再有「协助」tab：协助的记录在项目设置里，这里展示那份列表（等你确认、还在跑、已完成）。
     const running = thread({ threadId: "th-running", status: "running", lastActiveAt: "2026-11-04T14:44:00Z" }, [
       request({ threadId: "th-running", title: "确认 409 那次请求的完整返回", reason: "孙起本机复现不了分享弹窗的 409", status: "running", agent: "claude_code", scope: "once", mine: true })
     ]);
@@ -771,28 +780,13 @@ function Preview() {
       <div className={board.page} style={{ height: "100vh" }}>
         <div className={board.scroller}>
           <div className={board.wrap}>
-            <div className={board.boardTabs} role="tablist" aria-label="看板内容">
-              <button type="button" role="tab" aria-selected="false" className={board.boardTab}>任务</button>
-              <button type="button" role="tab" aria-selected="true" className={`${board.boardTab} ${board.boardTabOn}`}>协助<span className={board.segCount}>1</span></button>
-            </div>
-            {/* 「协助」没有常驻工具条：只在有在跑的或有可多选的时才出现，也不给刷新。 */}
-            <div className={`${board.toolbar} ${board.assistToolbar}`}>
-              <span className={board.grow} />
-              {/* 并行执行之后可能同时有多条在跑：条数就是会停的条数。 */}
-              <Button size="sm" variant="ghost" className={board.dangerGhost}>全部停止（1）</Button>
-              <Button size="sm" variant="ghost" className={board.iconAction}>
-                <ListChecks size={14} aria-hidden="true" />
-                <span className={board.actionLabel}>多选</span>
-              </Button>
-            </div>
+            <p className={board.assistRecordsLead}>只列你参与过的协助（你发起的、或请在你的电脑上执行的），项目里其他成员看不到。</p>
             <ul className={`${board.list} ${board.stream} ${board.flatStream}`}>
               <AssistBoardRow thread={THREADS[1]!} selecting={false} onOpen={() => undefined} />
               <AssistBoardRow thread={running} selecting={false} onOpen={() => undefined} />
               <AssistBoardRow thread={THREADS[0]!} selecting={false} onOpen={() => undefined} />
             </ul>
-            <div className={board.assistFooter}>
-              <button type="button" className={board.assistFooterToggle}>另有 2 条没有执行的请求（未允许、已撤回或已过期）</button>
-            </div>
+            <button type="button" className={board.assistFooterToggle}>另有 2 条没有执行的请求（未允许、已撤回或已过期）</button>
           </div>
         </div>
       </div>
@@ -805,9 +799,16 @@ function Preview() {
       <div className={board.page} style={{ height: "100vh" }}>
         <div className={board.scroller}>
           <div className={board.wrap}>
-            <div className={board.boardTabs} role="tablist" aria-label="看板内容">
-              <button type="button" role="tab" aria-selected="true" className={`${board.boardTab} ${board.boardTabOn}`}>任务</button>
-              <button type="button" role="tab" aria-selected="false" className={board.boardTab}>协助<span className={board.segCount}>1</span></button>
+            {/* 成员段头：鼠标移上来时右侧出现「请求协助」，协助不再有自己的 tab。 */}
+            <div className={board.groupHead} role="button" tabIndex={0} aria-expanded>
+              <span className={`${board.avatar} ${board.avatarSoft} ${board.groupHeadAvatar}`} style={{ "--member": "#c98b2f" } as CSSProperties} aria-hidden="true">
+                孙
+              </span>
+              <span className={board.groupHeadName}>孙起的任务</span>
+              <span className={board.groupHeadCount}>3 个任务</span>
+              <span className={board.grow} />
+              <button type="button" className={board.groupHeadAsk}>请求协助</button>
+              <ChevronDown size={14} aria-hidden="true" className={board.groupHeadCaret} />
             </div>
             <div className={board.toolbar}>
               <label className={board.searchBox}>

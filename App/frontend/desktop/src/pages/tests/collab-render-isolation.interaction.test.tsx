@@ -151,7 +151,7 @@ describe("collab board render isolation", () => {
   it("still re-renders the board when a section is collapsed", async () => {
     await renderBoard();
     const mounted = frameRenders.count;
-    const toggle = container.querySelector<HTMLElement>("button[data-collab-member-toggle]");
+    const toggle = container.querySelector<HTMLElement>("[data-collab-member-toggle]");
     expect(toggle).toBeTruthy();
 
     await act(async () => toggle!.click());

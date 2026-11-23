@@ -108,10 +108,10 @@ async function flush(): Promise<void> {
   }
 }
 
-/** 成员分段的段头：按段键找（`me` 或 `member:<昵称>`），段头本身是 button。 */
+/** 成员分段的段头：按段键找（`me` 或 `member:<昵称>`）。段头是 button 角色的容器，里面还挂着「请求协助」。 */
 function groupHead(name: string): HTMLElement {
   const section = groupSection(name);
-  const head = section.querySelector<HTMLElement>("button[data-collab-member-toggle]");
+  const head = section.querySelector<HTMLElement>("[data-collab-member-toggle]");
   if (!head) throw new Error(`段落「${name}」没有段头`);
   return head;
 }

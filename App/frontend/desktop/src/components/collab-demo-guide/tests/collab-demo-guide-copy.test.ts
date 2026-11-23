@@ -104,19 +104,19 @@ describe("the demo guide copy", () => {
 
   it("keeps the five tour steps in the approved words", () => {
     const zh = [0, 1, 2, 3, 4].map((index) => demoGuideTourCard(index, translate("zh-CN")));
-    expect(zh.map((card) => card.stepName)).toEqual(["任务列表", "协助", "关联任务", "关联会话", "新建任务"]);
+    expect(zh.map((card) => card.stepName)).toEqual(["任务列表", "请求协助", "关联任务", "关联会话", "新建任务"]);
     expect(zh.map((card) => card.body)).toEqual([
       "成员共享的任务都在这里。每项任务的完整对话与进展都能读到，也可以接着往下推进，不用反复同步背景。",
-      "有些信息和操作只在成员自己的电脑上，比如他的本地文件、本机环境。任务里需要这些时，向成员发起协助请求，他确认后由他电脑上的 Agent 执行，结果回写到你的任务中。双方的协助记录都在这里。",
+      "有些信息和操作只在成员自己的电脑上，比如他的本地文件、本机环境。把鼠标移到成员的这一行，右侧会出现「请求协助」，点一下就能带着她开一条任务；她确认后由她电脑上的 Agent 执行，结果回写到你的任务中。双方的协助记录在项目设置里。",
       "你在 Claude Code、Cursor 等外部工具里做的工作，成员默认看不到。把那段会话关联进项目，成员就能读到完整上下文并接着处理，不用再讲一遍；关联整个分组后，该分组新增的会话也会自动进入项目。",
       "之后可以在这里选择对应的会话内容，共享给其他成员，不过这次我们先进入下面的环节吧。",
       "需要开展新工作时，从这里新建任务。项目内新建的任务默认对成员可见，方便他们查看进展、接着推进或发起协助。"
     ]);
     const en = [0, 1, 2, 3, 4].map((index) => demoGuideTourCard(index, translate("en-US")));
-    expect(en.map((card) => card.stepName)).toEqual(["Task list", "Assistance", "Linked tasks", "Linked sessions", "New task"]);
+    expect(en.map((card) => card.stepName)).toEqual(["Task list", "Request help", "Linked tasks", "Linked sessions", "New task"]);
     expect(en.map((card) => card.body)).toEqual([
       "Tasks shared by members live here. You can read each task's full conversation and progress, and carry on from where it stopped without briefing each other again.",
-      "Some information and actions only exist on a member's own computer, such as their local files or their machine's environment. When a task needs them, send the member an assistance request; once they confirm, the Agent on their computer runs it and the result is written back to your task. Requests from both sides are listed here.",
+      "Some information and actions only exist on a member's own computer, such as their local files or their machine's environment. Hover a member's row and Request help appears on the right; click it to start a task addressed to her. Once she confirms, the agent on her computer runs it and the result is written back to your task. Both sides can read the history in the project settings.",
       "Work you did in Claude Code, Cursor and other external tools is invisible to members by default. Link that session to the project and members can read the full context and carry on, without you retelling it. Link a whole group and its new sessions come in automatically.",
       "Later you can pick which sessions to share with members here. For now, let's move on to the next part.",
       "Start new work here. New tasks in this project are visible to members by default, so they can follow progress, carry on, or ask for assistance."

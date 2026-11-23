@@ -87,11 +87,11 @@ describe("the demo guide preview", () => {
     expect(DEMO_GUIDE_PREVIEW_STEPS["t-associate-pick"]).toBe("tour-associate-pick");
     expect(DEMO_GUIDE_PREVIEW_STEPS["t-new-task"]).toBe("tour-new-task");
 
-    // 每一步的锚点都在预览页上：任务列表那一片、tab 那一行、工具条右侧的关联任务、关联会话弹窗、侧栏的「＋」。
-    // 「项目名与成员」那一步已经删掉，也没有 board-header 这个锚点。
+    // 每一步的锚点都在预览页上：任务列表那一片、成员行上的「请求协助」、工具条右侧的关联任务、关联会话弹窗、侧栏的「＋」。
+    // 「项目名与成员」那一步已经删掉，也没有 board-header 这个锚点；看板上的 tab 行也随「协助」一起撤掉了。
     for (const [step, anchor] of [
       ["t-board", "board-list"],
-      ["t-tabs", "board-tabs"],
+      ["t-tabs", "board-member-ask"],
       ["t-associate", "board-associate"],
       ["t-associate-pick", "associate-pick"],
       ["t-new-task", "sidebar-new-task"]

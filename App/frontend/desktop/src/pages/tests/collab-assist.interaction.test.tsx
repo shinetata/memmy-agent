@@ -1271,7 +1271,7 @@ describe("成员协助的宿主", () => {
 });
 
 describe("项目设置的成员协助", () => {
-  it("接收协助请求默认关闭，说明收在问号里；打开后在同一个字段里列出剩余时间", async () => {
+  it("接收协助请求关掉时说明收在问号里；打开后在同一个字段里列出剩余时间", async () => {
     const expiresAt = new Date(Date.now() + 42 * 60_000 + 20_000).toISOString();
     const collab = client({
       assistReceiving: vi.fn().mockResolvedValue({ projectId: "p1", enabled: false }),

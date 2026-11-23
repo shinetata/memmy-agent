@@ -49,9 +49,8 @@ export interface DemoGuideTarget {
 }
 
 const TARGETS: Record<DemoGuidePhase, DemoGuideTarget> = {
-  // 「协助上手」一屏（已经用过项目协作的人）：与任务面板的导览同一套尺寸，只框「协助」列表那一片，
-  // 不把头部与工具条一起圈进来——亮区太大人就分不清在讲什么。
-  // 协助为空时那块空态也带同一个锚点；锚点还没渲染出来时先量整块看板，不至于什么也画不出来。
+  // 「协助上手」一屏（已经用过项目协作的人）：协助没有自己的页面，入口就在任务列表的成员段头上。
+  // 亮区框住任务列表那一片，卡片讲清「这一行右侧能请她」与记录在项目设置里；锚点还没渲染出来时先量整块看板。
   "assist-intro": { region: "board-list", stroke: null, blockRest: true, radius: 14, padding: 6, prefer: "right", fallback: "board-main" },
   // 建项目之前的六屏：都在新建弹窗上，一屏一个亮区；按控件自己的形状给圆角。
   // 这一段只介绍、不让人动手：整张弹窗（`intro`）与每一项设置都不接点击，只能按卡片上的「下一步」。
@@ -72,8 +71,8 @@ const TARGETS: Record<DemoGuidePhase, DemoGuideTarget> = {
   // 看板导览：纯介绍，只亮区域、不描边、不接点击（`blockRest` 让亮区里也点不动）。
   // 第一站只框任务列表那一片：看板头部与工具条不属于这一步要讲的东西。
   "tour-board": { region: "board-list", stroke: null, blockRest: true, radius: 14, padding: 6, prefer: "right" },
-  // 第二站只讲「协助」：亮区落在 tab 那一行上。
-  "tour-tabs": { region: "board-tabs", stroke: null, blockRest: true, radius: 14, padding: 6, prefer: "right" },
+  // 第二站讲「请成员协助」：亮区落在成员段头上那颗「请求协助」按钮；这个项目还没有可请的人时退回任务列表。
+  "tour-tabs": { region: "board-member-ask", stroke: null, blockRest: true, radius: 10, padding: 6, prefer: "right", fallback: "board-list" },
   // 「关联任务」这一步只亮给人看：不描边、点了也不打开弹窗、不写任何数据。
   "tour-associate": { region: "board-associate", stroke: null, blockRest: true, radius: 10, padding: 6, prefer: "bottom" },
   // 「关联会话」：整张弹窗作为亮区，亮区里一个控件都不给点（blockRest 且不描边）；
@@ -98,9 +97,10 @@ const TARGETS: Record<DemoGuidePhase, DemoGuideTarget> = {
   "help-dialog": { region: "assist-dialog", stroke: "assist-allow", blockRest: true },
   // 允许之后人站到那条 Memmy 任务里：亮整个任务页，协助条、执行过程与结果都在里面；人若是留在看板上，改亮那条协助。
   // 底部要留出来：任务页最下面是「结果已发给谁」那一行，正是这一步要看的东西。
-  "help-running": { region: "assist-task", stroke: null, blockRest: false, fallback: "assist-row", cardBottomReserve: 150 },
-  "help-done": { region: "assist-task", stroke: null, blockRest: false, fallback: "assist-row", cardBottomReserve: 150 },
-  "help-rejected": { region: "assist-row", stroke: null, blockRest: true },
+  "help-running": { region: "assist-task", stroke: null, blockRest: false, fallback: "board-main", cardBottomReserve: 150 },
+  "help-done": { region: "assist-task", stroke: null, blockRest: false, fallback: "board-main", cardBottomReserve: 150 },
+  // 拒绝之后没有任务可看：留在看板上，亮整块看板，卡片说这次请求已经结束。
+  "help-rejected": { region: "board-main", stroke: null, blockRest: true },
   complete: { region: "board-main", stroke: null, blockRest: false }
 };
 
