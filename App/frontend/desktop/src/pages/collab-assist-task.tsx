@@ -69,8 +69,8 @@ export function useAssistTask(collab: CollabClient | null, chatId: string | null
 
 /**
  * 输入框上方的协助 chip：写是谁的哪个 Agent 发来的请求，这一次的状态也写在同一行里，不另起一行。
- * 状态只用两种样子表达——进行中薄荷绿并轻轻呼吸，停下或结束后变红、不再动；
- * 授权方式、第几次这些细节收进悬停提示，不摊在 chip 上。
+ * 状态用三种样子表达——进行中薄荷绿并轻轻呼吸，顺利完成同样薄荷绿、只是不再呼吸，
+ * 只有停下或失败才变红；授权方式、第几次这些细节收进悬停提示，不摊在 chip 上。
  */
 export function CollabAssistTaskChip(props: { view: AssistTaskView; collab: CollabClient | null; onChanged: () => void }) {
   const { t } = useTranslation();
@@ -80,6 +80,9 @@ export function CollabAssistTaskChip(props: { view: AssistTaskView; collab: Coll
   const latest = thread.requests[0];
   const runningRequest = latest?.status === "running" ? latest : null;
   const running = runningRequest !== null;
+  /** 这次是顺利做完的：与进行中同样用薄荷绿，只是不再呼吸——红色留给停下与失败。 */
+  const finished = latest?.status === "done";
+  const tone = running ? "running" : finished ? "done" : "stopped";
   const grantLive = thread.scope === "timed" && Boolean(thread.grant?.active);
   const label = t("collab.assist.requestFrom", { name: thread.requester.name, via: thread.via });
   // 这一次的结果直接写进 chip：停下时说清是谁停的，没跑完时给出原因，其余只写状态本身。
@@ -118,10 +121,10 @@ export function CollabAssistTaskChip(props: { view: AssistTaskView; collab: Coll
   return (
     <div className={styles.chipRow}>
       <div
-        className={`${styles.chip} ${running ? styles.chipRunning : styles.chipStopped}`}
+        className={`${styles.chip} ${tone === "running" ? styles.chipRunning : tone === "done" ? styles.chipDone : styles.chipStopped}`}
         role="status"
         data-collab-assist-chip=""
-        data-state={running ? "running" : "stopped"}
+        data-state={tone}
         title={detail ? `${label} · ${detail}` : label}
       >
         <span className={styles.pulse} aria-hidden="true">

@@ -11,7 +11,7 @@
   min-width: 0;
 }
 
-/* 两种状态只有两个样子：进行中薄荷绿并轻轻呼吸，停下或结束后变红、静止。 */
+/* 三种状态：进行中薄荷绿并轻轻呼吸，顺利完成保持薄荷绿、静止，只有停下或失败才变红。 */
 .chip {
   display: inline-flex;
   align-items: center;
@@ -39,6 +39,12 @@
   50% {
     background: color-mix(in srgb, var(--color-action-sky, #5cbfae) 15%, white);
   }
+}
+
+/* 已完成：成功的绿，比进行中不透明一点，不呼吸。 */
+.chipDone {
+  background: color-mix(in srgb, var(--color-action-sky, #5cbfae) 12%, white);
+  color: var(--color-action-sky-hover, #3aa893);
 }
 
 .chipStopped {
@@ -84,6 +90,7 @@
   }
 }
 
+.chipDone .pulse > i,
 .chipStopped .pulse > i {
   animation: none;
   height: 4px;

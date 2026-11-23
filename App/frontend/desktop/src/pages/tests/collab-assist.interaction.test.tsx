@@ -356,9 +356,15 @@ describe("执行方的协助任务", () => {
     const failed = await chipText(request({ status: "failed", failure: "Cursor 没有响应", agent: "memmy", scope: "once" }));
     expect(failed.text).toBe("孙起的 Codex 请求 · 没有完成：Cursor 没有响应");
     expect(failed.title).toContain("没有完成：Cursor 没有响应");
-    // 跑完：只剩状态，结果已经发给她。
+    // 跑完：只剩状态，结果已经发给她。顺利做完不是「停下」，chip 保持成功那一档（绿），不能变红。
     const done = await chipText(request({ status: "done", agent: "memmy", scope: "once" }));
     expect(done.text).toBe("孙起的 Codex 请求 · 已完成");
+    expect(done.state).toBe("done");
+    // 拒绝、过期、撤回这些才是没能做成的那一档。
+    for (const status of ["rejected", "expired", "cancelled", "failed"] as const) {
+      const other = await chipText(request({ status, agent: "memmy", scope: "once" }));
+      expect(other.state, status).toBe("stopped");
+    }
   });
 
   it("同一次排查的第二次请求在任务底部确认，沿用上一次的执行 Agent", async () => {
@@ -1083,6 +1089,7 @@ describe("成员协助的宿主", () => {
     });
 
     // 与正式逻辑同一条路：进那条任务，让人看到协助 chip、执行过程与结果。
+    // 右侧那张协助详情（技术细节、注入的提示词）不是给人看的，绝不能停在那里。
     expect(onOpenTask).toHaveBeenCalledWith("chat-1");
     expect(onOpenBoard).not.toHaveBeenCalled();
     expect(getDemoGuideState().phase).toBe("help-running");
