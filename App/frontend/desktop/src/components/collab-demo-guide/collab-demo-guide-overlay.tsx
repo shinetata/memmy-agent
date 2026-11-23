@@ -47,6 +47,12 @@ import styles from "./collab-demo-guide.module.css";
 
 type Translate = (key: MessageKey, values?: Record<string, string | number>) => string;
 
+/** 正文的一段：`strong` 为真时用重字，其余照普通正文排。 */
+export interface DemoGuideBodyPart {
+  text: string;
+  strong?: boolean;
+}
+
 export interface DemoGuideCard {
   /** 体验段是第几步：进度写「1 / 3」。导览段与建项目之前没有进度，为 null。 */
   step: 1 | 2 | 3 | null;
@@ -60,6 +66,12 @@ export interface DemoGuideCard {
   wide: boolean;
   title: string | null;
   body: string;
+  /**
+   * 正文里带加重的句子：给了它就不再印 `body`，而按段渲染（重词用 `strong`）。
+   *
+   * `body` 仍然要写全：测试与无障碍读的是那一份，`bodyParts` 只是把它拆开好上样式。
+   */
+  bodyParts?: DemoGuideBodyPart[];
   status: string | null;
   /** `grant`：这一屏要先授权（关联会话还没授权），主按钮写「授权并查看」。 */
   action: "next" | "start" | "done" | "grant" | null;
@@ -143,6 +155,12 @@ export function demoGuideCard(state: DemoGuideState, t: Translate): DemoGuideCar
   if (demoGuideIsAssistPhase(state.phase)) {
     const index = DEMO_GUIDE_ASSIST_PHASES.indexOf(state.phase);
     const key = String(index + 1) as "1";
+    // 这一屏只讲一件事就不再绕：直接用一句话说清那颗按钮在哪、点下去会怎样。
+    const bodyParts: DemoGuideBodyPart[] = [
+      { text: t("collab.demo.assistGuide.body.1.beforeAction") },
+      { text: t("collab.demo.assistGuide.body.1.action"), strong: true },
+      { text: t("collab.demo.assistGuide.body.1.trail") }
+    ];
     return {
       step: null,
       badge: t("collab.demo.assistGuide.label"),
@@ -150,7 +168,9 @@ export function demoGuideCard(state: DemoGuideState, t: Translate): DemoGuideCar
       pose: POSES[state.phase] ?? "hum",
       wide: false,
       title: null,
-      body: t(("collab.demo.assistGuide.body." + key) as MessageKey),
+      // 整句只由分段拼成：不另写一份，免得两处文案走偏。
+      body: bodyParts.map((part) => part.text).join(""),
+      bodyParts,
       status: null,
       // 只有这一屏：讲完就收场，不留「下一步」。
       action: "done",
@@ -805,7 +825,15 @@ export function CollabDemoGuideOverlay(props: {
         ) : (
           <>
             {card.title ? <p className={styles.title}>{card.title}</p> : null}
-            {card.body ? <p className={styles.body}>{card.body}</p> : null}
+            {card.body ? (
+              <p className={styles.body}>
+                {card.bodyParts
+                  ? card.bodyParts.map((part, index) => (part.strong
+                    ? <strong key={index} className={styles.bodyStrong}>{part.text}</strong>
+                    : <span key={index}>{part.text}</span>))
+                  : card.body}
+              </p>
+            ) : null}
             {card.status ? <p className={styles.status}>{card.status}</p> : null}
             {confirming ? (
               <div className={styles.confirm}>

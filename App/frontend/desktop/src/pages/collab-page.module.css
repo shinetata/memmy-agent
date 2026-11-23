@@ -511,6 +511,20 @@
   opacity: 1;
 }
 
+/*
+ * 预演态：鼠标停在这一行上的样子。
+ *
+ * 「协助上手」那一屏只介绍，没有人会去悬停，按常态画出来是看不到那颗按钮的；
+ * 这一段就常显悬停底色与按钮。与 :hover 用同一个底色，人真去悬停时不会跳一下。
+ */
+.groupHeadPreview {
+  background: var(--collab-surface);
+}
+
+.groupHeadPreview .groupHeadAsk {
+  opacity: 1;
+}
+
 .groupHeadAsk:hover {
   border-color: color-mix(in srgb, var(--collab-muted) 45%, transparent);
   color: var(--collab-ink-2);

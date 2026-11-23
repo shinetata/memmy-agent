@@ -166,6 +166,8 @@ describe("demo guide layout", () => {
       ["join-entry", { region: "create-join", stroke: "create-join", blockRest: true, blockStroke: true, radius: 10, padding: 6, prefer: "top" }],
       ["create-project", { region: "create-project-submit", stroke: "create-project-submit", blockRest: false, radius: 10, padding: 7, prefer: "right" }],
       ["joined", { region: "board-members", stroke: null, blockRest: false, radius: 10, padding: 7, prefer: "right" }],
+      // 协助上手：亮区落在被预演的那位成员那一行（那一行常显「请求协助」），没有时退回任务列表。
+      ["assist-intro", { region: "board-assist-intro-row", stroke: null, blockRest: true, radius: 10, padding: 6, prefer: "right", fallback: "board-list" }],
       ["tour-board", { region: "board-list", stroke: null, blockRest: true, radius: 14, padding: 6, prefer: "right" }],
       ["tour-tabs", { region: "board-member-ask", stroke: null, blockRest: true, radius: 10, padding: 6, prefer: "right", fallback: "board-list" }],
       ["tour-associate", { region: "board-associate", stroke: null, blockRest: true, radius: 10, padding: 6, prefer: "bottom" }],

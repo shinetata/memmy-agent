@@ -251,6 +251,12 @@
   color: color-mix(in srgb, var(--color-text-ink, #1b2423) 72%, transparent);
 }
 
+/* 正文里的重字：只提字重与颜色，不改字号——句子看着仍是一段话，不是小标题。 */
+.bodyStrong {
+  color: var(--color-text-ink, #1b2423);
+  font-weight: 650;
+}
+
 .status {
   margin: 10px 0 0;
   font-size: 12px;

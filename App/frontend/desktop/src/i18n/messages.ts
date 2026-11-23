@@ -951,7 +951,10 @@ export const zhCNMessages = {
   // 协助是什么、两个方向、记录在哪里，都在这一屏讲完。
   "collab.demo.assistGuide.label": "介绍",
   "collab.demo.assistGuide.stepName.1": "成员协助",
-  "collab.demo.assistGuide.body.1": "项目协作新增了协助：成员那边的文件或环境没法直接访问时，把鼠标移到成员的任务行上，右侧会出现「请求协助」，点一下就能带着她开一条任务，由她电脑上的 Agent 执行，结果自动回写；反过来，成员也能这样请你帮忙。双方的协助记录在项目设置里，谁请了谁、执行到哪一步、结果是什么，看到的是同一份。接收协助请求默认打开，想关随时在项目设置里关。",
+  /* 协助上手那一屏的正文：拆成几段，其中「请求协助」用重字。整句由这几段拼成，见 overlay 的 bodyParts。 */
+  "collab.demo.assistGuide.body.1.beforeAction": "成员那边的本地文件或环境无法访问时，点击「",
+  "collab.demo.assistGuide.body.1.action": "请求协助",
+  "collab.demo.assistGuide.body.1.trail": "」可以让对方本地的Agent帮助你执行任务，执行结果自动回传",
   "collab.demo.scan.locked": "关联会话要读取这台电脑上的 Agent 记录，先授权一次即可。",
   "collab.demo.scan.grant": "授权并查看",
   "collab.demo.scan.granting": "正在接入这台电脑上的 Agent…",
@@ -4291,7 +4294,9 @@ export const enUSMessages: Record<keyof typeof zhCNMessages, string> = {
   // What assistance is, both directions and where the records live are all covered here.
   "collab.demo.assistGuide.label": "Intro",
   "collab.demo.assistGuide.stepName.1": "Member assistance",
-  "collab.demo.assistGuide.body.1": "Projects now include assistance. When a file or an environment lives on a member's computer, hover her task row and Request help appears on the right; click it to start a task addressed to her, the agent on her computer runs it and the result comes back automatically. Members can ask you the same way. Both sides can read the history in the project settings and see who asked whom, how far it got and what came back. Accepting requests is on by default; turn it off in project settings whenever you want.",
+  "collab.demo.assistGuide.body.1.beforeAction": "When a member's local files or environment can't be reached, click ",
+  "collab.demo.assistGuide.body.1.action": "Request help",
+  "collab.demo.assistGuide.body.1.trail": " and the agent on her computer runs the task for you, with the result sent back automatically.",
   "collab.demo.scan.locked": "Linking sessions reads this computer's agent history. Authorize once to look.",
   "collab.demo.scan.grant": "Authorize and look",
   "collab.demo.scan.granting": "Setting up the agents on this computer…",

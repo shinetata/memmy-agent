@@ -12,6 +12,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AssistRequest, AssistThread } from "../../api/collab-client.js";
 import { consumeAssistFocus, getAssistFocus, requestAssistFocus } from "../../app/collab-assist-focus.js";
+import { resetDemoGuideStore, startAssistGuide } from "../../app/collab-demo-guide-store.js";
 import { resetCollabProjectsStore } from "../../app/collab-projects-store.js";
 import { I18nProvider } from "../../i18n/i18n-provider.js";
 import { CollabPage } from "../collab-page.js";
@@ -178,6 +179,7 @@ describe("assists on the project board", () => {
     await act(async () => root.unmount());
     container.remove();
     resetCollabProjectsStore();
+    resetDemoGuideStore();
     window.localStorage.clear();
   });
 
@@ -396,6 +398,66 @@ describe("assists on the project board", () => {
   it("keeps the request-help button off the rows when nobody is taking assist requests", async () => {
     await renderBoard([]);
     expect(document.querySelector("[data-collab-ask-member]")).toBeNull();
+  });
+
+  /**
+   * 「协助上手」那一屏：只介绍协助，没有人会去悬停，所以要有一行按悬停的样子把「请求协助」摆出来。
+   * 那一行越贴近真实越好——项目里有其他成员的任务段就直接用它，不另画。
+   */
+  function assistIntroRow(): HTMLElement | null {
+    return document.querySelector<HTMLElement>("[data-demo-guide='board-assist-intro-row']");
+  }
+
+  it("previews the real row of a member who already left a task, instead of inventing one", async () => {
+    // 真实段（孙起）直接按悬停的样子画：锚点落在它上面，按钮常显。
+    await act(async () => startAssistGuide({ localProjectId: "local-1", force: true }));
+    await renderBoard([]);
+
+    const rows = document.querySelectorAll("[data-demo-guide='board-assist-intro-row']");
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.textContent).toContain("孙起");
+    // 只亮真实那一段，不再多画一行示意。
+    expect(document.body.textContent).not.toContain("0 个任务");
+    expect(askButton("member:孙起")).toBeTruthy();
+  });
+
+  it("draws the row of a member who is in the project but left no task yet, with her real count", async () => {
+    // 她还在项目里（云端名单里有她），只是没有可看的任务：比如引导收场时她的演示任务被清掉了。
+    mocks.listProjects.mockResolvedValue([
+      { ...project, assistReceivers: [{ userId: "9", name: "小饭团", mine: false }] }
+    ]);
+    mocks.listSessions.mockResolvedValue({
+      project,
+      sessions: [{ ...session, id: "s-2", title: "我自己的任务", memberName: "王雨", mine: true }],
+      total: 1
+    });
+    // 先进入「协助上手」，再渲染看板：这一屏的锚点要在首屏就算好。
+    await act(async () => startAssistGuide({ localProjectId: "local-1", force: true }));
+    await renderBoard([]);
+
+    const row = assistIntroRow();
+    expect(row?.textContent).toContain("小饭团");
+    // 条数是真的 0，不凭空捏一个任务。
+    expect(row?.textContent).toContain("0 个任务");
+    expect(row?.textContent).toContain("请求协助");
+  });
+
+  it("borrows the demo member for a project with nobody else in it", async () => {
+    // 从 1.2.6 升级、没走过完整引导：项目里只有自己，一个人也没得请。
+    mocks.listProjects.mockResolvedValue([project]);
+    mocks.listSessions.mockResolvedValue({
+      project,
+      sessions: [{ ...session, id: "s-2", title: "我自己的任务", memberName: "王雨", mine: true }],
+      total: 1
+    });
+    await act(async () => startAssistGuide({ localProjectId: "local-1", force: true }));
+    await renderBoard([]);
+
+    const row = assistIntroRow();
+    expect(row?.textContent).toContain("小饭团");
+    // 按引导剧情写成 1 个任务：与刚才那一位「留下一条任务」的印象一致。
+    expect(row?.textContent).toContain("1 个任务");
+    expect(row?.textContent).toContain("请求协助");
   });
 
   it("folds and unfolds a member's section from the row itself", async () => {

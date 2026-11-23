@@ -150,7 +150,7 @@ function PreviewSidebar() {
 }
 
 /** 看板的一列：标题、任务行、右侧项目配置，与真实看板同一套类名与外观。 */
-function BoardSurface(props: { withSettings: boolean; withSidebar?: boolean; withMembersAnchor?: boolean }) {
+function BoardSurface(props: { withSettings: boolean; withSidebar?: boolean; withMembersAnchor?: boolean; assistIntroRow?: boolean }) {
   return (
     <div
       className={board.page}
@@ -174,8 +174,17 @@ function BoardSurface(props: { withSettings: boolean; withSidebar?: boolean; wit
               <Settings size={15} aria-hidden="true" />
             </button>
           </header>
-          {/* 成员段头：名字、条数与折叠箭头；鼠标移上来时右侧出现「请求协助」，导览第二站就亮这颗按钮。 */}
-          <div className={board.groupHead} role="button" tabIndex={0} aria-expanded>
+          {/*
+           * 成员段头：名字、条数与折叠箭头；鼠标移上来时右侧出现「请求协助」，导览第二站就亮这颗按钮。
+           * 「协助上手」那一屏按悬停的样子常显（`groupHeadPreview`），亮区落在这一行上。
+           */}
+          <div
+            className={`${board.groupHead} ${props.assistIntroRow ? board.groupHeadPreview : ""}`}
+            role="button"
+            tabIndex={0}
+            aria-expanded
+            {...(props.assistIntroRow ? { "data-demo-guide": "board-assist-intro-row" } : {})}
+          >
             <span className={`${board.avatar} ${board.avatarSoft} ${board.groupHeadAvatar}`} style={{ "--member": "#c98b2f" } as CSSProperties} aria-hidden="true">
               丰
             </span>
@@ -636,7 +645,7 @@ export function DemoGuidePreview(props: { step: DemoGuidePreviewStep }) {
   else if (phase === "reader") surface = (<><BoardSurface withSettings={false} /><ReaderSurface /></>);
   else if (phase === "settings-assist") surface = <SettingsSurface />;
   // 协助上手：两屏都落在看板上（第二屏亮 tab 那一行）。
-  else if (demoGuideIsAssistPhase(phase)) surface = <BoardSurface withSettings />;
+  else if (demoGuideIsAssistPhase(phase)) surface = <BoardSurface withSettings assistIntroRow />;
   else if (phase === "help-dialog") surface = <AssistDialogSurface />;
   // 允许之后人就在那条任务里：协助 chip、执行过程与「结果已发给谁」都在这一页。
   else if (phase === "help-running") surface = <AssistTaskSurface done={false} />;
