@@ -162,7 +162,7 @@ describe("shapeToolSteps", () => {
 
     const steps = shapeToolSteps(calls);
 
-    // 一步约 1600+ 字：从头、尾各留一步左右，中间那些合成一句话。
+    // 每步约 1200 字，四千的预算每侧只装得下几步：其余合成一句话。
     expect(steps.length).toBeLessThan(calls.length);
     const omitted = steps.filter((step) => step.name === "");
     expect(omitted).toHaveLength(1);
@@ -180,9 +180,9 @@ describe("shapeToolSteps", () => {
 
   it("applies each degradation level's own parameters", () => {
     expect(LEVELS).toEqual({
-      T0: { outputHalfChars: 500, windowChars: 1_600, inputChars: 180 },
-      T1: { outputHalfChars: 250, windowChars: 1_600, inputChars: 180 },
-      T2: { outputHalfChars: 120, windowChars: 1_600, inputChars: 120 },
+      T0: { outputHalfChars: 500, windowChars: 4_000, inputChars: 180 },
+      T1: { outputHalfChars: 250, windowChars: 4_000, inputChars: 180 },
+      T2: { outputHalfChars: 120, windowChars: 4_000, inputChars: 120 },
       T3: { outputHalfChars: 120, windowChars: 800, inputChars: 120 },
       T4: { outputHalfChars: 60, windowChars: 400, inputChars: 60 }
     });

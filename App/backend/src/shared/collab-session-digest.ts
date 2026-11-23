@@ -52,9 +52,9 @@ export interface DigestParams {
 
 /** T0 是默认档；越往后压得越狠，只在整条任务接近容量上限时才用。 */
 export const LEVELS: Readonly<Record<DigestLevel, DigestParams>> = Object.freeze({
-  T0: { outputHalfChars: 500, windowChars: 1_600, inputChars: 180 },
-  T1: { outputHalfChars: 250, windowChars: 1_600, inputChars: 180 },
-  T2: { outputHalfChars: 120, windowChars: 1_600, inputChars: 120 },
+  T0: { outputHalfChars: 500, windowChars: 4_000, inputChars: 180 },
+  T1: { outputHalfChars: 250, windowChars: 4_000, inputChars: 180 },
+  T2: { outputHalfChars: 120, windowChars: 4_000, inputChars: 120 },
   T3: { outputHalfChars: 120, windowChars: 800, inputChars: 120 },
   T4: { outputHalfChars: 60, windowChars: 400, inputChars: 60 }
 });
