@@ -298,6 +298,7 @@ export function parseSettings(input: unknown): KnowledgeSettings {
         ...(typeof base.sharedByMe === "boolean" ? { sharedByMe: base.sharedByMe } : {}),
         ...(typeof base.ownerName === "string" && base.ownerName ? { ownerName: base.ownerName } : {}),
         ...(typeof base.memberCount === "number" && Number.isFinite(base.memberCount) ? { memberCount: Math.max(0, Math.floor(base.memberCount)) } : {}),
+        ...(base.viaProject === true ? { viaProject: true } : {}),
       };
     }),
   };

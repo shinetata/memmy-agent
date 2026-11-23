@@ -6,6 +6,11 @@ export interface KnowledgeBase {
   sharedByMe?: boolean;
   ownerName?: string;
   memberCount?: number;
+  /**
+   * 只因所在协作项目关联了这个库才可见：按共享库展示与只读，
+   * 但召回跟着项目走，个人召回不涉及它。
+   */
+  viaProject?: boolean;
 }
 export interface KnowledgeMember { userId: string; name: string; status: string; contact?: string; }
 export interface KnowledgeSettings {

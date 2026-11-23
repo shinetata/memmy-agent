@@ -15,7 +15,9 @@ const SettingsSchema = z.object({
     name: z.string(),
     shared: z.boolean().optional(),
     sharedByMe: z.boolean().optional(),
-    ownerName: z.string().optional()
+    ownerName: z.string().optional(),
+    /** 只因协作项目关联而可见：它已经在某个项目里，不能当成本人的库再关联一次。 */
+    viaProject: z.boolean().optional()
   })).nullish().transform((value) => value ?? [])
 });
 
@@ -31,7 +33,8 @@ export async function listKnowledgeBases(config: RuntimeConfig): Promise<Knowled
   try {
     const settings = await requestJson({ config, path: "/api/knowledge/settings", schema: SettingsSchema });
     if (!settings.serviceAvailable) return [];
-    return settings.bases;
+    // 项目关联进来的库按共享展示，但关联到项目需要本人拥有或被共享，它们不能当候选。
+    return settings.bases.filter((base) => base.viaProject !== true);
   } catch {
     // 知识库服务不可用时，项目配置里的候选为空，不影响项目本身的其他配置。
     return [];

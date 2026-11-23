@@ -309,6 +309,71 @@ it("keeps long file names inside the name column and exposes the full name on ho
   );
 });
 
+it("lists a base linked through a collaboration project as shared, without a personal recall switch", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const state: KnowledgeSettings = {
+    authenticated: true,
+    enabled: false,
+    serviceAvailable: true,
+    bases: [
+      {
+        id: "project-base",
+        name: "项目资料",
+        selected: false,
+        shared: true,
+        ownerName: "丰盈锦鲤",
+        viaProject: true,
+      },
+    ],
+  };
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: URL) => {
+      const path = String(url);
+      if (path.includes("/files"))
+        return new Response(JSON.stringify({ files: [], total: 0, page: 1 }));
+      if (path.includes("/folders"))
+        return new Response(JSON.stringify({ folders: [] }));
+      return new Response(JSON.stringify(state));
+    }),
+  );
+  const container = document.createElement("div");
+  document.body.append(container);
+  root = createRoot(container);
+  await act(async () => {
+    root!.render(
+      <KnowledgePage
+        connection={{
+          baseUrl: "http://localhost:1234",
+          localToken: "local-test",
+        }}
+      />,
+    );
+  });
+
+  // 侧栏沿用共享的展示：出现在「共享」下，并写明来自谁。
+  const side = container.querySelector(".mk-side");
+  expect(side?.textContent).toContain("共享 (1)");
+  expect(side?.textContent).toContain("项目资料");
+  expect(side?.textContent).toContain("来自 丰盈锦鲤");
+
+  const row = [...container.querySelectorAll('[role="button"]')].find(
+    (item) => item.textContent?.includes("项目资料"),
+  )!;
+  await act(async () => {
+    row.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  });
+
+  const header = container.querySelector(".mk-kbheader-readonly");
+  expect(header?.querySelector("h1")?.textContent).toContain("项目资料");
+  // 说明可见来源与召回范围，且不再给个人召回开关：它只在项目任务里参与召回。
+  expect(header?.textContent).toContain("项目成员可检索，仅在项目任务中参与召回");
+  expect(header?.querySelector('[role="switch"]')).toBeNull();
+  expect(header?.querySelector(".mk-recall-inline")).toBeNull();
+  expect(container.querySelector('[aria-label="更多操作"]')).toBeNull();
+  expect(container.textContent).not.toContain("直接上传");
+});
+
 it("removes a knowledge base from the list without waiting for delete to finish", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   const state: KnowledgeSettings = {

@@ -1476,7 +1476,14 @@ export function KnowledgePage({
                   </h1>
                   {active.shared ? (
                     <div className="mk-meta">
-                      <span>{t(`来自 ${active.ownerName || "其他用户"} · 仅可查看和参与召回`, `From ${active.ownerName || "another user"} · View and recall only`)}</span>
+                      <span>
+                        {active.viaProject
+                          ? t(
+                              `来自 ${active.ownerName || "其他用户"} · 项目成员可检索，仅在项目任务中参与召回`,
+                              `From ${active.ownerName || "another user"} · Available to project members, recalled in project tasks only`,
+                            )
+                          : t(`来自 ${active.ownerName || "其他用户"} · 仅可查看和参与召回`, `From ${active.ownerName || "another user"} · View and recall only`)}
+                      </span>
                     </div>
                   ) : activeMembers.length > 0 ? (
                     <div className="mk-meta">
@@ -1489,15 +1496,17 @@ export function KnowledgePage({
                     className={`mk-kbheader-actions${fileSearchOpen ? " mk-kbheader-actions-search" : ""}`}
                     data-window-drag-exclusion="knowledge-readonly-actions"
                   >
-                    <span className="mk-recall-inline" title={t("开启后，该知识库会参与 Agent 对话召回", "When on, this base participates in Agent recall")}>
-                      {t("参与召回", "Recall")}
-                      <Switch
-                        on={active.selected}
-                        disabled={!settings.serviceAvailable}
-                        label={`${t("参与召回", "Use for recall")}: ${active.name}`}
-                        onChange={(on) => toggleBaseSelected(active, on)}
-                      />
-                    </span>
+                    {active.viaProject ? null : (
+                      <span className="mk-recall-inline" title={t("开启后，该知识库会参与 Agent 对话召回", "When on, this base participates in Agent recall")}>
+                        {t("参与召回", "Recall")}
+                        <Switch
+                          on={active.selected}
+                          disabled={!settings.serviceAvailable}
+                          label={`${t("参与召回", "Use for recall")}: ${active.name}`}
+                          onChange={(on) => toggleBaseSelected(active, on)}
+                        />
+                      </span>
+                    )}
                     {fileSearchOpen ? (
                       <>
                         <div className="mk-fsearch mk-fsearch-full">

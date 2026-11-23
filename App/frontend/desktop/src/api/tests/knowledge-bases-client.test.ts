@@ -16,6 +16,11 @@ describe("project knowledge candidates", () => {
     await expect(listKnowledgeBases(config)).resolves.toEqual(bases);
     expect(fetch).toHaveBeenCalledWith(new URL("/api/knowledge/settings", config.baseUrl), expect.objectContaining({ method: "GET", headers: expect.objectContaining({ "x-memmy-local-token": "test-token" }) }));
   });
+  it("leaves out bases only visible through a collaboration project", async () => {
+    reply({ serviceAvailable: true, bases: [{ id: "a", name: "产品" }, { id: "p", name: "项目资料", shared: true, ownerName: "小林", viaProject: true }] });
+    // 项目关联进来的库已经绑定在某个项目里，不能当成本人的库再关联一次。
+    await expect(listKnowledgeBases(config)).resolves.toEqual([{ id: "a", name: "产品" }]);
+  });
   it("does not expose candidates when the service is unavailable", async () => {
     reply({ serviceAvailable: false, bases: [{ id: "a", name: "产品" }] });
     await expect(listKnowledgeBases(config)).resolves.toEqual([]);
