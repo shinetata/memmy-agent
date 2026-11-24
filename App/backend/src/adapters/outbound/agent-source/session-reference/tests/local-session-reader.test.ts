@@ -149,9 +149,9 @@ describe("local session reader", () => {
     expect(session.turns).toEqual([{
       question: "修复权限弹窗卡死",
       reply: "检测请求加了超时。",
-      // 同一次调用的 call 与 result 合成一步；入参只留关键参数（command 的值），输出压成一行。
+      // 同一次调用的 call 与 result 合成一步；入参只留关键参数（command 的值），成功调用不留输出。
       steps: [
-        { name: "Bash", input: "ls", output: "a.txt" },
+        { name: "Bash", input: "ls", output: "" },
         { name: "Edit", input: "{}", output: "" }
       ],
       startedAt: "2026-10-21T07:00:00.000Z"

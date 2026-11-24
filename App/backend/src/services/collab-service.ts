@@ -12,6 +12,8 @@ import { loadCollabAgents, submittedConversationId } from "./collab-added-agents
 import { locateRecordFile, readRecordFile, type RecordBinding } from "./collab-record-file.js";
 import {
   capSteps,
+  failureExcerpt,
+  failureReason,
   fitSessionBudget,
   mergeToolMessages,
   omittedCount,
@@ -2800,7 +2802,7 @@ export function renderSessionView(
     if (rest.length > listed.length) lines.push(`（更早的 ${rest.length - listed.length} 轮未列出）`);
     for (const entry of listed) lines.push(`- 第 ${entry.number} 轮：${oneLine(entry.turn.question, OUTLINE_QUESTION_CHARS) || "（无提问）"}`);
   }
-  // 只有一轮时（`ID#N`、`--turns N`）把这一轮每一步的入参与输出都列出来，其余视图只给骨架。
+  // 只有一轮时（`ID#N`、`--turns N`）把这一轮每一步的完整参数与失败原因都列出来，其余视图只给骨架。
   const detail = view.turns && view.turns.from === view.turns.to ? view.turns.from : null;
   let previous: number | null = null;
   for (const entry of numbered) {
@@ -2899,7 +2901,7 @@ function turnLines({ number, turn }: NumberedTurn, speaker: string, detail: bool
   return lines;
 }
 
-/** `--find` 找的是这句话出自哪一轮，所以步骤的入参与输出也一起比。 */
+/** `--find` 找的是这句话出自哪一轮，所以步骤的参数与失败原因也一起比。 */
 function turnSearchText(turn: CollabSessionTurn): string {
   return [turn.question, turn.reply, ...turn.steps.flatMap((step) => [step.name, step.input, step.output])].join("\n");
 }
@@ -3359,7 +3361,8 @@ function stepsHeading(steps: readonly ToolStep[]): string {
 }
 
 /**
- * 单独读一轮时：每一步都摊开，序号、工具名、入参、失败标记，输出保留换行并缩进对齐。
+ * 单独读一轮时：每一步都摊开，序号、工具名、入参、失败标记，失败原因缩进对齐在下面。
+ * 成功的调用不存输出，只有一行；早先上传的副本带着整段输出，也只摘失败原因，免得一轮的详情长到读不完。
  * 旧任务的步骤只有工具名，那就只写名字，不凭空补一对空括号。
  */
 function detailStepLines(steps: readonly ToolStep[]): string[] {
@@ -3376,9 +3379,10 @@ function detailStepLines(steps: readonly ToolStep[]): string[] {
     const call = [step.name, step.input].filter(Boolean).join(" ");
     const marks = `${step.failed ? " ［失败］" : ""}${step.truncated ? "（部分已压缩）" : ""}`;
     lines.push(`${number}. ${call}${marks}`);
-    for (const line of step.output.split("\n")) {
-      // 输出保留换行，缩进与序号后的正文对齐，读者一眼看出哪几行属于这一次调用。
-      if (line.trim()) lines.push(`    ${line}`);
+    if (step.failed) {
+      for (const line of failureExcerpt(step.output).split("\n")) {
+        if (line.trim()) lines.push(`    ${line}`);
+      }
     }
     number += 1;
   }
@@ -3401,7 +3405,7 @@ function skeletonStepLines(steps: readonly ToolStep[], turnNumber: number, sessi
   return [
     stepsHeading(steps),
     ...fitSkeleton(skeletonLines(steps)),
-    `用 memmy-project session read ${sessionId}#${turnNumber} 查看本轮各步的入参与输出。`
+    `用 memmy-project session read ${sessionId}#${turnNumber} 查看本轮每一步的完整参数与失败原因。`
   ];
 }
 
@@ -3454,23 +3458,6 @@ function fitSkeleton(lines: readonly SkeletonLine[]): string[] {
     ...failed.map((line) => line.text),
     ...tail.map((line) => line.text)
   ];
-}
-
-/** 报错的那一行：Stderr、Error、Traceback 一类开头。 */
-const FAILURE_LINE = /^(?:stderr\s*:|error\b|fatal\b|exception\b|traceback\b|panic\b)/iu;
-/** 退出码与信号：没有报错正文时，它就是失败的原因（例如超时被 SIGTERM 杀掉）。 */
-const EXIT_LINE = /(?:exit code|exited with code|signal)\s*:?\s*\S/iu;
-/** 不是原因的行：命令回显（WorkBuddy 把命令写在输出第一行）与空的 Stdout / Stderr。 */
-const NOT_A_REASON = /^(?:command|cwd|directory)\s*:|^\w+\s*:\s*\(empty\)\s*$/iu;
-
-/**
- * 失败步骤在骨架里跟的那一句原因：先找报错行，再找退出码，都没有就取第一行正文。
- * 只取第一行会拿到命令回显，读者看不出到底哪里错了。
- */
-function failureReason(value: string, maxChars: number): string {
-  const lines = value.split("\n").map((item) => item.trim()).filter((item) => item && !NOT_A_REASON.test(item));
-  const line = lines.find((item) => FAILURE_LINE.test(item)) ?? lines.find((item) => EXIT_LINE.test(item)) ?? lines[0];
-  return line ? oneLine(line, maxChars) : "";
 }
 
 /**

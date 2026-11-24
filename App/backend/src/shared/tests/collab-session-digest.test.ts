@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   MAX_TURN_STEPS,
-  OUTPUT_TRUNCATION_MARKER,
   SESSION_BUDGET_BYTES,
   capSteps,
+  failureExcerpt,
+  failureReason,
   fitSessionBudget,
   mergeToolMessages,
   omittedCount,
@@ -208,30 +209,28 @@ describe("shapeToolSteps", () => {
     expect(step?.input).not.toContain("\n");
   });
 
-  it("clips the input to 200 characters and marks it", () => {
+  it("clips the input to 200 characters without calling it compressed", () => {
     const [step] = shapeToolSteps([{ name: "Bash", input: `{"command":"${long(400)}"}` }]);
 
     expect(step?.input).toHaveLength(200);
-    expect(step?.truncated).toBe(true);
+    // 入参本来就是摘要：裁到上限不算降级，不标 truncated，界面也就不提示「部分输出已压缩」。
+    expect(step).not.toHaveProperty("truncated");
   });
 
-  it("keeps 500 characters of each end of a successful output", () => {
-    const output = "第一行\n第二行";
-    const [short] = shapeToolSteps([{ name: "Bash", output }]);
-    const [step] = shapeToolSteps([{ name: "Bash", output: `${"A".repeat(800)}${"B".repeat(800)}` }]);
+  it("keeps no output for a successful call", () => {
+    const [step] = shapeToolSteps([{ name: "Read", input: { file_path: "/repo/a.ts" }, output: long(5_000) }]);
 
-    expect(short?.output).toBe(output);
-    expect(short?.truncated).toBeUndefined();
-    expect(step?.output).toBe(`${"A".repeat(500)}${OUTPUT_TRUNCATION_MARKER}${"B".repeat(500)}`);
-    expect(step?.truncated).toBe(true);
+    // 成功调用的回显不上传：接手的人要的是「做了什么」，结果看回复。
+    expect(step).toEqual({ name: "Read", input: "/repo/a.ts", output: "" });
   });
 
-  it("keeps 1000 characters of each end of a failed output, since the reason matters more", () => {
-    const output = `${"A".repeat(1_500)}${"B".repeat(1_500)}`;
+  it("keeps one or two lines that explain a failure instead of the whole output", () => {
+    const output = `${long(3_000)}\nError: Cannot find module './x'\n${long(3_000)}\nExit code: 1`;
     const [step] = shapeToolSteps([{ name: "Bash", status: "failed", output }]);
 
     expect(step?.failed).toBe(true);
-    expect(step?.output).toBe(`${"A".repeat(1_000)}${OUTPUT_TRUNCATION_MARKER}${"B".repeat(1_000)}`);
+    expect(step?.output).toBe("Error: Cannot find module './x'\nExit code: 1");
+    expect(step).not.toHaveProperty("truncated");
   });
 
   it("marks a call failed from the rendered status, in any letter case", () => {
@@ -251,6 +250,8 @@ describe("shapeToolSteps", () => {
     const memmy = shapeToolSteps([{ name: "Bash", output: "Process exited with code 2" }])[0];
     const json = shapeToolSteps([{ name: "shell", output: "{\"exit_code\": 127, \"stdout\": \"\"}" }])[0];
     const camel = shapeToolSteps([{ name: "shell", output: "{\"exitCode\": 1}" }])[0];
+    // Codex 的结果是 JSON 字符串里再嵌一层 JSON：引号带反斜杠。
+    const escaped = shapeToolSteps([{ name: "exec_command", output: "[{\"text\": \"{\\\"exit_code\\\":127}\"}]" }])[0];
     // WorkBuddy 的大写标签与成功时的 0 都按同一套判断。
     const capitalized = shapeToolSteps([{ name: "Bash", output: "Command: npm test\nExit Code: 1" }])[0];
     const ok = shapeToolSteps([{ name: "exec", output: "Exit code: 0\n全部通过" }])[0];
@@ -260,6 +261,7 @@ describe("shapeToolSteps", () => {
     expect(json?.failed).toBe(true);
     expect(capitalized?.failed).toBe(true);
     expect(camel?.failed).toBe(true);
+    expect(escaped?.failed).toBe(true);
     expect(ok).not.toHaveProperty("failed");
   });
 
@@ -268,11 +270,60 @@ describe("shapeToolSteps", () => {
     const [step] = shapeToolSteps([{ name: "Grep", output: "src/a.ts:12: error handling failed to retry" }]);
 
     expect(step).not.toHaveProperty("failed");
-    expect(step?.output).toBe("src/a.ts:12: error handling failed to retry");
+    expect(step?.output).toBe("");
   });
 
   it("returns nothing for a turn without tool calls", () => {
     expect(shapeToolSteps([])).toEqual([]);
+  });
+});
+
+describe("failureExcerpt", () => {
+  it("skips the echoed command and empty sections of a WorkBuddy result, keeping the exit code and signal", () => {
+    const output = "Command: cd /repo && grep -rn kb .\nStdout: ./a/test_health.py\n./b/test_health.py\nStderr: (empty)\nExit Code: 137\nSignal: SIGTERM";
+
+    // grep 列出的文件不是原因：标准输出里只有提到失败的行才算。
+    expect(failureExcerpt(output)).toBe("Exit Code: 137\nSignal: SIGTERM");
+  });
+
+  it("prefers the error line, and keeps a failing test that a tool reports on standard output", () => {
+    expect(failureExcerpt("Command: npm ci\nStdout: added 3 packages\nStderr: npm ERR! code E404\nExit Code: 1"))
+      .toBe("Stderr: npm ERR! code E404\nExit Code: 1");
+    expect(failureExcerpt("Command: npx vitest run\nStdout: FAILED src/a.test.ts > keeps order\nStderr: (empty)\nExit Code: 1"))
+      .toBe("Stdout: FAILED src/a.test.ts > keeps order\nExit Code: 1");
+  });
+
+  it("unwraps the nested JSON of a Codex result to its own output and exit code", () => {
+    const inner = JSON.stringify({ chunk_id: "a832d1", exit_code: 127, output: "zsh:1: no such file or directory: .venv/bin/python\n" });
+    const output = JSON.stringify([{ type: "input_text", text: "Script completed\nWall time 0.1 seconds\nOutput:\n" }, { type: "input_text", text: inner }], null, 2);
+
+    expect(failureExcerpt(output)).toBe("zsh:1: no such file or directory: .venv/bin/python\nExit code: 127");
+  });
+
+  it("takes the raised exception at the end of a Python traceback, not the Traceback line", () => {
+    const output = "Traceback (most recent call last):\n  File \"main.py\", line 3, in <module>\n    run()\nModuleNotFoundError: No module named 'app'";
+
+    expect(failureExcerpt(output)).toBe("ModuleNotFoundError: No module named 'app'");
+  });
+
+  it("gives the exit code instead of a line of ordinary output when nothing explains the failure", () => {
+    // Proma 的失败结果：命令的正常输出（一串目录名、一个 0），最后一行才是退出码。
+    expect(failureExcerpt("-Users-sunq-GitHub-MemOS\n-Users-sunq-GitHub-Memory\n\nCommand exited with code 1"))
+      .toBe("Command exited with code 1");
+    expect(failureExcerpt("0\n\n\nCommand exited with code 1")).toBe("Command exited with code 1");
+    expect(shapeToolSteps([{ name: "bash", output: "0\n\nCommand exited with code 1" }])[0]?.failed).toBe(true);
+  });
+
+  it("drops the notes Memmy's own exec adds around a failure", () => {
+    const output = "Error: command exited with 1\nfatal: not a git repository (or any of the parent directories): .git\n\nExit code: 1\n\n[Analyze the error above and try a different approach.]";
+
+    expect(failureExcerpt(output)).toBe("fatal: not a git repository (or any of the parent directories): .git\nExit code: 1");
+  });
+
+  it("clips each line and gives nothing for an empty output", () => {
+    expect(failureExcerpt(`Error: ${"x".repeat(500)}`)).toHaveLength(200);
+    expect(failureExcerpt("")).toBe("");
+    expect(failureReason("Stderr: boom\nExit code: 2", 120)).toBe("Stderr: boom");
   });
 });
 
@@ -310,57 +361,42 @@ describe("capSteps", () => {
 
 describe("fitSessionBudget", () => {
   const long = (chars: number) => "x".repeat(chars);
+  /** 早先上传的副本里，成功调用也带着整段输出。 */
+  const legacy = (output: string): ToolStep[] => [{ name: "Bash", input: "npm test", output }];
 
   it("returns the turns untouched when they already fit", () => {
-    const turns = [turn(1, shapeToolSteps([{ name: "Bash", output: long(1_200) }]))];
+    const turns = [turn(1, shapeToolSteps([{ name: "Bash", input: { command: "npm test" }, output: long(1_200) }]))];
     const before = JSON.stringify(turns);
 
     const fitted = fitSessionBudget(turns, SESSION_BUDGET_BYTES);
 
     expect(JSON.stringify(fitted)).toBe(before);
-    // 单步自己的头尾压缩是生成时就做过的：成功步骤各留五百字。
-    expect(fitted[0]!.steps[0]!.output).toBe(`${long(500)}${OUTPUT_TRUNCATION_MARKER}${long(500)}`);
+    expect(fitted[0]!.steps[0]).toEqual({ name: "Bash", input: "npm test", output: "" });
   });
 
-  it("shrinks the successful output of the earliest turn first, and stops as soon as it fits", () => {
-    const turns = [1, 2, 3].map((number) => turn(number, shapeToolSteps([{ name: "Bash", output: long(2_000) }])));
-    const total = bytes(turns);
-    const original = turns.map((item) => item.steps[0]!.output);
-    // 只差两百字节：最早那一轮压到一百字就够，后两轮不该被动过。
-    const fitted = fitSessionBudget(turns, total - 200);
-
-    expect(fitted[0]!.steps[0]!.output).toBe(`${long(100)}${OUTPUT_TRUNCATION_MARKER}${long(100)}`);
-    expect(fitted[0]!.steps[0]!.truncated).toBe(true);
-    expect(fitted[1]!.steps[0]!.output).toBe(original[1]);
-    expect(fitted[2]!.steps[0]!.output).toBe(original[2]);
-  });
-
-  it("clears the successful outputs only after shrinking each of them did not help", () => {
-    const stepsOf = (output: string): ToolStep[] => [{ name: "Bash", input: "", output, truncated: true }];
-    const shaped = `${long(500)}${OUTPUT_TRUNCATION_MARKER}${long(500)}`;
-    const clipped = `${long(100)}${OUTPUT_TRUNCATION_MARKER}${long(100)}`;
-    const turns = [1, 2, 3].map((number) => turn(number, stepsOf(shaped)));
-    // 先让「压到一百字」在每一轮都发生过，仍差一百字节，才轮到清空——清空同样从最早的轮次开始。
-    const savings = bytes(stepsOf(shaped)) - bytes(stepsOf(clipped));
-    const fitted = fitSessionBudget(turns, bytes(turns) - savings * turns.length - 100);
+  it("clears a successful output of the earliest turn first, and stops as soon as it fits", () => {
+    const turns = [1, 2, 3].map((number) => turn(number, legacy(long(2_000))));
+    // 只差两百字节：清掉最早那一轮就够，后两轮不该被动过。
+    const fitted = fitSessionBudget(turns, bytes(turns) - 200);
 
     expect(fitted[0]!.steps[0]!.output).toBe("");
     expect(fitted[0]!.steps[0]!.truncated).toBe(true);
-    expect(fitted[1]!.steps[0]!.output).toBe(clipped);
-    expect(fitted[2]!.steps[0]!.output).toBe(clipped);
+    expect(fitted[1]!.steps[0]!.output).toBe(long(2_000));
+    expect(fitted[2]!.steps[0]!.output).toBe(long(2_000));
   });
 
-  it("keeps a failed output longer than a successful one and clears it only much later", () => {
-    const failed = shapeToolSteps([{ name: "Bash", status: "failed", input: long(400), output: long(4_000) }]);
-    const fitted = fitSessionBudget([turn(1, failed)], 200);
+  it("keeps the failure reason until the successful outputs are gone, then cuts it to one line", () => {
+    const failed: ToolStep = { name: "Bash", input: long(200), output: `Error: ${long(190)}\nExit code: 1`, failed: true };
+    const fitted = fitSessionBudget([turn(1, [...legacy(long(1_000)), failed])], 1);
 
-    // 成功步骤的压缩与清空都动不了失败步骤；失败步骤只被压到两百字，入参压到八十。
-    expect(fitted[0]!.steps[0]!.output).toBe(`${long(200)}${OUTPUT_TRUNCATION_MARKER}${long(200)}`);
-    expect(fitted[0]!.steps[0]!.input).toBe(long(80));
+    expect(fitted[0]!.steps[0]!.output).toBe("");
+    expect(fitted[0]!.steps[1]!.output).toBe(`Error: ${long(113)}`);
+    expect(fitted[0]!.steps[1]!.input).toBe(long(80));
+    expect(fitted[0]!.steps[1]!.failed).toBe(true);
   });
 
   it("never touches the question or the reply", () => {
-    const turns = [turn(1, shapeToolSteps([{ name: "Bash", output: long(6_000) }]))];
+    const turns = [turn(1, legacy(long(6_000)))];
     const fitted = fitSessionBudget(turns, 1);
 
     expect(fitted[0]!.question).toBe("第 1 个问题");
@@ -368,7 +404,7 @@ describe("fitSessionBudget", () => {
   });
 
   it("drops steps of a turn with more than twenty of them as the last resort", () => {
-    const steps = Array.from({ length: 30 }, (_, index) => ({ name: "Bash", input: `cmd ${index}`, output: long(100) }));
+    const steps = Array.from({ length: 30 }, (_, index) => ({ name: "Bash", input: `cmd ${index}`, output: "" }));
     const fitted = fitSessionBudget([turn(1, steps)], 1);
 
     expect(fitted[0]!.steps).toHaveLength(21);
@@ -388,7 +424,7 @@ describe("fitSessionBudget", () => {
   it("never grows a turn while degrading it", () => {
     const turns = [
       turn(1, shapeToolSteps([{ name: "Bash", input: long(150), output: long(700) }])),
-      turn(2, shapeToolSteps([{ name: "Bash", status: "failed", output: long(900) }]))
+      turn(2, shapeToolSteps([{ name: "Bash", status: "failed", output: `Error: ${long(900)}` }]))
     ];
 
     const fitted = fitSessionBudget(turns, 1);

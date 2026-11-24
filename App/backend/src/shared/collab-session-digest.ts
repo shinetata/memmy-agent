@@ -1,21 +1,24 @@
 /**
  * 协作项目共享会话里的工具调用摘要。
  *
- * <p>成员读到的一条共享任务，原来只有「提问 + 回复 + 工具名」，参数与输出全被丢掉，接着做的人看不出当时
- * 到底跑了什么。这里把一次调用压成「调用什么、参数要点、输出要点」，一个回合的每一次调用都留一步——
- * 整段丢弃中间调用看不出当时到底做过什么。压缩只发生在两处：单步自己的头尾，以及整条会话超出上传预算时
- * 按字节逐级降级（{@link fitSessionBudget}），正常会话远达不到预算。</p>
+ * <p>成员读到的一条共享任务，原来只有「提问 + 回复 + 工具名」，接着做的人看不出当时到底跑了什么。
+ * 这里把一次调用压成「调用什么、关键参数」，失败的调用再附一两行原因；成功调用的输出不留。一个回合的每一次
+ * 调用都留一步。接手评测里，回复正文已经说清了结论与决定，工具记录补上的多是命令、路径、环境变量
+ * 与失败原因，成功调用的回显几乎不起作用，却占了绝大部分体积。整条会话超出上传预算时按字节逐级降级
+ * （{@link fitSessionBudget}），正常会话远达不到预算。</p>
  *
- * <p>降级不额外记字段：读者能从数据本身看出被压缩过——单步被截断时 {@code truncated} 为 true 且输出里
- * 有 {@code  …[omitted]… }；整次调用被丢弃时那一步的名称为空、输出是
- * {@code [... N tool calls omitted ...]}；轮次被合并时其后第一轮带 {@code omittedBefore}；
- * 调用失败时那一步带 {@code failed: true}。</p>
+ * <p>降级不额外记字段：读者能从数据本身看出被压缩过——降级改过的一步 {@code truncated} 为 true；
+ * 整次调用被丢弃时那一步的名称为空、输出是 {@code [... N tool calls omitted ...]}；轮次被合并时
+ * 其后第一轮带 {@code omittedBefore}；调用失败时那一步带 {@code failed: true}。</p>
  *
  * <p>放在 shared 而不是 services：读本机会话的出站适配器（session-reference）也要用它，而后端的
  * eslint 边界不允许出站适配器依赖 services 层。</p>
  */
 
-/** 一段输出被掐头去尾时的分隔标记；前后各留一个空格，截断处才不会粘成一个词。 */
+/**
+ * 一段输出被掐头去尾时的分隔标记；前后各留一个空格，截断处才不会粘成一个词。客户端已不再生成它，
+ * 但云端的防御截断与早先上传的副本里仍会出现。
+ */
 export const OUTPUT_TRUNCATION_MARKER = " …[omitted]… ";
 
 /** 一步上传内容：只有摘要，原文仍在来源 Agent 的记录里。 */
@@ -24,9 +27,9 @@ export interface ToolStep {
   name: string;
   /** 入参摘要，压成一行。 */
   input: string;
-  /** 输出摘要，超长时留头尾。 */
+  /** 成功的调用为空；失败的调用是一两行原因。早先上传的副本里可能是掐过头尾的整段输出。 */
   output: string;
-  /** 入参或输出被压缩过。 */
+  /** 这一步被降级改过（入参或原因被压短、输出被清空）。 */
   truncated?: boolean;
   /** 这次调用失败；成功或判断不了时没有这个字段。 */
   failed?: true;
@@ -57,10 +60,9 @@ export interface DigestTurn {
 export const MAX_STEP_NAME_CHARS = 100;
 /** 入参摘要最多多少字。 */
 export const STEP_INPUT_CHARS = 200;
-/** 成功步骤的输出头尾各留多少字。 */
-export const STEP_OUTPUT_HALF_CHARS = 500;
-/** 失败步骤的输出头尾各留多少字：出错后的提示通常在开头，收尾的差异通常在结尾，都值得多留一些。 */
-export const STEP_FAILED_OUTPUT_HALF_CHARS = 1_000;
+/** 失败原因最多几行、每行多少字：一行报错加一行退出码，够接手的人判断哪里出了问题。 */
+export const FAILURE_LINES = 2;
+export const FAILURE_LINE_CHARS = 200;
 /** 一轮最多几步，超出只说明这一步是防御上限——正常任务一轮几十步。 */
 export const MAX_TURN_STEPS = 1_000;
 /** 超过这个步数时保留的头部步数（尾部为 {@link MAX_TURN_STEPS} 减它再减一个占位步）。 */
@@ -68,20 +70,16 @@ const TURN_HEAD_STEPS = 500;
 /** 整条会话上传前的字节预算：给云端的标题等元数据留出余量，云端上限是 2,000,000。 */
 export const SESSION_BUDGET_BYTES = 1_800_000;
 
-/** 上传预算的各级降级：先动成功步骤的输出，再清空它，然后才动失败步骤的输出与入参，最后才丢步。 */
-type BudgetLevel = "success-output" | "clear-success-output" | "failed-output" | "input" | "steps";
+/**
+ * 上传预算的各级降级：先清空成功步骤的输出（只有早先的副本才有），再把失败原因压成一行、入参压到 80 字，
+ * 最后才丢步。
+ */
+type BudgetLevel = "success-output" | "failed-output" | "input" | "steps";
 
-const BUDGET_LEVELS: readonly BudgetLevel[] = [
-  "success-output",
-  "clear-success-output",
-  "failed-output",
-  "input",
-  "steps"
-];
+const BUDGET_LEVELS: readonly BudgetLevel[] = ["success-output", "failed-output", "input", "steps"];
 
-/** 降级时成功步骤输出留多少字、失败步骤输出留多少字、入参留多少字、一步保留多少行。 */
-const LEVEL_SUCCESS_HALF_CHARS = 100;
-const LEVEL_FAILED_HALF_CHARS = 200;
+/** 降级时失败原因留多少字、入参留多少字、一轮头尾各保留多少步。 */
+const LEVEL_FAILED_CHARS = 120;
 const LEVEL_INPUT_CHARS = 80;
 const LEVEL_TURN_HEAD_STEPS = 10;
 
@@ -91,13 +89,44 @@ const FAILED_STATUSES = new Set(["failed", "error", "errored", "cancelled", "can
 /**
  * 退出码写在输出里的几种格式：Codex 与 Memmy 自己的 exec 用它，Claude Code 的 Bash 也常带。
  * 标签的大小写各来源不一致（WorkBuddy 写 {@code Exit Code:}），所以不区分大小写。
+ * Codex 的结果是嵌在 JSON 字符串里的 JSON，引号带反斜杠（{@code \"exit_code\":1}），两种写法都要认。
  */
 const EXIT_CODE_PATTERNS: readonly RegExp[] = [
   /(?:^|\n)\s*exit code:\s*(-?\d+)/giu,
-  /(?:^|\n)\s*process exited with code\s+(-?\d+)/giu,
-  /"exit_code"\s*:\s*(-?\d+)/gu,
-  /"exitCode"\s*:\s*(-?\d+)/gu
+  /(?:^|\n)\s*(?:process|command) exited with code\s+(-?\d+)/giu,
+  /\\?"(?:exit_code|exitCode)\\?"\s*:\s*(-?\d+)/gu
 ];
+
+/** 报错的那一行：非空的 Stderr、Error / XxxError / XxxException、fatal、panic、npm ERR!。 */
+const ERROR_LINE = /^(?:stderr\s*:\s*\S|[\w.]*(?:error|exception)\b|fatal\b|panic\b|npm err!)/iu;
+/** Python 的调用栈：真正的原因在最后一行异常上，不在 Traceback 那一行。 */
+const TRACEBACK_LINE = /^traceback\b/iu;
+const EXCEPTION_LINE = /^[\w.]*(?:error|exception)\b/iu;
+/** 退出码与信号：没有报错正文时，它就是失败的原因（例如超时被 SIGTERM 杀掉）。Proma 写 {@code Command exited with code 1}。 */
+const EXIT_LINE = /^(?:exit code|(?:process|command) exited with code|signal)\b\s*:?\s*\S/iu;
+/**
+ * 不是原因的行：命令回显（WorkBuddy 把命令写在输出第一行）、空的 Stdout / Stderr / Signal、
+ * Codex 包在结果外面的说明行，以及 Memmy exec 自己补的提示。
+ */
+const NOT_A_REASON = new RegExp(
+  [
+    "^(?:command|cwd|directory)\\s*:",
+    "^\\w+\\s*:\\s*\\((?:empty|none)\\)\\s*$",
+    "^(?:script completed|wall time\\b|output:\\s*$|total output lines:|warning: truncated output)",
+    "^error:\\s*command exited with",
+    "^\\[analyze the error"
+  ].join("|"),
+  "iu"
+);
+/** 结果对象里可能装着正文的字段，按这个顺序取：报错在前，普通输出在后。 */
+const RESULT_TEXT_FIELDS = ["error", "stderr", "output", "text", "content", "stdout", "message"] as const;
+/** WorkBuddy 一类输出的分段标签；标签之后没有标签的行仍属于这一段。 */
+const SECTION_LABEL = /^(stdout|stderr|command|exit code|signal)\s*:/iu;
+/**
+ * 说明出了什么问题的词。只用来在失败输出里挑原因行，不用来判断是否失败；标准输出一段里也只有带着它们的行才算，
+ * 比如 grep 列出的文件就不是原因，测试工具写在标准输出里的 FAILED 才是。
+ */
+const FAILURE_WORD = /\b(?:fail(?:ed|ure|s)?|errors?|exception|no such file|not found|denied|cannot|can't|unable|invalid|refused|timed? ?out|killed)\b/iu;
 
 /** 入参里先取哪几个字段当要点；顺序就是一句调用最想看到的东西的先后。 */
 const INPUT_KEY_PARAMS = ["command", "cmd", "file_path", "filePath", "path", "notebook_path", "pattern", "query", "url"] as const;
@@ -294,21 +323,107 @@ export function shapeToolSteps(calls: readonly RawToolCall[]): ToolStep[] {
   return calls.map(shapeStep);
 }
 
+/**
+ * 一次调用的一步：成功的只留「做了什么」，失败的再附一两行原因。入参与原因本来就是摘要，
+ * 裁到上限不算压缩，不标 truncated。
+ */
 function shapeStep(call: RawToolCall): ToolStep {
   const name = clip(collapse(serialize(call.name)), MAX_STEP_NAME_CHARS);
-  const renderedInput = inputDigest(call.input);
-  const input = clip(renderedInput, STEP_INPUT_CHARS);
-  const renderedOutput = serialize(call.output).trim();
-  const failed = isFailedCall(call.status, renderedOutput);
-  const output = headTail(renderedOutput, failed ? STEP_FAILED_OUTPUT_HALF_CHARS : STEP_OUTPUT_HALF_CHARS);
-  const truncated = renderedInput.length > STEP_INPUT_CHARS || output !== renderedOutput;
+  const input = clip(inputDigest(call.input), STEP_INPUT_CHARS);
+  const output = serialize(call.output);
+  const failed = isFailedCall(call.status, output);
   return {
     name,
     input,
-    output,
-    ...(truncated ? { truncated: true } : {}),
+    output: failed ? failureExcerpt(output) : "",
     ...(failed ? { failed: true } : {})
   };
+}
+
+/**
+ * 失败输出里的一两行原因：先找报错行（Python 调用栈取最后一行异常），再补一行退出码或信号；
+ * 都没有就取第一行正文。命令回显、空的 Stdout 这类行不算原因。
+ * Codex 的结果是嵌套 JSON，先拆开拿到里面的正文与退出码。
+ */
+export function failureExcerpt(output: string): string {
+  const { text, exitCode } = unwrapResult(output);
+  const lines = reasonCandidates(text);
+  const exitLines = lines.filter((line) => EXIT_LINE.test(line));
+  if (!exitLines.length && exitCode !== undefined && exitCode !== 0) exitLines.push(`Exit code: ${exitCode}`);
+  // 没有报错正文时，退出码与信号就是原因：137 后面的 SIGTERM 才说明是超时被杀。
+  const reason = failureLine(lines, exitLines.length > 0);
+  const picked = reason ? [reason, ...exitLines] : exitLines;
+  return picked.slice(0, FAILURE_LINES).map((line) => clip(line, FAILURE_LINE_CHARS)).join("\n");
+}
+
+/**
+ * 可能是原因的行：去掉命令回显、空段与包装说明；标准输出一段里只留提到失败的行。
+ * 没有分段标签的输出（Claude Code、Codex）每一行都算。
+ */
+function reasonCandidates(text: string): string[] {
+  const candidates: string[] = [];
+  let section = "";
+  for (const raw of text.split("\n")) {
+    const line = raw.trim();
+    if (!line) continue;
+    const label = SECTION_LABEL.exec(line)?.[1]?.toLowerCase();
+    if (label) section = label;
+    if (NOT_A_REASON.test(line) || section === "command") continue;
+    if (section === "stdout" && !FAILURE_WORD.test(line)) continue;
+    candidates.push(line);
+  }
+  return candidates;
+}
+
+/** 失败原因的第一行：骨架里跟在失败步骤后面的那一句。早先上传的整段输出也按同一套办法摘。 */
+export function failureReason(output: string, maxChars: number): string {
+  return clip(failureExcerpt(output).split("\n")[0] ?? "", maxChars);
+}
+
+/**
+ * 原因行：Python 调用栈取最后一行异常，再找报错行、带着问题词的行。都没有时，有退出码就只用退出码——
+ * 输出的第一行多半是命令的正常输出（一个目录名、一个 0），当成原因反而误导；没有退出码才取第一行。
+ */
+function failureLine(lines: readonly string[], hasExitLine: boolean): string | undefined {
+  const traceback = lines.findIndex((line) => TRACEBACK_LINE.test(line));
+  if (traceback >= 0) {
+    const raised = lines.slice(traceback + 1).filter((line) => EXCEPTION_LINE.test(line)).at(-1);
+    if (raised) return raised;
+  }
+  const text = lines.filter((line) => !EXIT_LINE.test(line));
+  return text.find((line) => ERROR_LINE.test(line))
+    ?? text.find((line) => FAILURE_WORD.test(line))
+    ?? (hasExitLine ? undefined : text[0]);
+}
+
+/**
+ * 把结果里嵌着的 JSON 拆成正文：Codex 的一次 exec 是「内容数组 → 文本里的 JSON 对象 → output 字段」，
+ * 前面可能还有几行说明。解析不了就按原文处理。
+ */
+function unwrapResult(output: string): { text: string; exitCode?: number } {
+  let exitCode: number | undefined;
+  const visit = (value: unknown, depth: number): string => {
+    if (depth > 4) return typeof value === "string" ? value : compactJson(value);
+    if (typeof value === "string") {
+      const at = value.search(/(?:^|\n)\s*[{[]/u);
+      if (at < 0) return value;
+      try {
+        const nested = visit(JSON.parse(value.slice(at)), depth + 1);
+        return [value.slice(0, at), nested].filter((part) => part.trim()).join("\n");
+      } catch {
+        return value;
+      }
+    }
+    if (Array.isArray(value)) return value.map((item) => visit(item, depth + 1)).filter(Boolean).join("\n");
+    if (!isRecord(value)) return serialize(value);
+    const code = value.exit_code ?? value.exitCode;
+    if (typeof code === "number" && exitCode === undefined) exitCode = code;
+    const parts = RESULT_TEXT_FIELDS
+      .filter((field) => value[field] !== undefined && value[field] !== null && value[field] !== "")
+      .map((field) => visit(value[field], depth + 1));
+    return parts.length ? parts.join("\n") : compactJson(value);
+  };
+  return { text: visit(output, 0), ...(exitCode === undefined ? {} : { exitCode }) };
 }
 
 /**
@@ -362,10 +477,10 @@ export function omittedCount(step: ToolStep): number {
  * 整条会话的上传预算：按 {@code JSON.stringify} 后的 UTF-8 字节数计量，超出后逐级降级，
  * 每一级都从最早的轮次往后处理，每处理完一轮重新计量、一不超就停。
  *
- * <p>先压成功步骤的输出（它占的地方最多），再清空它，然后才动失败步骤——失败原因比成功回显更值得留下。
- * 入参再压到 80 字，最后才丢步。{@code question} 与 {@code reply} 永远不动：那是成员真正要读的内容。</p>
+ * <p>先清空成功步骤的输出（现在生成的步骤本来就没有，只有早先的副本才有），再把失败原因压成一行、
+ * 入参压到 80 字，最后才丢步。{@code question} 与 {@code reply} 永远不动：那是成员真正要读的内容。</p>
  *
- * <p>五级做完还超限就原样返回，交给云端合并轮次。轮次是就地改的，调用方拿到的就是同一份。</p>
+ * <p>各级做完还超限就原样返回，交给云端合并轮次。轮次是就地改的，调用方拿到的就是同一份。</p>
  */
 export function fitSessionBudget<T extends DigestTurn>(turns: T[], targetBytes: number = SESSION_BUDGET_BYTES): T[] {
   let total = byteLength(turns);
@@ -396,17 +511,12 @@ function degradeTurn(turn: DigestTurn, level: BudgetLevel): void {
     // 占位步本身就是一句话，没有可压的正文。
     if (!step.name) return step;
     if (level === "success-output") {
-      if (step.failed) return step;
-      const output = clipHalf(step.output, LEVEL_SUCCESS_HALF_CHARS);
-      return output === step.output ? step : { ...step, output, truncated: true };
-    }
-    if (level === "clear-success-output") {
       if (step.failed || !step.output) return step;
       return { ...step, output: "", truncated: true };
     }
     if (level === "failed-output") {
       if (!step.failed) return step;
-      const output = clipHalf(step.output, LEVEL_FAILED_HALF_CHARS);
+      const output = failureReason(step.output, LEVEL_FAILED_CHARS);
       return output === step.output ? step : { ...step, output, truncated: true };
     }
     const input = clip(step.input, LEVEL_INPUT_CHARS);
@@ -455,25 +565,6 @@ function structuredInput(value: unknown): unknown {
   } catch {
     return trimmed;
   }
-}
-
-/** 掐头去尾：不超过两倍上限就原样返回。 */
-function headTail(text: string, halfChars: number): string {
-  if (text.length <= halfChars * 2) return text;
-  return `${text.slice(0, halfChars)}${OUTPUT_TRUNCATION_MARKER}${text.slice(-halfChars)}`;
-}
-
-/**
- * 再压一次已经掐过头的输出：头部的头部仍是原文头部，尾部的尾部仍是原文尾部，所以按标记拆开再各取一段即可，
- * 不必回到原文——原文在来源 Agent 的记录里，这里只有摘要。
- */
-function clipHalf(text: string, halfChars: number): string {
-  if (text.length <= halfChars * 2) return text;
-  const cut = text.indexOf(OUTPUT_TRUNCATION_MARKER);
-  if (cut < 0) return `${text.slice(0, halfChars)}${OUTPUT_TRUNCATION_MARKER}${text.slice(-halfChars)}`;
-  const head = text.slice(0, cut);
-  const tail = text.slice(cut + OUTPUT_TRUNCATION_MARKER.length);
-  return `${head.slice(0, halfChars)}${OUTPUT_TRUNCATION_MARKER}${tail.slice(-halfChars)}`;
 }
 
 /** 字符串原样、其余按 JSON 序列化，和 renderTool 的 format 一致。 */
