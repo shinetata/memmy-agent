@@ -135,10 +135,8 @@ describe("local session reader", () => {
   it("reads one session's turns with replies and tool steps, without injected context", async () => {
     const reader = readerWith([fakeAdapter("claude_code", "Claude Code", [
       message("claude_code", "s-1", "user", "<memmy_memory_context>旧记忆</memmy_memory_context>修复权限弹窗卡死", "2026-10-21T07:00:00.000Z", "/repo"),
-      // 一次调用是两条消息：call 带入参，result 带输出，两条共用同一个 toolCallId。
-      message("claude_code", "s-1", "tool", "Tool: Bash\n\nCall ID: call-1\n\nInput:\n{\n  \"command\": \"ls\"\n}", "2026-10-21T07:00:01.000Z", "/repo", { toolName: "Bash", toolCallId: "call-1" }),
-      message("claude_code", "s-1", "tool", "Tool: Bash\n\nCall ID: call-1\n\nOutput:\na.txt", "2026-10-21T07:00:02.000Z", "/repo", { toolName: "Bash", toolCallId: "call-1" }),
-      message("claude_code", "s-1", "tool", "Tool: Edit\n\nCall ID: call-2\n\nInput:\n{}", "2026-10-21T07:00:03.000Z", "/repo", { toolName: "Edit", toolCallId: "call-2" }),
+      message("claude_code", "s-1", "tool", "Tool: Bash\n\nInput: ls", "2026-10-21T07:00:01.000Z", "/repo", { toolName: "Bash" }),
+      message("claude_code", "s-1", "tool", "Tool: Edit\n\nInput: {}", "2026-10-21T07:00:03.000Z", "/repo"),
       message("claude_code", "s-1", "assistant", "检测请求加了超时。", "2026-10-21T07:00:04.000Z", "/repo"),
       message("claude_code", "s-2", "user", "别的会话", "2026-10-21T08:00:00.000Z", "/repo")
     ])]);
@@ -149,28 +147,11 @@ describe("local session reader", () => {
     expect(session.turns).toEqual([{
       question: "修复权限弹窗卡死",
       reply: "检测请求加了超时。",
-      // 同一次调用的 call 与 result 合成一步；入参只留关键参数（command 的值），成功调用不留输出。
-      steps: [
-        { name: "Bash", input: "ls", output: "" },
-        { name: "Edit", input: "{}", output: "" }
-      ],
+      steps: ["Bash", "Edit"],
       startedAt: "2026-10-21T07:00:00.000Z"
     }]);
     await expect(reader.read({ sourceId: "claude_code", conversationId: "missing" })).rejects.toThrow(/Session not found/u);
     await expect(reader.read({ sourceId: "nope", conversationId: "s-1" })).rejects.toThrow(/Unknown agent source/u);
-  });
-
-  it("marks a step failed when the rendered status says so", async () => {
-    // 状态写在 result 那一行（WorkBuddy 只给结果带 status）：合并时它要跟着到那一步上。
-    const reader = readerWith([fakeAdapter("workbuddy", "WorkBuddy", [
-      message("workbuddy", "w-1", "user", "跑一下测试", "2026-10-21T07:00:00.000Z", "/repo"),
-      message("workbuddy", "w-1", "tool", "Tool: Bash\n\nCall ID: call-9\n\nInput:\n{\n  \"command\": \"npm test\"\n}", "2026-10-21T07:00:01.000Z", "/repo", { toolName: "Bash", toolCallId: "call-9" }),
-      message("workbuddy", "w-1", "tool", "Tool: Bash\n\nCall ID: call-9\n\nStatus: failed\n\nOutput:\n1 failing", "2026-10-21T07:00:02.000Z", "/repo", { toolName: "Bash", toolCallId: "call-9" })
-    ])]);
-
-    const session = await reader.read({ sourceId: "workbuddy", conversationId: "w-1" });
-
-    expect(session.turns[0]!.steps).toEqual([{ name: "Bash", input: "npm test", output: "1 failing", failed: true }]);
   });
 
   it("reads several sessions of an agent in one pass, widening once for older ones", async () => {

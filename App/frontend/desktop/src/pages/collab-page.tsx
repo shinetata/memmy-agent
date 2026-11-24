@@ -17,7 +17,6 @@ import {
   type CollabSessionTurn,
   type CollabSyncProgress,
   type CollabSyncResult,
-  type CollabToolStep,
   type LocalAgentSession,
   type LocalSessionGroup
 } from "../api/collab-client.js";
@@ -3150,11 +3149,9 @@ function folderNameOf(path: string): string {
 }
 
 /**
- * A cloud session read as a conversation: the person's question, then the Agent's answer, then a folded
- * list of the tool calls that turn made. Tool text in the shared copy is already summarised and may have been
- * shortened to fit the size limit, so the list says where it was compressed instead of pretending to be complete.
- * Members can read each other's sessions, but only the person who shared one can delete it, which the board's row
- * menu already enforces.
+ * A cloud session read as a conversation: the person's question, then the Agent's answer.
+ * Tool steps stay in the stored transcript and are not drawn here. Members can read each other's
+ * sessions, but only the person who shared one can delete it, which the board's row menu already enforces.
  *
  * It floats on the right of the board rather than opening as a dialog: the list stays visible, so reading
  * someone else's task never loses the place it came from.
@@ -3192,11 +3189,13 @@ function SessionReaderPanel(props: {
     return () => document.removeEventListener("keydown", handleKeyDown);
   }, [open, props.onClose]);
 
-  // 一轮可能有一两百步：分组与计数只跟数据有关，拖面板宽度这类重绘不必重算。
-  const spoken = useMemo(() => readSessionTurns(data?.turns ?? []), [data]);
-
   if (!data) return null;
 
+  const spoken = (data.turns.flatMap((turn) => {
+    const question = visibleQuestion(turn.question);
+    const reply = visibleReply(turn.reply);
+    return question || reply ? [{ question, reply, startedAt: turn.startedAt }] : [];
+  })).map((turn, index) => ({ ...turn, number: index + 1 }));
   // 一个任务只来自一个 Agent：名字与图标只标一次，回复正文保持干净。
   const firstAgent = spoken.findIndex((turn) => turn.reply);
   const moment = stampLabel(taskStamp(data.session.lastActiveAt), t);
@@ -3281,18 +3280,8 @@ function SessionReaderPanel(props: {
             // 打开面板时只有开头几轮真在屏上：其余的先按估算高度占位，滚到附近再由 AgentMessageContent
             // 自己展开。否则一个长任务的全部 Markdown、代码块会在同一次提交里算完，点击要等几百毫秒。
             const defer = index >= READER_IMMEDIATE_TURNS && Boolean(turn.reply) && isLikelyExpensiveAgentMarkdown(turn.reply);
-            // 标题先说清这一轮共有几次调用（被整次丢弃的也算在内），再单独说其中失败了几步；
-            // 一步也没列出来时改说略去了几次调用。
-            const toolsTitle = turn.drawn > 0 || turn.omittedCalls === 0
-              ? stepCountLabel(t, turn.drawn > 0 ? turn.calls : turn.steps.length)
-              : omittedCallsLabel(t, turn.omittedCalls);
             return (
               <article key={`${turn.startedAt}-${turn.number}`} className={styles.readerTurn}>
-                {turn.omittedBefore > 0 ? (
-                  <span className={styles.readerTurnOmitted}>
-                    {omittedTurnsLabel(t, turn.omittedBefore)}
-                  </span>
-                ) : null}
                 {spoken.length > 1 ? (
                   <span className={styles.readerTurnIndex}>{t("collab.reader.turn", { index: String(turn.number) })}</span>
                 ) : null}
@@ -3323,47 +3312,6 @@ function SessionReaderPanel(props: {
                     />
                   </div>
                 ) : null}
-                {turn.steps.length === 0 ? null : (
-                  <details className={styles.readerTools}>
-                    <summary className={styles.readerToolsSummary}>
-                      <span>{toolsTitle}</span>
-                      {turn.failed > 0 ? (
-                        <span className={styles.readerToolsFailed}>{failedStepCountLabel(t, turn.failed)}</span>
-                      ) : null}
-                    </summary>
-                    <ol className={styles.readerToolList}>
-                      {turn.rows.map((row, rowIndex) => {
-                        if (row.kind === "omitted") {
-                          return (
-                            <li key={`omitted-${rowIndex}`} className={styles.readerToolOmitted}>
-                              {omittedCallsLabel(t, row.count)}
-                            </li>
-                          );
-                        }
-                        if (row.kind === "group") {
-                          const first = row.steps[0];
-                          return (
-                            <li key={`group-${rowIndex}`}>
-                              {/* 同名的连续成功调用（Read、Grep 这类）折成一行，入参预览跟在后面：一轮两百步时不至于刷满屏 */}
-                              <details className={styles.readerToolGroup}>
-                                <summary className={styles.readerToolGroupSummary}>
-                                  <span className={styles.readerToolName}>{toolGroupLabel(t, row.name, row.steps.length)}</span>
-                                  {first?.input ? <span className={styles.readerToolInput}>{first.input}</span> : null}
-                                </summary>
-                                <ol className={styles.readerToolChain}>
-                                  {row.steps.map((step, index) => (
-                                    <ReaderToolStepRow key={`${rowIndex}-${index}`} step={step} />
-                                  ))}
-                                </ol>
-                              </details>
-                            </li>
-                          );
-                        }
-                        return <ReaderToolStepRow key={`step-${rowIndex}`} step={row.step} />;
-                      })}
-                    </ol>
-                  </details>
-                )}
               </article>
             );
           })}
@@ -3372,180 +3320,6 @@ function SessionReaderPanel(props: {
       </aside>
     </div>,
     document.body
-  );
-}
-
-/**
- * 被整次丢弃的工具调用合成一步：工具名为空，output 是「[... N tool calls omitted ...]」。
- * 这个标记是共享副本自己写的，不是工具输出，所以按固定形状解。
- */
-const OMITTED_CALLS_PATTERN = /\[\.\.\.\s*(\d+)\s+tool calls omitted\s*\.\.\.\]/u;
-
-function omittedCallCount(step: CollabToolStep): number {
-  const match = OMITTED_CALLS_PATTERN.exec(step.output);
-  return match ? Number(match[1]) : 0;
-}
-
-type Translate = (key: MessageKey, values?: MessageValues) => string;
-
-/**
- * 带数量的文案：英文的 step / steps、turn / turns 不能只靠插值，一个与多个各用一键。
- * 中文两边同形，仍分开写，免得同一个键在中英文里含义不一致。
- */
-export function stepCountLabel(t: Translate, count: number): string {
-  return count === 1
-    ? t("collab.reader.tools.summaryOne")
-    : t("collab.reader.tools.summary", { count: String(count) });
-}
-
-export function failedStepCountLabel(t: Translate, count: number): string {
-  return count === 1
-    ? t("collab.reader.tools.failedOne")
-    : t("collab.reader.tools.failedCount", { count: String(count) });
-}
-
-export function omittedTurnsLabel(t: Translate, count: number): string {
-  return count === 1
-    ? t("collab.reader.turns.omittedOne")
-    : t("collab.reader.turns.omitted", { count: String(count) });
-}
-
-export function omittedCallsLabel(t: Translate, count: number): string {
-  return count === 1
-    ? t("collab.reader.tools.omittedCallsOne")
-    : t("collab.reader.tools.omittedCalls", { count: String(count) });
-}
-
-export function toolGroupLabel(t: Translate, name: string, count: number): string {
-  return t("collab.reader.tools.group", { name, count: String(count) });
-}
-
-/** 同名连续成功调用到这步数就折成一组；两步的还按两步列，看不出是成批的。 */
-const TOOL_GROUP_MIN = 3;
-
-/** 阅读面板里的一行：一步单独列、几步同名合成一组，或是被丢弃调用的占位说明。 */
-export type ReaderToolRow =
-  | { kind: "omitted"; count: number }
-  | { kind: "step"; step: CollabToolStep }
-  | { kind: "group"; name: string; steps: CollabToolStep[] };
-
-/**
- * 把一轮的步骤排成要渲染的行。失败与占位步会打断分组：它们各自要单独看得见，
- * 也不能被折进「Read ×12」里跟着一起藏起来。
- */
-export function readerToolRows(steps: CollabToolStep[]): ReaderToolRow[] {
-  const rows: ReaderToolRow[] = [];
-  let run: CollabToolStep[] = [];
-  const flush = () => {
-    if (run.length === 0) return;
-    if (run.length >= TOOL_GROUP_MIN) rows.push({ kind: "group", name: run[0]!.name, steps: run });
-    else for (const step of run) rows.push({ kind: "step", step });
-    run = [];
-  };
-  for (const step of steps) {
-    if (!step.name) {
-      flush();
-      const omitted = omittedCallCount(step);
-      if (omitted > 0) rows.push({ kind: "omitted", count: omitted });
-      else rows.push({ kind: "step", step });
-      continue;
-    }
-    if (step.failed === true) {
-      flush();
-      rows.push({ kind: "step", step });
-      continue;
-    }
-    if (run.length > 0 && run[0]!.name !== step.name) flush();
-    run.push(step);
-  }
-  flush();
-  return rows;
-}
-
-/** 阅读面板里的一轮：步骤已经排好行，计数也一并算好，渲染时不再逐条判断。 */
-type ReaderTurn = {
-  question: string;
-  reply: string;
-  startedAt: string;
-  number: number;
-  omittedBefore: number;
-  steps: CollabToolStep[];
-  rows: ReaderToolRow[];
-  /** 真正列出来的步数 */
-  drawn: number;
-  /** 失败的步数；旧副本没有这个标记，自然是 0。 */
-  failed: number;
-  /** 被整次丢弃、只留占位说明的调用次数 */
-  omittedCalls: number;
-  /** 这一轮实际调用几次：列出来的加上被丢弃的，标题先说总数。 */
-  calls: number;
-};
-
-/**
- * 云端返回的轮次变成阅读面板要的样子。只有工具步骤、没有问题与回答的轮次不单独占一段，
- * 也不占轮次编号。
- */
-export function readSessionTurns(turns: CollabSessionTurn[]): ReaderTurn[] {
-  const spoken: ReaderTurn[] = [];
-  for (const turn of turns) {
-    const question = visibleQuestion(turn.question);
-    const reply = visibleReply(turn.reply);
-    if (!question && !reply) continue;
-    let drawn = 0;
-    let failed = 0;
-    let omittedCalls = 0;
-    for (const step of turn.steps) {
-      if (step.name) drawn += 1;
-      else omittedCalls += omittedCallCount(step);
-      if (step.failed === true) failed += 1;
-    }
-    spoken.push({
-      question,
-      reply,
-      startedAt: turn.startedAt,
-      number: spoken.length + 1,
-      omittedBefore: turn.omittedBefore ?? 0,
-      steps: turn.steps,
-      rows: readerToolRows(turn.steps),
-      drawn,
-      failed,
-      omittedCalls,
-      calls: drawn + omittedCalls
-    });
-  }
-  return spoken;
-}
-
-/**
- * 阅读面板里的一步：默认三行摘要（工具名、入参首行、输出前两行），点一下展开完整的已存输出。
- * 失败的调用默认就展开、工具名旁标「失败」，不用再点一次才看到错在哪。
- * 用 details / summary 而不是给 div 绑点击：键盘 Enter / Space 本来就能展开收起。
- */
-function ReaderToolStepRow(props: { step: CollabToolStep }) {
-  const { t } = useTranslation();
-  const step = props.step;
-  const failed = step.failed === true;
-  const head = (
-    <>
-      <span className={styles.readerToolHead}>
-        {/* 工具名可能带命名空间或路径，等宽字体、单行省略，不折行 */}
-        {step.name ? <span className={styles.readerToolName}>{step.name}</span> : null}
-        {failed ? <span className={styles.readerToolFailed}>{t("collab.reader.tools.failed")}</span> : null}
-        {step.truncated ? <span className={styles.readerToolNote}>{t("collab.reader.tools.truncated")}</span> : null}
-      </span>
-      {step.input ? <span className={styles.readerToolInput}>{step.input}</span> : null}
-      {step.output ? <span className={styles.readerToolOutput}>{step.output}</span> : null}
-    </>
-  );
-  const className = failed ? `${styles.readerToolStep} ${styles.readerToolStepFailed}` : styles.readerToolStep;
-  if (!step.output) return <li className={className} data-collab-step="">{head}</li>;
-  return (
-    <li className={className} data-collab-step="">
-      <details className={styles.readerToolFold} open={failed ? true : undefined}>
-        <summary className={styles.readerToolFoldSummary}>{head}</summary>
-        <pre className={styles.readerToolFull}>{step.output}</pre>
-      </details>
-    </li>
   );
 }
 

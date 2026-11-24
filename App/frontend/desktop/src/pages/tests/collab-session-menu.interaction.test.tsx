@@ -222,25 +222,20 @@ describe("collab session row menu", () => {
     expect(document.body.textContent).toContain("已删除 1 个任务");
   });
 
-  it("renders a session as a question and a markdown answer, with its tool calls folded under the answer", async () => {
+  it("renders a session as a question and a markdown answer, without tool steps", async () => {
     mocks.readSessionDetail.mockResolvedValue({
       session,
       turns: [
         {
           question: "帮我看下部署 *原样*",
           reply: "可以部署。\n\n- 已带上 `memmy-project`\n- 见 [部署说明](/tmp/deploy.md)",
-          steps: [
-            { name: "Bash", input: "npm test", output: "1 passed\n2 failed", truncated: true },
-            { name: "", input: "", output: "[... 4 tool calls omitted ...]" },
-            { name: "Edit", input: "README.md", output: "done" }
-          ],
-          startedAt: "2026-10-26T15:11:00.000Z",
-          omittedBefore: 2
+          steps: ["Bash", "Edit"],
+          startedAt: "2026-10-26T15:11:00.000Z"
         },
         {
           question: "",
           reply: "",
-          steps: [{ name: "ReadFile", input: "a.ts", output: "export {}" }],
+          steps: ["ReadFile"],
           startedAt: "2026-10-26T15:12:00.000Z"
         },
         {
@@ -265,8 +260,7 @@ describe("collab session row menu", () => {
     expect(users[0]?.querySelector("em")).toBeNull();
     expect(agents[0]?.textContent).toContain("Claude Code");
     expect(agents[0]?.querySelector("code")?.textContent).toBe("memmy-project");
-    // 折叠区里的步骤也是 li：这里只看回答正文自己的列表项。
-    expect([...agents[0]!.querySelectorAll("li")].filter((item) => !item.closest("details")).map((item) => item.textContent)).toEqual([
+    expect([...agents[0]!.querySelectorAll("li")].map((item) => item.textContent)).toEqual([
       "已带上 memmy-project",
       "见 部署说明"
     ]);
@@ -276,24 +270,10 @@ describe("collab session row menu", () => {
     expect(document.body.textContent).toContain("第 1 轮");
     expect(document.body.textContent).toContain("第 2 轮");
     expect(document.body.textContent).not.toContain("第 3 轮");
-    expect(document.body.textContent).not.toContain("回复");
-
-    // 工具调用收在回答下面的折叠区：标题先说步数，展开后才有工具名、入参与输出。
-    const fold = document.querySelector<HTMLDetailsElement>('[data-collab-reader] details');
-    expect(fold, "回答下面应有一段工具调用").toBeTruthy();
-    expect(fold?.open, "默认收起，不抢正文的位置").toBe(false);
-    // 步数按实际调用次数算：Bash、Edit 两次真调用加上被丢弃的 4 次。
-    expect(fold?.querySelector("summary")?.textContent).toContain("执行了 6 步");
-    expect(fold?.textContent).toContain("Bash");
-    expect(fold?.textContent).toContain("npm test");
-    expect(fold?.textContent).toContain("1 passed");
-    expect(fold?.textContent).toContain("Edit");
-    // 压缩与丢弃都在数据里，界面据此说出来。
-    expect(fold?.textContent).toContain("部分输出已压缩");
-    expect(fold?.textContent).toContain("已略去 4 次工具调用");
-    expect(document.body.textContent).toContain("已略去 2 轮");
-    // 只有工具步骤、没有问题与回答的轮次不单独占一段。
+    expect(document.body.textContent).not.toContain("执行步骤");
+    expect(document.body.textContent).not.toContain("Bash");
     expect(document.body.textContent).not.toContain("ReadFile");
+    expect(document.body.textContent).not.toContain("回复");
   });
 
   it("tells the reader when only the recent turns are kept", async () => {

@@ -7,7 +7,6 @@
  * uploaded. The rules therefore live here, once, and both paths finish a session through {@link finishSession}.</p>
  */
 import type { SourceAdapter } from "@memmy/agent-source-readers/adapters/types";
-import { finalizeTurnSteps } from "../../../../shared/collab-session-digest.js";
 import type { LocalSession, LocalSessionTurn } from "./local-session-reader.js";
 import { directoryName } from "./session-group.js";
 import type { SessionGrouper } from "./session-group.js";
@@ -37,8 +36,6 @@ export function finishSession(
   if (!asked.length) {
     return null;
   }
-  // 工具调用读的时候只攒着，到这里才合并、压缩：一轮算一次，不随消息数重复变慢。
-  for (const turn of builder.turns) finalizeTurnSteps(turn);
   const questions = asked.map((turn) => cleanQuestion(turn.question)).filter((text) => text.length > 0);
   return {
     sourceId: adapter.descriptor.sourceId,
