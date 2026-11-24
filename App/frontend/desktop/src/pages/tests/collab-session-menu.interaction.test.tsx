@@ -256,7 +256,8 @@ describe("collab session row menu", () => {
     const fold = document.querySelector<HTMLDetailsElement>('[data-collab-reader] details');
     expect(fold, "回答下面应有一段工具调用").toBeTruthy();
     expect(fold?.open, "默认收起，不抢正文的位置").toBe(false);
-    expect(fold?.querySelector("summary")?.textContent).toContain("执行了 2 步");
+    // 步数按实际调用次数算：Bash、Edit 两次真调用加上被丢弃的 4 次。
+    expect(fold?.querySelector("summary")?.textContent).toContain("执行了 6 步");
     expect(fold?.textContent).toContain("Bash");
     expect(fold?.textContent).toContain("npm test");
     expect(fold?.textContent).toContain("1 passed");

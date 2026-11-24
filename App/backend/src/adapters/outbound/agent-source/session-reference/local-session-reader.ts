@@ -471,6 +471,9 @@ function appendToolMessage(turn: LocalSessionTurn, message: ConversationMessage)
   collectToolMessage(turn, {
     ...(callId ? { callId } : {}),
     name: toolName(message),
+    // 各来源是否写状态不一样：Claude Code、Codex、Cursor、OpenCode、WorkBuddy 的 result 带 Status，
+    // 其余按输出里的退出码兜底。
+    ...(parsed.status ? { status: parsed.status } : {}),
     input: parsed.input,
     output: parsed.output
   });

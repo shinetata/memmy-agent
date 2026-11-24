@@ -70,4 +70,28 @@ describe("collab session turns", () => {
     expect(detail.turns[0]?.steps).toEqual([{ name: "Read", input: "", output: "", truncated: undefined }]);
     expect(detail.turns[0]?.omittedBefore).toBeUndefined();
   });
+
+  it("keeps the flag that says a call failed and leaves it out where it did not", async () => {
+    // 云端的规则是「只在该调用失败时才带 failed: true」，成功的步骤不带这个字段。
+    // 旧副本一个也没有，读取时按「没失败」处理，界面上就不会凭空多出失败提示。
+    reply({
+      session,
+      turns: [{
+        question: "问",
+        reply: "答",
+        steps: [
+          { name: "Bash", input: "npm test", output: "1 failed", failed: true },
+          { name: "Edit", input: "a.ts", output: "ok" },
+          "Read"
+        ],
+        startedAt: "2026-11-23T14:00:00.000Z"
+      }]
+    });
+    const detail = await createHttpCollabClient(config).readSessionDetail("s-1");
+    const steps = detail.turns[0]?.steps ?? [];
+    expect(steps[0]?.failed).toBe(true);
+    expect(steps[1]?.failed).toBeUndefined();
+    expect(steps[2]?.failed).toBeUndefined();
+    expect(steps[2]?.name).toBe("Read");
+  });
 });

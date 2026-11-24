@@ -149,7 +149,9 @@ const ToolStepSchema = z.object({
   input: z.string().nullish().transform((value) => value ?? ""),
   output: z.string().nullish().transform((value) => value ?? ""),
   /** 入参或输出被压缩过；界面据此提示「部分输出已压缩」。 */
-  truncated: z.boolean().optional()
+  truncated: z.boolean().optional(),
+  /** 这次调用失败了：只在该调用失败时出现且为 true，成功的步骤与旧副本都不带这个字段。 */
+  failed: z.boolean().optional()
 });
 export type CollabToolStep = z.infer<typeof ToolStepSchema>;
 const SessionStepSchema = z.preprocess((value) => {
@@ -161,7 +163,8 @@ const SessionStepSchema = z.preprocess((value) => {
       name: typeof step.name === "string" ? step.name : "",
       input: typeof step.input === "string" ? step.input : "",
       output: typeof step.output === "string" ? step.output : "",
-      truncated: typeof step.truncated === "boolean" ? step.truncated : undefined
+      truncated: typeof step.truncated === "boolean" ? step.truncated : undefined,
+      failed: typeof step.failed === "boolean" ? step.failed : undefined
     };
   }
   return value;

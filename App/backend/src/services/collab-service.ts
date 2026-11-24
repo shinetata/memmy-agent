@@ -11,7 +11,10 @@ import { dirname, join, posix, win32 } from "node:path";
 import { loadCollabAgents, submittedConversationId } from "./collab-added-agents.js";
 import { locateRecordFile, readRecordFile, type RecordBinding } from "./collab-record-file.js";
 import {
+  capSteps,
+  fitSessionBudget,
   mergeToolMessages,
+  omittedCount,
   shapeToolSteps,
   type RenderedToolMessage,
   type ToolStep
@@ -89,12 +92,15 @@ const SESSIONS_PER_MEMBER = 20;
 const MAX_UPLOAD_TURNS = 300;
 const MAX_QUESTION_CHARS = 4_000;
 const MAX_REPLY_CHARS = 8_000;
-const MAX_STEPS_PER_TURN = 40;
-/** 「执行步骤」一行里每步留多少字：够看出当时干了什么，又不把整段输出搬进概览。 */
-const STEP_INPUT_CHARS = 60;
-const STEP_OUTPUT_CHARS = 80;
-/** 「执行步骤」一行里最多列多少步，其余只报数量。 */
-const MAX_STEP_PARTS = 8;
+/**
+ * 多轮视图里每步一行：工具名与入参够看出当时干了什么，输出只在失败时摘第一行。
+ * 单轮详情给完整摘要，所以这几个只是骨架的尺度。
+ */
+const SKELETON_INPUT_CHARS = 80;
+const SKELETON_FAILED_OUTPUT_CHARS = 160;
+/** 一轮的骨架超过这么多行时只列开头与结尾，中间失败的照常列出。 */
+const SKELETON_LINES = 60;
+const SKELETON_HEAD_LINES = 30;
 /** 会话标题缺失时的兜底：Agent 写回会话的完成通知不算人问的事，跳过它们取第一条真问题。 */
 const NOTIFICATION_TURN_PREFIXES = ["<timestamp>", "<system_notification>", "<task>"];
 const SESSION_ID_PATTERN = /^[A-Za-z0-9-]{1,36}$/u;
@@ -1260,7 +1266,8 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
     }
     const local = preloaded
       ?? record(await readLocal((reader) => reader.read({ sourceId: session.sourceId, conversationId: session.conversationId })));
-    const turns = list(local.turns).slice(-MAX_UPLOAD_TURNS).map(toUploadTurn);
+    // 映射完整条会话的轮次之后再按字节预算统一降级：一次调用看不到别处的余量。
+    const turns = fitSessionBudget(list(local.turns).slice(-MAX_UPLOAD_TURNS).map(toUploadTurn));
     return putCloudSession(projectId, session.sourceId, session.conversationId, text(local.title), isoOrNull(local.updatedAt), turns);
   }
 
@@ -1302,7 +1309,11 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
     if (!records) {
       throw new CollabError("not_found", "无法读取该 Memmy 任务");
     }
-    return { title: records.title, updatedAt: records.updatedAt, turns: records.turns.slice(-MAX_UPLOAD_TURNS).map(toUploadTurn) };
+    return {
+      title: records.title,
+      updatedAt: records.updatedAt,
+      turns: fitSessionBudget(records.turns.slice(-MAX_UPLOAD_TURNS).map(toUploadTurn))
+    };
   }
 
   async function putCloudSession(
@@ -1778,12 +1789,13 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
       conversationId,
       title,
       updatedAt,
-      turns.map((turn) => toUploadTurn({
+      // 这三条路径只有提问与回复，没有步骤；照样过一遍预算，口径只有一处。
+      fitSessionBudget(turns.map((turn) => toUploadTurn({
         question: turn.question,
         reply: turn.reply,
         steps: [],
         startedAt: turn.at?.trim() || updatedAt
-      }))
+      })))
     );
     const account = requireAccount();
     const key = sessionKey({ sourceId, conversationId });
@@ -1859,12 +1871,12 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
         conversationId,
         title,
         new Date().toISOString(),
-        fileTurns.map((turn) => toUploadTurn({
+        fitSessionBudget(fileTurns.map((turn) => toUploadTurn({
           question: turn.question,
           reply: turn.reply,
           steps: [],
           startedAt: turn.at ?? new Date().toISOString()
-        }))
+        })))
       );
       await exclusive(async () => {
         const stored = await readLinks(projectId, accountId);
@@ -1914,12 +1926,12 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
           conversationId,
           synced.title ?? turns[0]?.question ?? "",
           new Date().toISOString(),
-          turns.map((turn) => toUploadTurn({
+          fitSessionBudget(turns.map((turn) => toUploadTurn({
             question: turn.question,
             reply: turn.reply,
             steps: [],
             startedAt: turn.at ?? new Date().toISOString()
-          }))
+          })))
         );
         synced.updatedAt = new Date().toISOString();
         binding.mtimeMs = info.mtimeMs;
@@ -2784,11 +2796,13 @@ export function renderSessionView(
     if (rest.length > listed.length) lines.push(`（更早的 ${rest.length - listed.length} 轮未列出）`);
     for (const entry of listed) lines.push(`- 第 ${entry.number} 轮：${oneLine(entry.turn.question, OUTLINE_QUESTION_CHARS) || "（无提问）"}`);
   }
+  // 只有一轮时（`ID#N`、`--turns N`）把这一轮每一步的入参与输出都列出来，其余视图只给骨架。
+  const detail = view.turns && view.turns.from === view.turns.to ? view.turns.from : null;
   let previous: number | null = null;
   for (const entry of numbered) {
     if (!shown.has(entry.number)) continue;
     if (previous !== null && entry.number > previous + 1) lines.push("", `……（略去第 ${previous + 1}–${entry.number - 1} 轮）`);
-    lines.push("", ...turnLines(entry, speaker));
+    lines.push("", ...turnLines(entry, speaker, entry.number === detail, session.id));
     previous = entry.number;
   }
   return lines.join("\n");
@@ -2818,7 +2832,7 @@ function selectTurns(numbered: readonly NumberedTurn[], view: SessionView): { sh
     // Punctuation and spacing differ between a screenshot and the record, so only the words are compared.
     const needle = squash(view.find);
     const hits = needle
-      ? numbered.filter((entry) => squash(`${entry.turn.question}\n${entry.turn.reply}`).includes(needle)).map((entry) => entry.number)
+      ? numbered.filter((entry) => squash(turnSearchText(entry.turn)).includes(needle)).map((entry) => entry.number)
       : [];
     const quoted = oneLine(view.find, 30);
     if (!hits.length) {
@@ -2872,12 +2886,18 @@ function numberTurns(session: CollabProjectSession, turns: readonly CollabSessio
   return turns.map((turn, index) => ({ number: offset + index + 1, turn }));
 }
 
-function turnLines({ number, turn }: NumberedTurn, speaker: string): string[] {
+function turnLines({ number, turn }: NumberedTurn, speaker: string, detail: boolean, sessionId: string): string[] {
   const lines = [`### 第 ${number} 轮`];
   if (turn.question) lines.push(`${speaker}：${turn.question}`);
   if (turn.reply) lines.push(`回复：${turn.reply}`);
-  if (turn.steps.length) lines.push(`执行步骤：${summarizeSteps(turn.steps)}`);
+  // 读者分两种：概览里只要骨架，免得一轮的工具把整段会话淹没；单独读那一轮时才把每一步摊开。
+  if (turn.steps.length) lines.push(...(detail ? detailStepLines(turn.steps) : skeletonStepLines(turn.steps, number, sessionId)));
   return lines;
+}
+
+/** `--find` 找的是这句话出自哪一轮，所以步骤的入参与输出也一起比。 */
+function turnSearchText(turn: CollabSessionTurn): string {
+  return [turn.question, turn.reply, ...turn.steps.flatMap((step) => [step.name, step.input, step.output])].join("\n");
 }
 
 function squash(value: string): string {
@@ -3309,7 +3329,9 @@ function toToolStep(raw: unknown): ToolStep | null {
     name: text(step.name),
     input: text(step.input),
     output: text(step.output),
-    ...(step.truncated === true ? { truncated: true } : {})
+    ...(step.truncated === true ? { truncated: true } : {}),
+    // 旧副本里没有这个字段；读回来再传上去时要保留，否则失败的步骤就看不出来了。
+    ...(step.failed === true ? { failed: true } : {})
   };
 }
 
@@ -3318,40 +3340,133 @@ function toUploadTurn(raw: unknown): CollabSessionTurn {
   return {
     question: clip(turn.question, MAX_QUESTION_CHARS),
     reply: clip(turn.reply, MAX_REPLY_CHARS),
-    steps: turn.steps.slice(0, MAX_STEPS_PER_TURN),
+    // 一轮的每一次调用都留一步：截到几十步会让「163 次调用只留 12 步」，读者看不出当时到底做了什么。
+    // 只有记录异常到一千步以上时才留前后两步，中间换成占位步。
+    steps: capSteps(turn.steps),
     startedAt: turn.startedAt
   };
 }
 
+/** 「执行步骤（共 X 步，其中 Y 步失败）：」：X 含被略去的调用数，Y 只算真的失败的调用。 */
+function stepsHeading(steps: readonly ToolStep[]): string {
+  const calls = steps.reduce((sum, step) => sum + (omittedCount(step) || 1), 0);
+  const failed = steps.filter((step) => step.failed).length;
+  return `执行步骤（共 ${calls} 步${failed ? `，其中 ${failed} 步失败` : ""}）：`;
+}
+
 /**
- * 「执行步骤：」那一行：连续的同一个工具合成 `Bash ×3`，其余每步写清入参与输出要点。
- * 旧任务的步骤只有工具名，所以空入参、空输出时只写名字，不凭空补一对括号。
+ * 单独读一轮时：每一步都摊开，序号、工具名、入参、失败标记，输出保留换行并缩进对齐。
+ * 旧任务的步骤只有工具名，那就只写名字，不凭空补一对空括号。
  */
-function summarizeSteps(steps: readonly ToolStep[]): string {
-  const parts: string[] = [];
+function detailStepLines(steps: readonly ToolStep[]): string[] {
+  const lines = [stepsHeading(steps)];
+  let number = 1;
+  for (const step of steps) {
+    const omitted = omittedCount(step);
+    // 整次调用被丢弃时的占位步：后续步骤的序号要跳过它代表的那几次调用。
+    if (!step.name && omitted) {
+      lines.push(`……（略去 ${omitted} 次工具调用）`);
+      number += omitted;
+      continue;
+    }
+    const call = [step.name, step.input].filter(Boolean).join(" ");
+    const marks = `${step.failed ? " ［失败］" : ""}${step.truncated ? "（部分已压缩）" : ""}`;
+    lines.push(`${number}. ${call}${marks}`);
+    for (const line of step.output.split("\n")) {
+      // 输出保留换行，缩进与序号后的正文对齐，读者一眼看出哪几行属于这一次调用。
+      if (line.trim()) lines.push(`    ${line}`);
+    }
+    number += 1;
+  }
+  return lines;
+}
+
+/** 骨架里的一行；count 是这一行代表了几次调用（合并或略去的次数）。 */
+interface SkeletonLine {
+  text: string;
+  step: number;
+  count: number;
+  failed: boolean;
+}
+
+/**
+ * 多轮视图里一轮的骨架：每步一行，连续的同一次调用合成 `×N`，失败的步骤在行尾跟上输出里的第一行。
+ * 一轮超过 60 行时只列前后各 30 行，读者要细节就按提示单独读这一轮。
+ */
+function skeletonStepLines(steps: readonly ToolStep[], turnNumber: number, sessionId: string): string[] {
+  return [
+    stepsHeading(steps),
+    ...fitSkeleton(skeletonLines(steps)),
+    `用 memmy-project session read ${sessionId}#${turnNumber} 查看本轮各步的入参与输出。`
+  ];
+}
+
+function skeletonLines(steps: readonly ToolStep[]): SkeletonLine[] {
+  const lines: SkeletonLine[] = [];
+  let number = 1;
   let index = 0;
   while (index < steps.length) {
     const step = steps[index]!;
-    let count = 1;
-    if (step.name) {
-      while (index + count < steps.length && steps[index + count]!.name === step.name) count += 1;
+    const omitted = omittedCount(step);
+    if (!step.name && omitted) {
+      lines.push({ text: `……（略去 ${omitted} 次工具调用）`, step: number, count: omitted, failed: false });
+      number += omitted;
+      index += 1;
+      continue;
     }
-    parts.push(count > 1 ? `${step.name} ×${count}` : stepText(step));
+    // 工具名和入参都相同的连续调用合成一行：一轮里常把同一条命令跑好几遍。
+    // 失败标记不一致的不合并，否则被并进去的那次失败就看不见了。
+    let count = 1;
+    while (index + count < steps.length) {
+      const next = steps[index + count]!;
+      if (next.name !== step.name || next.input !== step.input || Boolean(next.failed) !== Boolean(step.failed)) break;
+      count += 1;
+    }
+    const call = step.input ? `${step.name}(${oneLine(step.input, SKELETON_INPUT_CHARS)})` : step.name;
+    const head = count > 1 ? `${number}. ${call} ×${count}` : `${number}. ${call}`;
+    const reason = step.failed ? failureReason(step.output, SKELETON_FAILED_OUTPUT_CHARS) : "";
+    // 输出为空时只写「→ 失败」，不拖一个空冒号。
+    const failed = step.failed ? (reason ? ` → 失败：${reason}` : " → 失败") : "";
+    lines.push({ text: `${head}${failed}`, step: number, count, failed: Boolean(step.failed) });
+    number += count;
     index += count;
   }
-  const shown = parts.slice(0, MAX_STEP_PARTS);
-  return [...shown, ...(parts.length > shown.length ? [`……等 ${parts.length} 步`] : [])].join("；");
+  return lines;
 }
 
-/** 一步的一行：`Bash(npm test) -> 3 passed`；被压缩过的步带上标记。 */
-function stepText(step: ToolStep): string {
-  // 整次调用被丢弃时的那一步没有工具名，只有那句说明。
-  if (!step.name) return oneLine(step.output, STEP_OUTPUT_CHARS);
-  const input = oneLine(step.input, STEP_INPUT_CHARS);
-  const output = oneLine(step.output, STEP_OUTPUT_CHARS);
-  const call = input ? `${step.name}(${input})` : step.name;
-  const text = output ? `${call} -> ${output}` : call;
-  return step.truncated ? `${text}（部分输出已压缩）` : text;
+/** 中间的失败步骤照常列出：出错的地方比顺利跑过的地方更值得看。 */
+function fitSkeleton(lines: readonly SkeletonLine[]): string[] {
+  if (lines.length <= SKELETON_LINES) return lines.map((line) => line.text);
+  const head = lines.slice(0, SKELETON_HEAD_LINES);
+  const tail = lines.slice(-SKELETON_HEAD_LINES);
+  const middle = lines.slice(SKELETON_HEAD_LINES, lines.length - SKELETON_HEAD_LINES);
+  const first = middle[0]!;
+  const last = middle[middle.length - 1]!;
+  const counted = middle.reduce((sum, line) => sum + line.count, 0);
+  const failed = middle.filter((line) => line.failed);
+  return [
+    ...head.map((line) => line.text),
+    `……（第 ${first.step}–${last.step + last.count - 1} 步共 ${counted} 步未列出${failed.length ? "，其中失败的照常列出" : ""}）`,
+    ...failed.map((line) => line.text),
+    ...tail.map((line) => line.text)
+  ];
+}
+
+/** 报错的那一行：Stderr、Error、Traceback 一类开头。 */
+const FAILURE_LINE = /^(?:stderr\s*:|error\b|fatal\b|exception\b|traceback\b|panic\b)/iu;
+/** 退出码与信号：没有报错正文时，它就是失败的原因（例如超时被 SIGTERM 杀掉）。 */
+const EXIT_LINE = /(?:exit code|exited with code|signal)\s*:?\s*\S/iu;
+/** 不是原因的行：命令回显（WorkBuddy 把命令写在输出第一行）与空的 Stdout / Stderr。 */
+const NOT_A_REASON = /^(?:command|cwd|directory)\s*:|^\w+\s*:\s*\(empty\)\s*$/iu;
+
+/**
+ * 失败步骤在骨架里跟的那一句原因：先找报错行，再找退出码，都没有就取第一行正文。
+ * 只取第一行会拿到命令回显，读者看不出到底哪里错了。
+ */
+function failureReason(value: string, maxChars: number): string {
+  const lines = value.split("\n").map((item) => item.trim()).filter((item) => item && !NOT_A_REASON.test(item));
+  const line = lines.find((item) => FAILURE_LINE.test(item)) ?? lines.find((item) => EXIT_LINE.test(item)) ?? lines[0];
+  return line ? oneLine(line, maxChars) : "";
 }
 
 /**

@@ -155,11 +155,19 @@ describe("collab service", () => {
     expect(reference.text).toContain("共 18 轮，云端保留最近 1 轮。");
     // The cloud says it dropped earlier turns to fit the session cap, so the reader says what it is showing.
     expect(reference.text).toContain("该任务仅保留近期记录");
-    // 旧任务里 steps 只有工具名：读到时补成空入参的对象，概览行只写名字，连续的同一个工具合成一处。
-    expect(reference.text).toContain("### 第 18 轮\n用户C：重复分享时接口返回 500，怎么处理？\n回复：改为返回 HTTP 409。\n执行步骤：Edit；Bash ×2");
+    // 旧任务里 steps 只有工具名：读到时补成空入参的对象，概览里只写名字，连续的同一个工具合成一处。
+    expect(reference.text).toContain([
+      "### 第 18 轮",
+      "用户C：重复分享时接口返回 500，怎么处理？",
+      "回复：改为返回 HTTP 409。",
+      "执行步骤（共 3 步）：",
+      "1. Edit",
+      "2. Bash ×2",
+      `用 memmy-project session read ${cloudSession.id}#18 查看本轮各步的入参与输出。`
+    ].join("\n"));
   });
 
-  it("prints each step with its arguments and output, and says when one was compressed", async () => {
+  it("prints a skeleton of each turn's steps, and marks the failed ones", async () => {
     const { fetcher } = fakeFetch({
       [`GET /api/collab/sessions/${cloudSession.id}`]: () => ({
         code: 0,
@@ -183,7 +191,95 @@ describe("collab service", () => {
     });
     const reference = await service(fetcher).readSession(cloudSession.id);
 
-    expect(reference.text).toContain("执行步骤：Bash({\"command\":\"npm test\"}) -> 3 passed；Read({\"path\":\"/a\"}) -> 文件内容（部分输出已压缩）；[... 4 tool calls omitted ...]");
+    // 多轮视图只给骨架：工具名与入参够认出做了什么，失败的那一步才带上输出第一行。
+    expect(reference.text).toContain([
+      "执行步骤（共 6 步）：",
+      '1. Bash({"command":"npm test"})',
+      '2. Read({"path":"/a"})',
+      "……（略去 4 次工具调用）",
+      `用 memmy-project session read ${cloudSession.id}#18 查看本轮各步的入参与输出。`
+    ].join("\n"));
+  });
+
+  it("gives the line that explains a failure, not the echoed command", async () => {
+    const { fetcher } = fakeFetch({
+      [`GET /api/collab/sessions/${cloudSession.id}`]: () => ({
+        code: 0,
+        data: {
+          session: {
+            ...cloudSession,
+            turns: [{
+              question: "找一下接口",
+              reply: "没找到。",
+              steps: [
+                // WorkBuddy 把命令回显写在第一行，Stdout / Stderr 为空时原因只在退出码与信号上。
+                {
+                  name: "Bash",
+                  input: "grep -rn kb .",
+                  output: "Command: cd /repo && grep -rn kb .\nStdout: (empty)\nStderr: (empty)\nExit Code: 137\nSignal: SIGTERM",
+                  failed: true
+                },
+                // 有报错正文时取报错行。
+                {
+                  name: "exec",
+                  input: "npm ci",
+                  output: "Command: npm ci\nStdout: added 3 packages\nStderr: npm ERR! code E404\nExit Code: 1",
+                  failed: true
+                }
+              ],
+              startedAt: ""
+            }]
+          }
+        }
+      })
+    });
+    const reference = await service(fetcher).readSession(cloudSession.id);
+
+    expect(reference.text).toContain("1. Bash(grep -rn kb .) → 失败：Exit Code: 137");
+    expect(reference.text).toContain("2. exec(npm ci) → 失败：Stderr: npm ERR! code E404");
+    expect(reference.text).not.toContain("失败：Command:");
+  });
+
+  it("lists every step with its input and output when one turn is read", async () => {
+    const { fetcher } = fakeFetch({
+      [`GET /api/collab/sessions/${cloudSession.id}`]: () => ({
+        code: 0,
+        data: {
+          session: {
+            ...cloudSession,
+            turns: [{
+              question: "跑一下测试",
+              reply: "第一条失败，重跑后通过。",
+              steps: [
+                { name: "Bash", input: '{"command":"npm test"}', output: "FAILED src/a.test.ts\nExit code: 1", failed: true },
+                { name: "Bash", input: '{"command":"npm test -- --retry"}', output: "3 passed\n2 skipped" },
+                // 整次调用被云端丢弃时的那一步：后续步骤的序号要跳过它代表的四次调用。
+                { name: "", input: "", output: "[... 4 tool calls omitted ...]" },
+                { name: "Read", input: '{"path":"/repo/package.json"}', output: "{\n  \"name\": \"memmy\"\n}" }
+              ],
+              startedAt: ""
+            }]
+          }
+        }
+      })
+    });
+
+    const reference = await service(fetcher).readSession(cloudSession.id, { turns: { from: 18, to: 18 } });
+
+    expect(reference.text).toContain([
+      "执行步骤（共 7 步，其中 1 步失败）：",
+      '1. Bash {"command":"npm test"} ［失败］',
+      "    FAILED src/a.test.ts",
+      "    Exit code: 1",
+      '2. Bash {"command":"npm test -- --retry"}',
+      "    3 passed",
+      "    2 skipped",
+      "……（略去 4 次工具调用）",
+      '7. Read {"path":"/repo/package.json"}',
+      '    {',
+      '      "name": "memmy"',
+      "    }"
+    ].join("\n"));
   });
 
   it("prints the turns a read view asks for without saving the whole record", async () => {
@@ -225,6 +321,29 @@ describe("collab service", () => {
     expect((await read({ all: true })).match(/### 第/gu)).toHaveLength(12);
     // No view is the overview, which is what the @ menu sends.
     expect((await svc.readSession(cloudSession.id)).text).toContain("以下为最近 5 轮全文");
+  });
+
+  it("finds a sentence that only appears in a step's output", async () => {
+    // 报错原文常常只出现在某一步的输出里：只在提问与回复里找，就永远对不上截图的那句话。
+    const turns = [
+      { question: "部署失败了", reply: "看一下日志。", steps: [], startedAt: "" },
+      {
+        question: "什么原因",
+        reply: "证书过期。",
+        steps: [{ name: "Bash", input: "npm run deploy", output: "error TS2688: 找不到 cert.pem 的类型定义文件" }],
+        startedAt: ""
+      },
+      { question: "怎么修", reply: "重新签发。", steps: [], startedAt: "" }
+    ];
+    const { fetcher } = fakeFetch({
+      [`GET /api/collab/sessions/${cloudSession.id}`]: () => ({ code: 0, data: { session: { ...cloudSession, turns } } })
+    });
+
+    const found = await service(fetcher).readSession(cloudSession.id, { find: "找不到 cert.pem 的类型定义文件" });
+
+    // 云端只留了最近三轮，所以这三轮按任务自己的编号是第 16–18 轮。
+    expect(found.text).toContain("出现在第 17 轮");
+    expect(found.text).toContain("### 第 17 轮");
   });
 
   it("lists a session shared to several projects once, merging its turn hits, keeps sinceMs, and trims to the limit", async () => {
@@ -814,13 +933,106 @@ describe("collab service", () => {
     const upload = calls.find((call) => call.method === "PUT")!.body as {
       sessions: Array<{ turns: Array<{ steps: Array<{ name: string; input: string; output: string; truncated?: boolean }> }> }>;
     };
-    // 一次调用只算一步：入参与输出按 tool_call_id 合成，超长输出留头尾并标出被压过。
+    // 一次调用只算一步：入参与输出按 tool_call_id 合成；入参只留要点，超长输出留头尾并标出被压过。
     expect(upload.sessions[0]!.turns[0]!.steps).toEqual([{
       name: "Bash",
-      input: "{\"command\":\"npm test\"}",
-      output: `${"A".repeat(250)} …[omitted]… ${"B".repeat(250)}`,
+      input: "npm test",
+      output: `${"A".repeat(500)} …[omitted]… ${"B".repeat(500)}`,
       truncated: true
     }]);
+  });
+
+  it("keeps every call of a long turn when uploading, instead of cutting it at forty steps", async () => {
+    const root = mkdtempSync(join(tmpdir(), "memmy-collab-home-"));
+    roots.push(root);
+    const agentSessions = join(root, "workspace", "sessions");
+    mkdirSync(agentSessions, { recursive: true });
+    // 一条 60 次调用的任务：以前按 40 步截断，读者看不出后面二十次到底做了什么。
+    const calls = Array.from({ length: 60 }, (_, index) => index);
+    writeMemmyTask(agentSessions, "task-1", "local-9", "长任务", [
+      { role: "user", content: "把十个模块都过一遍", timestamp: "2026-10-22T03:00:00.000Z" },
+      ...calls.flatMap((index) => [
+        {
+          role: "assistant",
+          content: "",
+          timestamp: `2026-10-22T03:00:${String(index % 60).padStart(2, "0")}.000Z`,
+          tool_calls: [{ id: `call-${index}`, type: "function", function: { name: "Bash", arguments: `{"command":"npm test -- --run unit-${index}"}` } }]
+        },
+        { role: "tool", tool_call_id: `call-${index}`, name: "Bash", content: `unit-${index} 通过`, timestamp: "2026-10-22T03:01:00.000Z" }
+      ]),
+      { role: "assistant", content: "全部通过。", timestamp: "2026-10-22T03:02:00.000Z" }
+    ]);
+    const { fetcher, calls: requests } = fakeFetch({
+      "GET /api/collab/projects": () => ({ code: 0, data: { projects: [{ id: "p-9", name: "Memmy 开发", role: "owner", memberCount: 1, sessionCount: 0, createdAt: null }] } }),
+      "PUT /api/collab/projects/p-9/sessions": (call) => {
+        const upload = (call.body as { sessions: Array<{ sourceSessionId: string }> }).sessions[0]!;
+        return { code: 0, data: { sessions: [{ id: `id-${upload.sourceSessionId}` }] } };
+      }
+    });
+    const svc = service(fetcher, { projectsDir: join(root, "projects"), agentSessionsDir: agentSessions });
+    await svc.bindLocalProject("p-9", "local-9");
+    requests.length = 0;
+    await svc.setTaskSharing("p-9", "task-1", true);
+    await waitForUploads(svc, "p-9");
+
+    const upload = requests.find((call) => call.method === "PUT")!.body as {
+      sessions: Array<{ turns: Array<{ steps: Array<{ name: string; input: string; output: string }> }> }>;
+    };
+    const steps = upload.sessions[0]!.turns[0]!.steps;
+    expect(steps).toHaveLength(60);
+    expect(steps[59]).toEqual({ name: "Bash", input: "npm test -- --run unit-59", output: "unit-59 通过" });
+  });
+
+  it("degrades the earliest turns only when the whole session is over the byte budget", async () => {
+    const root = mkdtempSync(join(tmpdir(), "memmy-collab-home-"));
+    roots.push(root);
+    const agentSessions = join(root, "workspace", "sessions");
+    mkdirSync(agentSessions, { recursive: true });
+    const output = `${"A".repeat(1_500)}${"B".repeat(1_500)}`;
+    const command = "x".repeat(300);
+    const longTurn = (label: string): Array<Record<string, unknown>> =>
+      Array.from({ length: 800 }, (_, index) => index).flatMap((index) => [
+        {
+          role: "assistant",
+          content: "",
+          timestamp: "2026-10-22T03:00:00.000Z",
+          tool_calls: [{ id: `${label}-${index}`, type: "function", function: { name: "Bash", arguments: `{"command":"${command}"}` } }]
+        },
+        { role: "tool", tool_call_id: `${label}-${index}`, name: "Bash", content: output, timestamp: "2026-10-22T03:00:01.000Z" }
+      ]);
+    writeMemmyTask(agentSessions, "task-1", "local-9", "超长任务", [
+      { role: "user", content: "第一轮", timestamp: "2026-10-22T03:00:00.000Z" },
+      ...longTurn("a"),
+      { role: "assistant", content: "第一轮完成。", timestamp: "2026-10-22T03:01:00.000Z" },
+      { role: "user", content: "第二轮", timestamp: "2026-10-22T03:02:00.000Z" },
+      ...longTurn("b"),
+      { role: "assistant", content: "第二轮完成。", timestamp: "2026-10-22T03:03:00.000Z" }
+    ]);
+    const { fetcher, calls: requests } = fakeFetch({
+      "GET /api/collab/projects": () => ({ code: 0, data: { projects: [{ id: "p-9", name: "Memmy 开发", role: "owner", memberCount: 1, sessionCount: 0, createdAt: null }] } }),
+      "PUT /api/collab/projects/p-9/sessions": (call) => {
+        const upload = (call.body as { sessions: Array<{ sourceSessionId: string }> }).sessions[0]!;
+        return { code: 0, data: { sessions: [{ id: `id-${upload.sourceSessionId}` }] } };
+      }
+    });
+    const svc = service(fetcher, { projectsDir: join(root, "projects"), agentSessionsDir: agentSessions });
+    await svc.bindLocalProject("p-9", "local-9");
+    requests.length = 0;
+    await svc.setTaskSharing("p-9", "task-1", true);
+    await waitForUploads(svc, "p-9");
+
+    const body = requests.find((call) => call.method === "PUT")!.body as {
+      sessions: Array<{ turns: Array<{ question: string; reply: string; steps: Array<{ output: string; truncated?: boolean }> }> }>;
+    };
+    const turns = body.sessions[0]!.turns;
+    // 整条副本回到预算之内，提问与回复一个字都没少。
+    expect(Buffer.byteLength(JSON.stringify(body), "utf8")).toBeLessThan(1_800_000);
+    expect(turns.map((turn) => turn.question)).toEqual(["第一轮", "第二轮"]);
+    expect(turns.map((turn) => turn.reply)).toEqual(["第一轮完成。", "第二轮完成。"]);
+    // 最早那一轮先被压到一百字一份，后面那一轮还停在生成时的五百字。
+    expect(turns[0]!.steps[0]!.output).toBe(`${"A".repeat(100)} …[omitted]… ${"B".repeat(100)}`);
+    expect(turns[0]!.steps[0]!.truncated).toBe(true);
+    expect(turns[1]!.steps[0]!.output).toBe(`${"A".repeat(500)} …[omitted]… ${"B".repeat(500)}`);
   });
 
   it("titles a task without a generated title by its first question, not by the latest one", async () => {
