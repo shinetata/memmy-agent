@@ -1,4 +1,4 @@
-import { ArrowUpRight, BookOpen, ChevronDown, ChevronRight, Folder, Layers, LifeBuoy, Loader2, ListChecks, MoreHorizontal, PanelRight, PanelRightClose, Plug, Plus, RefreshCw, Search, Settings, Trash2, UserPlus, Users, X } from "lucide-react";
+import { ArrowUpRight, BookOpen, ChevronDown, ChevronRight, Folder, Layers, LifeBuoy, Link2, Loader2, ListChecks, MoreHorizontal, PanelRight, PanelRightClose, Plug, Plus, RefreshCw, Search, Settings, Trash2, UserPlus, Users, X } from "lucide-react";
 import { memo, useCallback, useDeferredValue, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import {
@@ -1293,6 +1293,20 @@ const CollabBoard = memo(function CollabBoard(props: {
   }
 
   /**
+   * 复制一条任务的链接。复制整句而不只是网址：收到的人一眼看出是哪条任务，Agent 也能把整句直接交给
+   * `memmy-project session read`（命令自己会从 `/api/s/` 后面解析出任务 ID）。链接在浏览器打开是给人看的
+   * 说明页，正文不在网页里。
+   */
+  async function copyLink(session: CollabProjectSession) {
+    try {
+      await navigator.clipboard.writeText(session.shareText);
+      showToast(t("collab.session.linkCopied"));
+    } catch {
+      showToast(t("collab.session.copyFailed"));
+    }
+  }
+
+  /**
    * 继续一条协作任务：把它的全文作为引用带到项目下的新任务里。
    * 引用文本取不到（网络或权限）时退回任务链接，Agent 仍可凭链接自行读取，不阻断新建。
    */
@@ -1384,6 +1398,10 @@ const CollabBoard = memo(function CollabBoard(props: {
               {/* 任一行都可用，包括他人的只读任务：只读限制作用于正文，不影响在自己这边开新任务 */}
               <button type="button" role="menuitem" className={styles.menuItem} onClick={() => { setOpenMenuId(null); void continueSession(session); }}>
                 {t("collab.session.continue")}
+              </button>
+              {/* 任一行都能复制：链接交给别的 Agent 读，只读限制不影响本机复制 */}
+              <button type="button" role="menuitem" className={styles.menuItem} onClick={() => { setOpenMenuId(null); void copyLink(session); }}>
+                {t("collab.session.copyLink")}
               </button>
               {session.mine ? (
                 <>
@@ -2098,6 +2116,7 @@ const CollabBoard = memo(function CollabBoard(props: {
         loading={readingId !== null}
         resolveAgentName={resolveAgentName}
         onClose={() => setReading(null)}
+        onCopy={(session) => void copyLink(session)}
         onContinue={(session) => {
           if (demoActive) {
             dispatchDemoGuide({
@@ -3146,6 +3165,8 @@ function SessionReaderPanel(props: {
   /** 已关联的 Agent 用本机的名字；内置 Agent 用产品名。 */
   resolveAgentName: (sourceId: string) => string;
   onClose: () => void;
+  /** 复制这条任务的链接，交给别的 Agent 读全文。 */
+  onCopy: (session: CollabProjectSession) => void;
   /** 在项目下开一条新任务接着这条做：与任务行「…」菜单里的「继续任务」同一个动作。 */
   onContinue: (session: CollabProjectSession) => void;
 }) {
@@ -3229,6 +3250,15 @@ function SessionReaderPanel(props: {
               onClick={() => props.onContinue(data.session)}
             >
               {t("collab.session.continue")}
+            </button>
+            <button
+              type="button"
+              className={styles.readerAction}
+              aria-label={t("collab.session.copyLink")}
+              title={t("collab.session.copyLink")}
+              onClick={() => props.onCopy(data.session)}
+            >
+              <Link2 size={15} aria-hidden="true" />
             </button>
             <button
               type="button"
