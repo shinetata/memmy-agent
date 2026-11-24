@@ -26,7 +26,9 @@ import { useTranslation } from "../../i18n/use-translation.js";
 import {
   blockerRects,
   cardPlacement,
+  clickHintBounds,
   clickHintPlacement,
+  unionRect,
   DEMO_GUIDE_CARD_WIDTH,
   DEMO_GUIDE_CARD_WIDTH_WIDE,
   DEMO_GUIDE_HOLE_PADDING,
@@ -634,14 +636,18 @@ export function CollabDemoGuideOverlay(props: {
   // 第二圈描边只在「控件比亮区小、它在亮区里」时才画：亮区与控件是同一个锚点的阶段（体验第一步、建项目前的六屏）
   // 外面已经有一圈，再套一圈就成了两条并排的圆角线。
   const innerRing = stroke && target.stroke !== target.region ? stroke : null;
+  // 箭尖钉在控件某条边的中点上、整个箭头在控件外朝里指（见 `clickHintPlacement`），本身不接点击。
+  const clickHint = demoGuideClickTarget(target) && stroke ? clickHintPlacement(stroke, viewport) : null;
+  // 说明卡同时避让「唯一可点的控件」与「指着它的箭头」，否则箭头指着卡片就不像话了。
+  const avoidRect = stroke && clickHint ? unionRect(stroke, clickHintBounds(clickHint)) : stroke;
   // 规格里每个阶段的 `prefer` 只调整「先试哪一边」：那一边放得下、又不压住唯一可点的控件才用。
   const preferred = target.prefer
     ? preferredPlacement(hole, viewport, cardWidth, cardHeight, target.prefer)
     : null;
   const preferredFits = preferred !== null
-    && (!stroke || !rectsIntersect(
+    && (!avoidRect || !rectsIntersect(
       { left: preferred.left, top: preferred.top, width: cardWidth, height: cardHeight },
-      padRect(stroke, PREFER_AVOID_MARGIN)
+      padRect(avoidRect, PREFER_AVOID_MARGIN)
     ));
   const placement = preferredFits && preferred
     ? preferred
@@ -650,7 +656,7 @@ export function CollabDemoGuideOverlay(props: {
       reserveBottom: target.cardBottomReserve ?? 0,
       cardWidth,
       // 唯一可点的那个控件绝不能被说明卡盖住（授权弹窗里就是「允许」）。
-      avoid: stroke
+      avoid: avoidRect
     });
   // 亮区的圆角按阶段配，没配时用默认那一档。
   const holeRadius = target.radius ?? DEMO_GUIDE_HOLE_RADIUS;
@@ -658,9 +664,17 @@ export function CollabDemoGuideOverlay(props: {
   // 描边那一圈的意思是「这里可以点」：出场那屏（`clean`）、没有可点控件的阶段（看板导览、加入、等结果），
   // 以及建项目之前那几屏「只介绍、不让人动手」（`blockStroke`）都只压暗。
   const quietRing = target.clean === true || target.stroke === null || target.blockStroke === true;
-  // 这一屏要人点的那个控件旁边再摆一颗呼吸圆点：只画一圈线时，人常常不知道那圈线是「点这里」的意思。
-  // 圆点的圆心贴在控件某条边的中点上、整个在控件外面（见 `clickHintPlacement`），本身不接点击。
-  const clickHint = demoGuideClickTarget(target) && stroke ? clickHintPlacement(stroke, viewport) : null;
+  // 这一屏要人点的那个控件旁边再摆一个呼吸箭头：只画一圈线时，人常常不知道那圈线是「点这里」的意思。
+  // 箭头朝控件指：尖钉在某条边的中点上（SVG 中心），靠整体旋转朝四个方向。
+  const hintTurn = !clickHint
+    ? "0deg"
+    : clickHint.side === "bottom"
+      ? "180deg"
+      : clickHint.side === "right"
+        ? "90deg"
+        : clickHint.side === "left"
+          ? "270deg"
+          : "0deg";
   // 亮区几乎占满窗口时（对话区就是这种情况）卡片只能压在它上面：这里再夹一次，保证不出窗口。
   const cardTop = Math.max(8, Math.min(placement.top, viewport.height - cardHeight - 8));
   const cardLeft = Math.max(8, Math.min(placement.left, viewport.width - cardWidth - 8));
@@ -737,14 +751,14 @@ export function CollabDemoGuideOverlay(props: {
           key={`click-${state.phase}`}
           className={styles.clickHint}
           data-demo-click-hint={clickHint.side}
-          style={{ left: clickHint.left, top: clickHint.top }}
+          style={{ left: clickHint.left, top: clickHint.top, ["--hint-turn" as string]: hintTurn }}
           aria-hidden="true"
         >
           <span className={styles.clickRipple} />
           <span className={`${styles.clickRipple} ${styles.clickRippleLate}`} />
-          <span className={styles.clickDisc}>
-            <span className={styles.clickPip} />
-          </span>
+          <svg className={styles.clickArrow} viewBox="0 0 48 48" focusable="false" aria-hidden="true">
+            <path d="M24 24 L13 15 H19 V6 H29 V15 H35 Z" />
+          </svg>
         </span>
       ) : null}
       <div

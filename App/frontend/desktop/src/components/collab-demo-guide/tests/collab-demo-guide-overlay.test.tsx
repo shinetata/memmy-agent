@@ -585,34 +585,35 @@ describe("demo guide overlay tracking", () => {
     expect(document.body.textContent).toContain("正在本机执行，完成后结果会回传给小饭团");
   });
 
-  it("marks the one control a screen asks people to click with a breathing dot", async () => {
-    // 第一步亮的是一整条任务行：圆点放在行里正中，而不是趴在外沿上压住时间戳。
+  it("marks the one control a screen asks people to click with a breathing arrow", async () => {
+    // 第一步亮的是一整条任务行：箭尖钉在它的下沿中点，朝上指着它，而不是跑到行外压住时间戳。
     anchor("board-task-row", () => rect({ left: 90, top: 300, width: 1000, height: 100 }));
     await mount("task-row");
 
     const hint = document.querySelector<HTMLElement>("[data-demo-click-hint]");
     expect(hint).toBeTruthy();
-    // 描边是任务行外扩 3px（87,297,1006,106）：圆心 = 行内正中。
-    expect(hint!.dataset.demoClickHint).toBe("inside");
+    // 描边是任务行外扩 3px（87,297,1006,106）：尖 = 横向中点、下沿。
+    expect(hint!.dataset.demoClickHint).toBe("bottom");
     expect(Number.parseFloat(hint!.style.left)).toBe(590);
-    expect(Number.parseFloat(hint!.style.top)).toBe(350);
-    // 一颗绿色圆点（里面一个白心）+ 两圈波纹：呼吸由 CSS 负责，圆心与波纹圆心是同一个定位点。
+    expect(Number.parseFloat(hint!.style.top)).toBe(403);
+    // 朝控件指：从下往上指就是整体转 180°。
+    expect(hint!.style.getPropertyValue("--hint-turn")).toBe("180deg");
+    // 一枚箭头 + 两圈波纹：呼吸由 CSS 负责，波纹圆心就是箭尖这一个定位点。
     expect(hint!.querySelectorAll("." + styles.clickRipple)).toHaveLength(2);
-    expect(hint!.querySelector("." + styles.clickDisc)).toBeTruthy();
-    expect(hint!.querySelector("." + styles.clickPip)).toBeTruthy();
-    // 圆点不接点击：压在控件边上也不能把它挡掉。
+    expect(hint!.querySelector("." + styles.clickArrow)).toBeTruthy();
+    // 箭头不接点击：压在控件边沿也不能把它挡掉。
     expect(hint!.getAttribute("aria-hidden")).toBe("true");
 
-    // 小控件（只读面板头部的「继续任务」）：圆心落在按钮下沿中点，整个圆点在按钮外面，不盖住字。
+    // 小控件（只读面板头部的「继续任务」）：尖落在按钮下沿中点，整个箭头在按钮外面，不盖住字。
     await mount("reader");
     const small = document.querySelector<HTMLElement>("[data-demo-click-hint]");
     expect(small).toBeTruthy();
-    // 描边是「继续任务」外扩 3px（1127,93,80,34）：圆心 = 横向中点、下沿 +11+1。
+    // 描边是「继续任务」外扩 3px（1127,93,80,34）：尖 = 横向中点、下沿。
     expect(small!.dataset.demoClickHint).toBe("bottom");
     expect(Number.parseFloat(small!.style.left)).toBe(1167);
-    expect(Number.parseFloat(small!.style.top)).toBe(139);
+    expect(Number.parseFloat(small!.style.top)).toBe(127);
 
-    // 只介绍或只等结果的屏一个圆点都不摆：看板导览每一站、等一位成员回话。
+    // 只介绍或只等结果的屏一个箭头都不摆：看板导览每一站、等一位成员回话。
     anchor("board-list", () => rect({ left: 90, top: 132, width: 1000, height: 560 }));
     await mount("tour-board");
     expect(document.querySelector("[data-demo-click-hint]")).toBeNull();
