@@ -134,9 +134,14 @@
   white-space: nowrap;
 }
 
-/* The project's sharing state, said once in the header: members, or only this computer. */
+.boardScopeGroup {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+}
+
 .boardScope {
-  flex-shrink: 0;
   padding: 2px 9px;
   border-radius: 999px;
   background: rgba(47, 125, 105, 0.08);
@@ -144,6 +149,205 @@
   font-size: 12px;
   font-weight: 600;
   white-space: nowrap;
+}
+
+.guideTrigger {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--collab-muted);
+  cursor: pointer;
+}
+
+.guideTrigger:hover,
+.guideTrigger:focus-visible,
+.guideTrigger[aria-expanded="true"] {
+  background: var(--collab-surface);
+  color: var(--collab-ink);
+}
+
+.guideTrigger:focus-visible {
+  outline: 2px solid var(--collab-accent-deep);
+  outline-offset: 1px;
+}
+
+:global(.modal).guideModal {
+  --guide-padding-inline: clamp(18px, 4vw, 28px);
+  width: min(680px, calc(100vw - 48px));
+  max-height: calc(100dvh - 96px);
+  overflow-y: auto;
+}
+
+:global(.modal-backdrop).guideBackdrop {
+  background: color-mix(in srgb, var(--color-text-ink) 18%, transparent);
+  backdrop-filter: none;
+}
+
+.guideModal :global(.modal-header) {
+  padding: 22px var(--guide-padding-inline) 16px;
+}
+
+.guideModal :global(.modal-header) h2 {
+  font-weight: 700;
+}
+
+.guideModal :global(.modal-body) {
+  gap: 18px;
+  padding: 0 var(--guide-padding-inline) 26px;
+}
+
+.guideTabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+:global(.button).guideTab {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+:global(.button).guideTab[aria-pressed="true"] {
+  background: var(--color-nav-active-bg);
+  color: var(--color-text-ink);
+}
+
+:global(.button).guideTab:hover {
+  transform: none;
+}
+
+:global(.button).guideTab:focus-visible {
+  outline: 2px solid var(--color-outline-ebony);
+  outline-offset: 2px;
+}
+
+.guidePanel,
+.guideMemmy {
+  display: grid;
+  align-content: start;
+}
+
+.guidePanel {
+  gap: 24px;
+  min-height: 248px;
+}
+
+.guideMemmy {
+  gap: 18px;
+}
+
+.guideFeature {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
+  align-items: center;
+  gap: 20px;
+  min-height: 112px;
+  padding: 18px;
+  border-radius: var(--radius-card);
+  background: var(--color-canvas-oat);
+}
+
+.guidePanel h3,
+.guidePanel h4,
+.guidePanel p {
+  margin: 0;
+}
+
+.guidePanel h3 {
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.guideFeature h3 {
+  margin-bottom: 6px;
+}
+
+.guidePanel p {
+  color: color-mix(in srgb, var(--color-text-ink) 72%, transparent);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.guideExample {
+  padding: 6px;
+  border: 1px solid var(--color-border-stone);
+  border-radius: var(--radius-menu);
+  background: var(--color-background-paper);
+  box-shadow: var(--shadow-soft);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.guideExampleHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 3px 5px;
+  font-weight: 600;
+}
+
+.guideExampleMore {
+  flex: none;
+  border-radius: var(--radius-btn);
+  background: var(--color-nav-active-bg);
+}
+
+.guideExampleMenu {
+  display: grid;
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px solid color-mix(in srgb, var(--color-border-stone) 60%, transparent);
+}
+
+.guideExampleMenu > span,
+.guideExampleTarget {
+  padding: 3px 6px;
+  border-radius: var(--radius-btn);
+}
+
+.guideExampleTarget {
+  background: var(--color-nav-active-bg);
+  color: var(--color-text-ink);
+  font-weight: 600;
+}
+
+.guideRelated {
+  display: flex;
+  gap: 24px;
+  padding: 0 4px;
+}
+
+.guideRelated > div {
+  flex: 1;
+  min-width: 0;
+}
+
+.guideRelated h4 {
+  margin-bottom: 5px;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.guideExternal {
+  display: grid;
+  gap: 12px;
+}
+
+.guideExternal > h3 {
+  padding-inline: 4px;
+}
+
+@media (max-width: 530px) {
+  .guideFeature { grid-template-columns: minmax(0, 1fr); gap: 14px; }
+  .guideRelated { flex-direction: column; gap: 14px; }
+  .guidePanel { min-height: 0; }
 }
 
 .toolbar {

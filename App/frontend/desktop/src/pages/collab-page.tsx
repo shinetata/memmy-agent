@@ -86,6 +86,7 @@ import { CollabAssistConversation } from "./collab-assist-conversation.js";
 import { READER_PANEL_WIDTH_STORAGE_KEY, useReaderPanelWidth } from "./collab-reader-resize.js";
 import { CollabAssistProjectSettings } from "./collab-assist-settings.js";
 import { InfoHint } from "./collab-info-hint.js";
+import { CollabProjectGuide } from "./collab-project-guide.js";
 import { assistAgentName, assistIsOpen, assistStatusKey } from "./collab-assist-view.js";
 import { withoutDemoGuideHint } from "../lib/demo-guide-hint.js";
 
@@ -1662,11 +1663,14 @@ const CollabBoard = memo(function CollabBoard(props: {
                 ) : null}
                 <header className={styles.boardHeader}>
                   <h1 className={styles.boardName}>{project.name}</h1>
-                  {/* 新手引导「成员已加入」那一屏的亮区：套住成员数量，告诉人小饭团已经在里面。 */}
-                  <span className={styles.boardScope} data-demo-guide="board-members">
-                    {shared
-                      ? t("collab.members", { count: String(shared.memberCount) })
-                      : t("collab.board.localOnly")}
+                  <span className={styles.boardScopeGroup}>
+                    {/* 新手引导「成员已加入」的亮区只套住成员数量。 */}
+                    <span className={styles.boardScope} data-demo-guide="board-members">
+                      {shared
+                        ? t("collab.members", { count: String(shared.memberCount) })
+                        : t("collab.board.localOnly")}
+                    </span>
+                    {shared ? <CollabProjectGuide key={shared.id} projectName={shared.name} /> : null}
                   </span>
                   <span className={styles.grow} />
                   {/* 头部操作整块给足热区：按钮彼此只隔 4px，鼠标从「邀请」移到设置不会落到空处 */}

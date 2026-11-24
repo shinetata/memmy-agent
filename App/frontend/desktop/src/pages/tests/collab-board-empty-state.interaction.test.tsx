@@ -85,7 +85,7 @@ async function flush(): Promise<void> {
   }
 }
 
-describe("the empty tasks state", () => {
+describe("the project board with no tasks", () => {
   let container: HTMLDivElement;
   let root: Root;
 
@@ -129,6 +129,7 @@ describe("the empty tasks state", () => {
     expect(text).toContain("新建任务");
     // 本机项目没有可关联的东西：不讲「关联任务」。
     expect(text).not.toContain("关联任务");
+    expect(container.querySelector('button[aria-label="协作项目使用指南"]')).toBeNull();
   });
 
   it("offers both a new task and linking sessions on a shared project", async () => {
@@ -141,6 +142,86 @@ describe("the empty tasks state", () => {
     expect(text).toContain("新建任务");
     expect(text).toContain("或");
     expect(text).toContain("关联任务");
+  });
+
+  it("opens the shared project guide only on click and restores focus when closed", async () => {
+    localProjects = [localProject];
+    mocks.listProjects.mockResolvedValue({ projects: [sharedProject] });
+    await render("zh-CN");
+
+    const badge = container.querySelector('[data-demo-guide="board-members"]');
+    const trigger = container.querySelector<HTMLButtonElement>('button[aria-label="协作项目使用指南"]')!;
+    expect(badge?.textContent).toBe("2 位成员");
+    expect(badge?.nextElementSibling).toBe(trigger);
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+
+    act(() => trigger.dispatchEvent(new MouseEvent("mouseover", { bubbles: true })));
+    const tooltip = document.querySelector('#app-tooltip-singleton[aria-hidden="false"]');
+    expect(tooltip?.textContent).toBe("查看使用指南");
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+
+    act(() => trigger.click());
+    const guide = document.querySelector<HTMLElement>('[role="dialog"]')!;
+    expect(trigger.getAttribute("aria-expanded")).toBe("true");
+    expect(tooltip?.getAttribute("aria-hidden")).toBe("true");
+    const selected = guide.querySelector('button[aria-pressed="true"]');
+    expect(document.activeElement).toBe(selected);
+    expect(selected?.textContent).toBe("查找与接续");
+    const contexts = [...guide.querySelectorAll("section:has(h3)")];
+    expect(guide.textContent).not.toContain("在 Memmy 中");
+    expect(contexts[0]?.querySelector("h3")?.textContent).toBe("复制任务链接");
+    expect(contexts[0]?.textContent).toContain("用 @ 引用任务");
+    expect(contexts[1]?.querySelector("h3")?.textContent).toBe("在已接入的 Agent 中");
+    expect(contexts[1]?.textContent).toContain("按内容搜索会话");
+    expect(contexts[1]?.textContent).toContain(`搜一下 Memmy 的『${sharedProject.name}』项目中关于【关键词】的内容`);
+    expect(contexts[1]?.textContent).toContain("通过链接读取任务");
+    expect(contexts[1]?.textContent).toContain("把链接粘贴到对话里");
+
+    act(() => guide.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+    expect(document.activeElement).toBe(trigger);
+    expect(tooltip?.getAttribute("aria-hidden")).toBe("true");
+  });
+
+  it("switches between guide topics in English and separates setup from agent usage", async () => {
+    localProjects = [localProject];
+    mocks.listProjects.mockResolvedValue({ projects: [sharedProject] });
+    await render("en-US");
+
+    const trigger = container.querySelector<HTMLButtonElement>('button[aria-label="Shared project guide"]')!;
+    act(() => trigger.click());
+    const guide = document.querySelector('[role="dialog"]')!;
+    expect(guide.querySelector("h2")?.textContent).toBe("Shared project guide");
+    expect(guide.textContent).toContain("Copy a task link");
+    expect(guide.textContent).toContain("Search conversations by content");
+    expect(guide.textContent).toContain(`Search the Memmy project ‘${sharedProject.name}’ for content about [topic]`);
+
+    function selectTopic(name: string) {
+      const tab = [...guide.querySelectorAll<HTMLButtonElement>("button[aria-pressed]")]
+        .find((button) => button.textContent === name)!;
+      act(() => tab.click());
+      expect(tab.getAttribute("aria-pressed")).toBe("true");
+      expect(guide.querySelectorAll('button[aria-pressed="true"]')).toHaveLength(1);
+    }
+
+    selectTopic("Share & invite");
+    expect(guide.textContent).toContain("Invite members");
+    expect(guide.textContent).not.toContain("Copy a task link");
+    expect(guide.textContent).not.toContain("In a connected agent");
+
+    selectTopic("Access & setup");
+    const contexts = [...guide.querySelectorAll("section:has(h3)")];
+    expect(contexts[0]?.textContent).toContain("Give other agents access");
+    expect(contexts[1]?.textContent).toContain("In a connected agent");
+    expect(contexts[1]?.textContent).toContain(`Add this task to ‘${sharedProject.name}’`);
+
+    selectTopic("Teammate help");
+    expect(guide.textContent).toContain("Review assist history");
+
+    act(() => guide.querySelector<HTMLButtonElement>('button[aria-label="Close"]')!.click());
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
   });
 
   it("starts the new task when the words are clicked", async () => {
