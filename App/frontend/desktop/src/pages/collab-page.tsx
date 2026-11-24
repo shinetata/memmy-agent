@@ -1673,26 +1673,10 @@ const CollabBoard = memo(function CollabBoard(props: {
                     {shared ? <CollabProjectGuide key={shared.id} projectName={shared.name} /> : null}
                   </span>
                   <span className={styles.grow} />
-                  {/* 头部操作整块给足热区：按钮彼此只隔 4px，鼠标从「邀请」移到设置不会落到空处 */}
+                  {/* 头部操作整块给足热区：按钮彼此只隔 4px，鼠标从设置移到「邀请」不会落到空处 */}
                   {/* 上半截落在 46px 窗口拖拽条里，必须挂拖拽排除（见 window-drag-region.tsx），否则那半块点不到 */}
+                  {/* 齿轮靠内、「邀请」在最右：图标按钮聚在一起，带文字的主入口收边 */}
                   <span className={styles.boardActions} data-window-drag-exclusion="collab-board-actions">
-                    {shared ? (
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        className={styles.boardAction}
-                        onClick={() => setMembersOpen(true)}
-                        // 有待审核的申请时把数量写进无障碍名称，按钮上也带一个角标。
-                        aria-label={pendingRequests > 0 ? t("collab.members.pending", { count: String(pendingRequests) }) : undefined}
-                        title={pendingRequests > 0 ? t("collab.members.pending", { count: String(pendingRequests) }) : undefined}
-                      >
-                        <UserPlus size={15} aria-hidden="true" />
-                        {t("collab.members.invite")}
-                        {pendingRequests > 0 ? (
-                          <span className={styles.requestBadge} aria-hidden="true">{pendingRequests}</span>
-                        ) : null}
-                      </Button>
-                    ) : null}
                     {/* 收起与展开不同时出现：展开时入口在面板标题栏，收起后才回到这里，与 WorkBuddy 一致 */}
                     {configOpen ? null : (
                       <Button
@@ -1717,6 +1701,23 @@ const CollabBoard = memo(function CollabBoard(props: {
                     >
                       <Settings size={15} aria-hidden="true" />
                     </Button>
+                    {shared ? (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className={styles.boardAction}
+                        onClick={() => setMembersOpen(true)}
+                        // 有待审核的申请时把数量写进无障碍名称，按钮上也带一个角标。
+                        aria-label={pendingRequests > 0 ? t("collab.members.pending", { count: String(pendingRequests) }) : undefined}
+                        title={pendingRequests > 0 ? t("collab.members.pending", { count: String(pendingRequests) }) : undefined}
+                      >
+                        <UserPlus size={15} aria-hidden="true" />
+                        {t("collab.members.invite")}
+                        {pendingRequests > 0 ? (
+                          <span className={styles.requestBadge} aria-hidden="true">{pendingRequests}</span>
+                        ) : null}
+                      </Button>
+                    ) : null}
                   </span>
                 </header>
 

@@ -741,16 +741,16 @@ function Preview() {
               <span className={board.boardScope}>1 位成员</span>
               <span className={board.grow} />
               <span className={board.boardActions}>
-                <Button size="sm" variant="ghost" className={board.boardAction}>
-                  <UserPlus size={15} aria-hidden="true" />
-                  邀请
-                  <span className={board.requestBadge} aria-hidden="true">1</span>
-                </Button>
                 <Button size="sm" variant="ghost" className={`${board.boardAction} ${board.boardIconAction}`} aria-label="展开项目配置" title="展开项目配置">
                   <PanelRight size={15} aria-hidden="true" />
                 </Button>
                 <Button size="sm" variant="ghost" className={`${board.boardAction} ${board.boardIconAction}`} aria-label="项目设置" title="项目设置">
                   <Settings size={15} aria-hidden="true" />
+                </Button>
+                <Button size="sm" variant="ghost" className={board.boardAction}>
+                  <UserPlus size={15} aria-hidden="true" />
+                  邀请
+                  <span className={board.requestBadge} aria-hidden="true">1</span>
                 </Button>
               </span>
             </header>
