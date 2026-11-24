@@ -1609,7 +1609,11 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
     const session = record(raw);
     const id = text(session.id);
     const title = text(session.title);
-    const link = `${linkBase}/s/${id}`;
+    // 链接指向云服务的落地页（{@code <origin>/api/s/<id>}）：`/api` 是后端的 context-path，
+    // 少了它请求落不到页面，看链接的人只能看到 Tomcat 的 404。页面上写的是怎么用
+    // `memmy-project session read` 读这条任务，正文本身不出网页；Agent 不该打开它，
+    // 而是按技能里的规则从 `/api/s/` 后面取 ID 去读。
+    const link = `${linkBase}/api/s/${id}`;
     const mine = session.mine === true;
     return {
       id,

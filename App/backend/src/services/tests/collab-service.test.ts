@@ -100,8 +100,10 @@ const cloudSession = {
 describe("collab service", () => {
   it("accepts a pasted link, the copied share text, or a bare session ID", () => {
     const id = cloudSession.id;
+    expect(parseSessionReference(`https://memmy.example/api/s/${id}`)).toBe(id);
+    // 落地页在 `/api` 下，旧版本复制出去的 `/s/<id>` 也要继续能读
     expect(parseSessionReference(`https://memmy.example/s/${id}`)).toBe(id);
-    expect(parseSessionReference(`【Memmy】重复分享返回 409 https://memmy.example/s/${id} 按这个处理`)).toBe(id);
+    expect(parseSessionReference(`【Memmy】重复分享返回 409 https://memmy.example/api/s/${id} 按这个处理`)).toBe(id);
     expect(parseSessionReference(id)).toBe(id);
     expect(parseSessionReference("https://memmy.example/projects/p-1")).toBeNull();
     expect(parseSessionReference("../../etc/passwd")).toBeNull();
@@ -114,8 +116,8 @@ describe("collab service", () => {
     const result = await service(fetcher).listSessions("p-1");
     expect(calls[0]?.headers.Authorization).toBe("Bearer uuid-b");
     expect(result.sessions[0]).toMatchObject({
-      link: `https://cloud.test.invalid/s/${cloudSession.id}`,
-      shareText: `【Memmy】重复分享返回 409 https://cloud.test.invalid/s/${cloudSession.id}`
+      link: `https://cloud.test.invalid/api/s/${cloudSession.id}`,
+      shareText: `【Memmy】重复分享返回 409 https://cloud.test.invalid/api/s/${cloudSession.id}`
     });
   });
 
@@ -2272,8 +2274,8 @@ function projectSession(
     source: "memmy",
     turnCount: 1,
     lastActiveAt: `2026-10-22T0${index % 10}:00:00.000Z`,
-    link: `https://cloud.test.invalid/s/${id}`,
-    shareText: `【Memmy】会话 ${index} https://cloud.test.invalid/s/${id}`
+    link: `https://cloud.test.invalid/api/s/${id}`,
+    shareText: `【Memmy】会话 ${index} https://cloud.test.invalid/api/s/${id}`
   };
 }
 
