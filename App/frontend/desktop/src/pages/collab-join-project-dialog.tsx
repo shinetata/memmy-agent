@@ -3,13 +3,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createHttpCollabClient, type CollabClient, type CollabInvitePreview, type CollabProject } from "../api/collab-client.js";
 import { useOptionalApiClients } from "../app/providers.js";
 import { Button } from "../components/button.js";
+import { CollabResultToast, type CollabResult } from "../components/collab-result-toast.js";
 import { Modal } from "../components/modal.js";
 import { useTranslation } from "../i18n/use-translation.js";
 import { isComposingKeyboardEvent } from "../utils/keyboard.js";
 import { memberColor } from "./collab-member-color.js";
 import styles from "./collab-page.module.css";
 
-const TOAST_MS = 2_400;
 /** Avatars on the project card; the prototype shows three. */
 const CARD_AVATARS = 3;
 
@@ -61,8 +61,9 @@ export function JoinProjectModal(props: {
   const [nickname, setNickname] = useState("");
   /** 加入被拒的原因（重名、成员已满）就写在字段下：它们都是这次提交里能改的东西。 */
   const [joinError, setJoinError] = useState<string | null>(null);
-  const [toast, setToast] = useState<string | null>(null);
-  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** 加入的结果（已加入 / 已提交申请）：顶部居中一张结果卡，关掉弹窗后仍留在屏幕上。 */
+  const [result, setResult] = useState<CollabResult | null>(null);
+  const dismissResult = useCallback(() => setResult(null), []);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
   /** 预览一条邀请：手动粘贴与深链接带进来走同一条路。 */
@@ -92,16 +93,6 @@ export function JoinProjectModal(props: {
     if (initialReference) void loadInvite(initialReference);
   }, [props.open, initialReference, loadInvite]);
 
-  useEffect(() => () => {
-    if (toastTimer.current) clearTimeout(toastTimer.current);
-  }, []);
-
-  function showToast(message: string) {
-    setToast(message);
-    if (toastTimer.current) clearTimeout(toastTimer.current);
-    toastTimer.current = setTimeout(() => setToast(null), TOAST_MS);
-  }
-
   async function readInvite() {
     if (!reference.trim() || busy) return;
     await loadInvite(reference);
@@ -125,12 +116,16 @@ export function JoinProjectModal(props: {
       if (result.status === "pending") {
         props.onApplied?.({ projectId: result.projectId, projectName: preview.projectName });
         props.onClose();
-        showToast(t("collab.join.applied"));
+        setResult({ tone: "success", title: t("collab.join.applied") });
         return;
       }
       if (result.project) {
         props.onClose();
-        showToast(t("collab.join.joined", { name: result.project.name }));
+        setResult({
+          tone: "success",
+          title: t("collab.join.joined", { name: result.project.name }),
+          body: t("collab.join.joinedBody")
+        });
         props.onJoined(result.project);
       }
     } catch (cause) {
@@ -256,7 +251,7 @@ export function JoinProjectModal(props: {
         )}
         {error ? <p className={styles.error} role="alert">{error}</p> : null}
       </Modal>
-      {toast ? <div className={styles.toast} role="status">{toast}</div> : null}
+      {result ? <CollabResultToast result={result} onDismiss={dismissResult} /> : null}
     </>
   );
 }

@@ -1401,7 +1401,11 @@ describe("AppFrame", () => {
       expect(html).toContain("app-frame-project-row app-frame-project-row--pending");
       expect(html).toContain("灵动栗子的项目");
       expect(html).toContain("申请中");
-      expect(html).toContain("点一下可立即检查");
+      // 提示走应用内的 tooltip，不再用慢且跟主题不搭的原生 title；文案两边统一一句。
+      expect(html).toContain('aria-describedby="app-tooltip-singleton"');
+      expect(html).not.toContain("已提交申请，等待项目成员通过");
+      expect(zhCNMessages["collab.application.pendingHint"]).toBe("已提交申请，等待项目成员通过");
+      expect(zhCNMessages["collab.join.applied"]).toBe("已提交申请，等待项目成员通过");
     } finally {
       resetCollabProjectsStore();
     }

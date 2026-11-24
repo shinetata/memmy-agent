@@ -451,18 +451,22 @@ export function registerCollabRoutes(app: FastifyInstance, options: RegisterColl
   app.post("/api/collab/knowledge/search", guard, withErrorEnvelope(async (request, reply) => {
     const input = SearchKnowledgeSchema.parse(request.body ?? {});
     if (!options.recallProjectKnowledge) throw new CollabError("internal", "知识库服务未就绪");
-    if (!input.project && !input.sourceId) throw new CollabError("invalid_argument", "无法识别当前会话，请用 --project 指定项目名称");
-    const projects = input.sourceId && input.conversationId
-      ? await options.collab.projectsForAgentSession(input.sourceId, input.conversationId)
-      : (await options.collab.listProjects()).projects;
+    // 点名了项目就按成员身份查，与这条会话有没有开共享无关；没点名才靠会话归属找项目。
+    if (!input.project && (!input.sourceId || !input.conversationId)) {
+      throw new CollabError("invalid_argument", "无法识别当前会话，请用 --project 指定项目名称");
+    }
     const matches = input.project
-      ? matchProject(projects, input.project)
-      : projects;
-    if (!matches.length) throw new CollabError("not_found", missingProjectMessage(input.project, Boolean(input.sourceId)));
+      ? matchProject((await options.collab.listProjects()).projects, input.project)
+      : await options.collab.projectsForAgentSession(input.sourceId!, input.conversationId!);
+    if (!matches.length) throw new CollabError("not_found", missingProjectMessage(input.project));
     if (matches.length > 1) {
+      // 两种多义各不相同：点名的撞了名字（只能靠 id 分开），未点名的是会话关联了多个项目。
+      const list = matches.map((project) => `${project.name} #${project.id.slice(0, 8)}`).join("、");
       throw new CollabError(
         "conflict",
-        `当前会话关联多个项目，请用 --project 指定：${matches.map((project) => `${project.name} #${project.id.slice(0, 8)}`).join("、")}`
+        input.project
+          ? `有多个项目叫「${input.project}」，请用 id 指定：${list}`
+          : `当前会话关联多个项目，请用 --project 指定：${list}`
       );
     }
     const project = matches[0]!;
@@ -528,8 +532,7 @@ function matchProject<T extends { id: string; name: string }>(projects: readonly
   return projects.filter((project) => project.id.startsWith(value));
 }
 
-function missingProjectMessage(project: string | undefined, sessionKnown: boolean): string {
-  if (!sessionKnown) return "没有该项目，或你不是项目成员";
-  if (project) return `当前会话未关联项目「${project}」`;
-  return "当前会话没有关联任何协作项目，检索不到项目知识库；可以先用 memmy-project session add 把当前任务加入项目，或用 --project 指定项目。";
+function missingProjectMessage(project: string | undefined): string {
+  if (project) return `没有名为「${project}」的协作项目，或你不是它的成员`;
+  return "当前会话没有关联任何协作项目，检索不到项目知识库；可以用 --project 指定项目，或先用 memmy-project session add 把当前任务加入项目。";
 }

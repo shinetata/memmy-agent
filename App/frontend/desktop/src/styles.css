@@ -9188,6 +9188,108 @@ input[type="checkbox"].check-sky:checked::after {
   background: var(--color-action-sky-hover);
 }
 
+/* 一次性结果卡：顶部居中，正文区的正上方。与右上角通知栈分工——这里只报已经发生的结果。 */
+.collab-result-toast {
+  position: fixed;
+  top: calc(var(--codex-toolbar-height) + 16px);
+  left: 50%;
+  z-index: var(--z-toast);
+  box-sizing: border-box;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: max-content;
+  min-width: 280px;
+  max-width: min(420px, calc(100vw - 48px));
+  padding: 12px 12px 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--color-border-stone) 60%, transparent);
+  border-radius: var(--radius-card);
+  background: var(--color-background-paper);
+  /* 比操作提示重一档：这条要让人在表单之间一眼看到，又不能像弹窗那样压住内容。 */
+  box-shadow: 0 12px 32px rgba(17, 29, 28, 0.12), 0 2px 6px rgba(17, 29, 28, 0.06);
+  transform: translateX(-50%);
+  animation: collab-result-toast-in 220ms ease-out;
+}
+
+body.memmy-platform-windows:not(.memmy-window-fullscreen) .collab-result-toast {
+  top: calc(var(--codex-toolbar-height) * 2 + 16px);
+}
+
+.collab-result-toast--success {
+  --collab-result-accent: var(--color-action-sky);
+}
+
+.collab-result-toast--warning {
+  --collab-result-accent: var(--color-icon-ember);
+}
+
+.collab-result-toast__badge {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  margin-top: 1px;
+  border-radius: 8px;
+  color: var(--collab-result-accent);
+  background: color-mix(in srgb, var(--collab-result-accent) 14%, var(--color-background-paper));
+}
+
+.collab-result-toast__content {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.collab-result-toast__title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 20px;
+  color: var(--color-text-ink);
+}
+
+.collab-result-toast__body {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 18px;
+  color: color-mix(in srgb, var(--color-text-ink) 58%, transparent);
+}
+
+.collab-result-toast__close {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  margin: -2px -2px 0 0;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-btn);
+  background: transparent;
+  color: color-mix(in srgb, var(--color-text-ink) 42%, transparent);
+  cursor: pointer;
+  transition: color 150ms ease, background 150ms ease;
+}
+
+.collab-result-toast__close:hover {
+  background: color-mix(in srgb, var(--color-text-ink) 6%, transparent);
+  color: color-mix(in srgb, var(--color-text-ink) 70%, transparent);
+}
+
+@keyframes collab-result-toast-in {
+  from { opacity: 0; transform: translate(-50%, -4px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .collab-result-toast { animation: none; }
+}
+
 .memmy-notification-stack {
   position: fixed;
   top: var(--codex-toolbar-height);
@@ -12363,6 +12465,12 @@ body.memmy-platform-windows :is(
 .app-frame-project-row:hover .app-frame-project-row__main,
 .app-frame-project-row:focus-within .app-frame-project-row__main {
   padding-right: calc(var(--sidebar-rail-action) + var(--sidebar-row-action-reserve));
+}
+
+/* 待审行没有行内操作按钮：不预留那一段留白，否则「申请中」胶囊会被推着往左跑。 */
+.app-frame-project-row--pending:hover .app-frame-project-row__main,
+.app-frame-project-row--pending:focus-within .app-frame-project-row__main {
+  padding-right: var(--sidebar-rail-pad-x);
 }
 
 .app-frame-project-row__folder-stack {

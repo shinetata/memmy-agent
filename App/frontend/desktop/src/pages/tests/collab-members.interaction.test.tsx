@@ -293,7 +293,7 @@ describe("join project dialog", () => {
     expect(onClose).toHaveBeenCalled();
     expect(onJoined).not.toHaveBeenCalled();
     expect(onApplied).toHaveBeenCalledWith({ projectId: "cloud-1", projectName: "Memmy 开发" });
-    expect(hasText("已提交申请，审核通过后加入项目")).toBe(true);
+    expect(hasText("已提交申请，等待项目成员通过")).toBe(true);
   });
 
   it("joins at once when anyone with the link may, and hands the project over", async () => {

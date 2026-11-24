@@ -779,6 +779,36 @@ export function linkedSessionKeys(links: CollabLinks, candidates: readonly LinkC
   return keys;
 }
 
+/**
+ * 一条 Memmy 任务是否共享给了这个项目：本人手动开启的、或这一版之前已经上传过的，都算。
+ * 删除过的任务不再共享，哪怕它之前上传过。
+ */
+export function isTaskShared(stored: Pick<StoredLinks, "removedSessions" | "sharedSessions" | "synced">, conversationId: string): boolean {
+  if (stored.removedSessions.includes(conversationId)) return false;
+  return stored.sharedSessions.includes(conversationId)
+    || Boolean(stored.synced[sessionKey({ sourceId: MEMMY_SOURCE_ID, conversationId })]);
+}
+
+/**
+ * 一条会话是否属于这个项目。这是 share / add / knowledge 三处共用的唯一判定：
+ * Memmy 自己的任务看共享名单（开了共享就算在项目里，不必再写进会话关联），
+ * 其他 Agent 的会话看单独关联或所在目录的分组。两边各写一套就会出现
+ * 「share 说已在项目中共享、knowledge 却说未关联项目」。
+ */
+export function sessionInProject(
+  links: StoredLinks,
+  identity: { sourceId: string; conversationId: string; groupId?: string | null }
+): boolean {
+  const key = sessionKey(identity);
+  const covered = linkedSessionKeys(links, [{
+    sourceId: identity.sourceId,
+    conversationId: identity.conversationId,
+    groupId: identity.groupId ?? null
+  }]);
+  if (covered.has(key)) return true;
+  return identity.sourceId === MEMMY_SOURCE_ID && isTaskShared(links, identity.conversationId);
+}
+
 /** Extracts a session ID from a pasted Memmy session link, the copied share text, or a bare ID. */
 export function parseSessionReference(reference: string): string | null {
   const trimmed = reference.trim();
@@ -978,16 +1008,6 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
     const run = syncLane.then(task, task);
     syncLane = run.catch(() => undefined);
     return run;
-  }
-
-  /**
-   * 一条 Memmy 任务是否共享给了这个项目：本人手动开启的、或这一版之前已经上传过的，都算。
-   * 删除过的任务不再共享，哪怕它之前上传过。
-   */
-  function isTaskShared(stored: StoredLinks, conversationId: string): boolean {
-    if (stored.removedSessions.includes(conversationId)) return false;
-    return stored.sharedSessions.includes(conversationId)
-      || Boolean(stored.synced[sessionKey({ sourceId: MEMMY_SOURCE_ID, conversationId })]);
   }
 
   /** 一条任务在项目里的共享状态，给输入框旁的开关读。 */
@@ -2065,7 +2085,7 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
       const session = needsGroup ? await sessionByIdentity(sourceId, conversationId, { needGroup: true }) : null;
       return records.filter(({ links }) => {
         const groupId = session?.group?.id ?? links.synced[key]?.groupId ?? null;
-        return linkedSessionKeys(links, [{ sourceId, conversationId, groupId }]).has(key);
+        return sessionInProject(links, { sourceId, conversationId, groupId });
       }).map(({ project }) => project);
     },
 
@@ -2576,12 +2596,12 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
 
       const account = requireAccount();
       const stored = await readLinks(matched.project.id, account.accountId);
-      const covered = linkedSessionKeys(stored, [{
+      const inProject = sessionInProject(stored, {
         sourceId: session.sourceId,
         conversationId: session.conversationId,
         groupId: session.group?.id ?? null
-      }]);
-      if (covered.has(sessionKey(session))) {
+      });
+      if (inProject) {
         const groupId = session.group?.id ?? "";
         const viaGroup = stored.groups.some((group) =>
           group.sourceId === session.sourceId && group.groupId === groupId && !group.excluded.includes(session.conversationId));

@@ -1,4 +1,4 @@
-/** Collab knowledge search: a linked agent session picks the project, and an ambiguous match is never guessed. */
+/** Collab knowledge search: a named project needs membership, a bare search needs the session's own project. */
 import Fastify, { type FastifyInstance } from "fastify";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CollabService } from "../../../../services/collab-service.js";
@@ -13,21 +13,26 @@ afterEach(async () => {
   app = undefined;
 });
 
-function createApp(projects: unknown[], recall: ReturnType<typeof vi.fn>) {
-  const projectsForAgentSession = vi.fn().mockResolvedValue(projects);
+/**
+ * `linked` 是这条会话关联到的项目，`memberOf` 是本人加入的全部项目：两者分开，
+ * 才能守住「--project 点名时按成员身份放行，不必先 session add」。
+ */
+function createApp(linked: unknown[], recall: ReturnType<typeof vi.fn>, memberOf: unknown[] = linked) {
+  const projectsForAgentSession = vi.fn().mockResolvedValue(linked);
+  const listProjects = vi.fn().mockResolvedValue({ projects: memberOf });
   app = Fastify();
   registerCollabRoutes(app, {
-    collab: { projectsForAgentSession } as unknown as CollabService,
+    collab: { projectsForAgentSession, listProjects } as unknown as CollabService,
     authenticateRuntimeToken: async () => undefined,
     recallProjectKnowledge: recall as unknown as (query: string, projectId: string) => Promise<{ enabled: boolean; evidence: unknown[] }>
   });
-  return projectsForAgentSession;
+  return { projectsForAgentSession, listProjects };
 }
 
 describe("collab knowledge search", () => {
   it("searches the project the session is linked to", async () => {
     const recall = vi.fn().mockResolvedValue({ enabled: true, evidence: [{ title: "需求", content: "模板" }] });
-    const projectsForAgentSession = createApp([ONE], recall);
+    const { projectsForAgentSession } = createApp([ONE], recall);
 
     const response = await app!.inject({
       method: "POST",
@@ -39,6 +44,23 @@ describe("collab knowledge search", () => {
     expect(projectsForAgentSession).toHaveBeenCalledWith("codex", "thread-1");
     expect(recall).toHaveBeenCalledWith("属性记忆模板", "p-1");
     expect(response.json()).toMatchObject({ project: ONE, enabled: true, evidence: [{ title: "需求" }] });
+  });
+
+  // 用户报的就是这一条：任务已经在项目里共享，--project 也点名了，却被「未关联项目」挡住。
+  it("lets a named project through even when the session is not linked to it", async () => {
+    const recall = vi.fn().mockResolvedValue({ enabled: true, evidence: [{ title: "积分方案", content: "规则" }] });
+    const { projectsForAgentSession } = createApp([], recall, [ONE]);
+
+    const response = await app!.inject({
+      method: "POST",
+      url: "/api/collab/knowledge/search",
+      payload: { query: "积分", sourceId: "codex", conversationId: "thread-1", project: "MemOS" }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(recall).toHaveBeenCalledWith("积分", "p-1");
+    // 点名项目时不必再去算会话归属，少一次列表与本地链接读取。
+    expect(projectsForAgentSession).not.toHaveBeenCalled();
   });
 
   it("refuses to guess when the session is linked to several projects", async () => {
@@ -64,7 +86,7 @@ describe("collab knowledge search", () => {
     expect(recall).toHaveBeenCalledWith("属性记忆模板", "p-2");
   });
 
-  it("turns away a project the session is not linked to and an incomplete identity", async () => {
+  it("turns away a project one is not a member of, and an incomplete identity", async () => {
     const recall = vi.fn();
     createApp([ONE], recall);
 
@@ -81,7 +103,7 @@ describe("collab knowledge search", () => {
     const noTarget = await app!.inject({ method: "POST", url: "/api/collab/knowledge/search", payload: { query: "模板" } });
 
     expect(wrong.statusCode).toBe(404);
-    expect(wrong.json()).toMatchObject({ error: { message: "当前会话未关联项目「其他」" } });
+    expect(wrong.json()).toMatchObject({ error: { message: "没有名为「其他」的协作项目，或你不是它的成员" } });
     expect(halfIdentity.statusCode).toBe(400);
     expect(noTarget.statusCode).toBe(400);
     expect(recall).not.toHaveBeenCalled();

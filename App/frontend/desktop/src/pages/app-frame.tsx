@@ -59,6 +59,7 @@ import {
 import { ApiRequestError } from "../api/http.js";
 import { MemmyAgentRequestError } from "../api/memmy-agent-client.js";
 import { ConfirmDialog } from "../components/confirm-dialog.js";
+import { CollabResultToast, type CollabResult } from "../components/collab-result-toast.js";
 import { useOptionalNotificationCenter } from "../components/notification-center.js";
 import { MemoryTokenBudgetBanner } from "../components/memory-token-budget-banner.js";
 import { Tooltip } from "../components/tooltip.js";
@@ -549,7 +550,12 @@ export function AppFrame(props: AppFrameProps) {
   }, [collabClient, collabEnabled, state.account.userId]);
 
   // 审核结果只提示一次：通过就告诉人已经加入，未通过就说清还能再申请。
+  // 用顶部居中的一次性结果卡，而不是右上角通知栈——那里留给需要人处理的事。
   const notifications = useOptionalNotificationCenter();
+  const [collabResults, setCollabResults] = useState<CollabResult[]>([]);
+  const dismissCollabResult = useCallback(() => {
+    setCollabResults((current) => current.slice(1));
+  }, []);
   const collabDecisions = collabSnapshot.decisions;
   const collabProjectIds = collabSnapshot.projects;
   /** 新手引导的状态：收场时要清理引导期间新建的任务，光知道「在不在演示中」不够。 */
@@ -644,27 +650,28 @@ export function AppFrame(props: AppFrameProps) {
   useEffect(() => {
     // 演示一结束这一条会随依赖变化再跑一次：还没提示过的结果不会丢。
     if (demoGuideActive) return;
-    if (!notifications || collabDecisions.length === 0) return;
+    // 保留挂载的首页外壳也看得到同一份决策：只由显示中的那个外壳提示一次。
+    if (props.ownsOverlays === false) return;
+    if (collabDecisions.length === 0) return;
     const seen = readSeenDecisions();
     const announced = freshDecisionAnnouncements(collabDecisions, (collabProjectIds ?? []).map((project) => project.id), seen);
     if (announced.length === 0) return;
     writeSeenDecisions([...seen, ...announced.map(decisionKey)]);
-    for (const decision of announced) {
-      if (decision.status === "approved") {
-        notifications.notify({
-          variant: "success",
-          title: t("collab.application.approved", { name: decision.projectName }),
-          autoDismissMs: 4000
-        });
-      } else {
-        notifications.notify({
-          variant: "warning",
-          title: t("collab.application.rejected", { name: decision.projectName }),
-          body: t("collab.application.rejectedHint")
-        });
-      }
-    }
-  }, [notifications, collabDecisions, collabProjectIds, demoGuideActive, t]);
+    setCollabResults((current) => [
+      ...current,
+      ...announced.map((decision): CollabResult => decision.status === "approved"
+        ? {
+            tone: "success",
+            title: t("collab.application.approved", { name: decision.projectName }),
+            body: t("collab.application.approvedBody")
+          }
+        : {
+            tone: "warning",
+            title: t("collab.application.rejected", { name: decision.projectName }),
+            body: t("collab.application.rejectedHint")
+          })
+    ]);
+  }, [collabDecisions, collabProjectIds, demoGuideActive, props.ownsOverlays, t]);
 
   /**
    * A rename by the owner changes what every member reads. Their local project keeps the name on their own
@@ -2362,6 +2369,10 @@ export function AppFrame(props: AppFrameProps) {
         openTaskPage={() => dispatch(appActions.navigate("/main"))}
         onNotice={showCollabNotice}
       />
+      {/* 审核结果的一次性提示：与加入成功同一张居中结果卡，多条时排着显示。 */}
+      {props.ownsOverlays === false || !collabResults[0] ? null : (
+        <CollabResultToast result={collabResults[0]} onDismiss={dismissCollabResult} />
+      )}
       {/* 应用级弹窗只由显示中的那个外壳渲染：保留挂载的首页外壳会同时看到同一份请求。 */}
       {props.ownsOverlays === false ? null : (
         <>
@@ -3088,22 +3099,23 @@ function SidebarInlineRenameInput(props: {
 function PendingApplicationRow(props: { name: string; onRecheck?: (force?: boolean) => void }) {
   const { t } = useTranslation();
   return (
-    <button
-      type="button"
-      className="app-frame-project-row app-frame-project-row--pending"
-      title={t("collab.application.pendingHint")}
-      onClick={() => props.onRecheck?.(true)}
-      onMouseEnter={() => props.onRecheck?.(false)}
-      onFocus={() => props.onRecheck?.(false)}
-    >
-      <span className="app-frame-project-row__mark" aria-hidden="true">
-        <Folder size={16} />
-      </span>
-      <span className="app-frame-project-row__main app-frame-project-row__main--static">
-        <SidebarMarqueeText text={props.name} className="app-frame-project-title" />
-        <span className="app-frame-project-pending">{t("collab.application.pending")}</span>
-      </span>
-    </button>
+    <Tooltip content={t("collab.application.pendingHint")} variant="description">
+      <button
+        type="button"
+        className="app-frame-project-row app-frame-project-row--pending"
+        onClick={() => props.onRecheck?.(true)}
+        onMouseEnter={() => props.onRecheck?.(false)}
+        onFocus={() => props.onRecheck?.(false)}
+      >
+        <span className="app-frame-project-row__mark" aria-hidden="true">
+          <Folder size={16} />
+        </span>
+        <span className="app-frame-project-row__main app-frame-project-row__main--static">
+          <SidebarMarqueeText text={props.name} className="app-frame-project-title" />
+          <span className="app-frame-project-pending">{t("collab.application.pending")}</span>
+        </span>
+      </button>
+    </Tooltip>
   );
 }
 
