@@ -16,6 +16,7 @@ import {
   demoGuideNextBeforeProjectPhase,
   demoGuideNextTourPhase,
   demoGuideReducer,
+  demoGuideSkipStopsTurn,
   demoGuideStartsExperience,
   demoGuideStepNumberOf,
   demoGuideTourIndex,
@@ -737,5 +738,31 @@ describe("accepting assistance needs no screen of its own", () => {
     expect(waiting.status).toBe("active");
     // 中间没有「去项目设置」那一屏：第三步只有等请求、授权弹窗、执行与结果。
     expect(demoGuideStepNumberOf(waiting.phase)).toBe(3);
+  });
+});
+
+describe("skipping a step", () => {
+  const untouched = { task: false, ask: false, help: false };
+
+  it("stops the running Agent when the skipped screen had one working", () => {
+    // 第一步在等回复、第二步在等写/等发：这三屏被跳过都要停掉那一轮，否则内容会继续写进对话。
+    for (const phase of ["reply-waiting", "ask-compose", "ask-waiting"] as const) {
+      expect(demoGuideSkipStopsTurn(phase, untouched, { ...untouched, task: true }), phase).toBe(true);
+      expect(demoGuideSkipStopsTurn(phase, untouched, { ...untouched, ask: true }), phase).toBe(true);
+    }
+  });
+
+  it("leaves the Agent alone on screens with nothing running", () => {
+    // 只是输入框里预填了一句话（`compose`）、已经办成（`reply-done` / `ask-done`）、
+    // 以及跑在对方电脑上的第三步（`help-running`）都不该停本机这一轮。
+    for (const phase of ["compose", "reply-done", "ask-done", "help-running", "help-dialog", "tour-board"] as const) {
+      expect(demoGuideSkipStopsTurn(phase, untouched, { ...untouched, help: true }), phase).toBe(false);
+    }
+  });
+
+  it("does nothing when no step was skipped", () => {
+    expect(demoGuideSkipStopsTurn("reply-waiting", untouched, untouched)).toBe(false);
+    // 完成一步也抹掉过 skipped 标记，但那不是跳过：标记从有到无同样不该触发停止。
+    expect(demoGuideSkipStopsTurn("reply-waiting", { ...untouched, task: true }, untouched)).toBe(false);
   });
 });

@@ -1144,6 +1144,62 @@ describe("成员协助的宿主", () => {
     expect(getDemoGuideState().error).toBe("这次协助没有执行成功。");
   });
 
+  it("引导离开授权这一站时，授权弹窗立刻收起来，不等下一轮收件箱", async () => {
+    vi.useFakeTimers();
+    try {
+      Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "visible" });
+      // 引导正停在第三步的授权弹窗上。
+      setDemoGuideStateForTest({
+        status: "active",
+        phase: "help-dialog",
+        projectId: "p1",
+        localProjectId: "local-1",
+        memberUserId: REQUESTER.userId,
+        memberName: "孙起",
+        error: null,
+        done: { task: true, ask: true, help: false },
+        skipped: { task: false, ask: false, help: false },
+        askDelivered: false,
+        askTurnEnded: false,
+        prefill: null,
+        endReason: null,
+        cloudEnded: false
+      });
+      const assistInbox = vi.fn().mockResolvedValue({ requests: [inbox] });
+      await act(async () => root.render(
+        <I18nProvider language="zh-CN">
+          <CollabAssistHost collab={client({ assistInbox })} enabled />
+        </I18nProvider>
+      ));
+      expect(document.body.textContent).toContain("孙起请求你的电脑协助");
+
+      // 点了「跳过这一步」：引导整轮收场（第三步跳过就是结束），弹窗必须当场消失。
+      // 以前要等下一轮收件箱轮询（5 秒）才发现请求不在了，人看到的是「点了跳过，窗口还挂着」。
+      await act(async () => setDemoGuideStateForTest({
+        status: "ended",
+        phase: "complete",
+        projectId: "p1",
+        localProjectId: "local-1",
+        memberUserId: REQUESTER.userId,
+        memberName: "孙起",
+        error: null,
+        done: { task: true, ask: true, help: false },
+        skipped: { task: false, ask: false, help: true },
+        askDelivered: false,
+        askTurnEnded: false,
+        prefill: null,
+        endReason: "finished",
+        cloudEnded: false
+      }));
+
+      expect(document.body.textContent).not.toContain("孙起请求你的电脑协助");
+      // 没有等到 5 秒那一拍：收件箱只读过挂载时那一次。
+      expect(assistInbox).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("does not count requests of the project that is open on the board", async () => {
     resetCollabProjectsStore();
     await loadCollabProjects({

@@ -132,6 +132,9 @@ export function CollabAssistHost(props: {
   const prompted = useRef(new Set<string>());
   /** 已经通知过的发起方结果：本机删除失败时也不重复弹。 */
   const announcedOutcomes = useRef(new Set<string>());
+  /** 引导状态的一份镜像：轮询函数不该因为换屏就重开，所以读这里，不把它放进依赖。 */
+  const demoQuietRef = useRef({ active: demoGuideActive, memberUserId: demoMemberUserId });
+  demoQuietRef.current = { active: demoGuideActive, memberUserId: demoMemberUserId };
 
   /** 把人带到这次协助：由 Memmy 执行的进入那条任务，其余打开项目看板并展开详情。 */
   const openAssist = useCallback((item: { projectId: string; threadId: string; conversationId?: string | null }, viaMemmy: boolean) => {
@@ -209,8 +212,11 @@ export function CollabAssistHost(props: {
       if (announced.current.has(item.id)) continue;
       if (!waitingForHer(item)) continue;
       const confirm = item.status === "confirm";
+      // 新手引导正讲到这一步时不再另发一条通知：引导卡片已经把「谁请你做什么」说得更清楚，
+      // 通知只会浮在蒙版上多催一次，跳过之后也要单独收。演示成员以外的请求照常提示。
+      const quiet = demoQuietRef.current.active && item.requester.userId === demoQuietRef.current.memberUserId;
       // 一条不打断她的通知：点击就去授权或确认。
-      const notificationId = notifications?.notify({
+      const notificationId = quiet ? null : notifications?.notify({
         variant: "info",
         title: t("collab.assist.notifyTitle", { name: item.requester.name }),
         body: confirm
@@ -239,23 +245,32 @@ export function CollabAssistHost(props: {
   }, [collab, enabled]);
 
   /**
-   * 引导退回上一屏时的两件事：收掉演示成员的授权弹窗、并把「已经弹过」的记录清掉。
+   * 演示成员那条请求在引导里的开合：该弹的时候弹，离开这一站就立刻收掉。
    *
-   * 退回后请求仍然在收件箱里（不替人拒绝，拒绝是另一个决定）。不收弹窗的话蒙版已经去了别的屏，
-   * 弹窗还堵在那里；不清记录的话，人重新开启接收、重新走到这一屏时弹窗再也不会出来。
+   * - 「等请求」这一站（含重试与退回）：把「已经弹过」的记录清掉，人重新走到授权这一屏时弹窗还会出来。
+   * - 其余时刻——换了屏、点了「跳过这一步」、退出引导、云端结束——弹窗与那条通知立即收起。
+   *   不收的话要等下一轮收件箱轮询（5 秒）才消失，人看到的是「点了跳过，窗口还挂着」。
+   *
+   * 请求本身不替人拒绝或撤回：拒绝是另一个决定，撤回由引导在「上一步」里做。
    */
   useEffect(() => {
-    if (!demoGuideActive || !demoMemberUserId) return;
-    if (demoGuide.phase === "help-waiting") {
+    if (!demoMemberUserId) return;
+    if (demoGuideActive && demoGuide.phase === "help-waiting") {
       for (const item of inbox) {
         if (item.requester.userId === demoMemberUserId) prompted.current.delete(item.id);
       }
       return;
     }
-    if (demoGuide.phase !== "help-dialog") {
-      setDialogRequest((current) => (current && current.requester.userId === demoMemberUserId ? null : current));
+    if (demoGuideActive && demoGuide.phase === "help-dialog") return;
+    setDialogRequest((current) => (current && current.requester.userId === demoMemberUserId ? null : current));
+    for (const item of inbox) {
+      if (item.requester.userId !== demoMemberUserId) continue;
+      const notificationId = announced.current.get(item.id);
+      if (notificationId) notifications?.dismiss(notificationId);
+      // 记成「已提示过」而不是删掉：演示收场后的一两秒里那条请求还在收件箱，删了会再弹一次。
+      announced.current.set(item.id, null);
     }
-  }, [demoGuideActive, demoGuide.phase, demoMemberUserId, inbox]);
+  }, [demoGuideActive, demoGuide.phase, demoMemberUserId, inbox, notifications]);
 
   // 新手引导开启「接收协助请求」之后要立刻看到请求：把这次立即刷新交给引导调用，不等下一轮轮询。
   useEffect(() => {

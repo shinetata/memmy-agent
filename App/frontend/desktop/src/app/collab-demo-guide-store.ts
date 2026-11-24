@@ -715,6 +715,30 @@ function finishOrSkip(state: DemoGuideState, done: { help: boolean; allSkipped?:
 }
 
 /**
+ * 「跳过这一步」跳掉的那一屏背后，有没有一轮 Agent 在干活。
+ *
+ * 三屏算有：`reply-waiting`（等第一步的回复）、`ask-compose` / `ask-waiting`（等第二步把请求写出来、发出去）。
+ * 其余屏要么还没有 Agent 在跑（`compose` 只是输入框里预填一句话），要么已经办成（`reply-done` / `ask-done`），
+ * 要么跑在对方电脑上（`help-running`）。这一屏被跳过就要把那一轮停掉，否则内容会继续写进对话、
+ * 请求会继续发出去——人看到的是「我点了跳过，它还在干」。
+ *
+ * 按 `skipped` 的翻转判断而不是「哪一屏跳到哪一屏」：跳过的落点各不相同（第一步落到 `ask-compose`、
+ * 第二步落到 `help-waiting`、第三步直接收场），而翻转只有一个来源。
+ */
+const DEMO_GUIDE_RUNNING_PHASES: DemoGuidePhase[] = ["reply-waiting", "ask-compose", "ask-waiting"];
+
+export function demoGuideSkipStopsTurn(
+  previous: DemoGuidePhase,
+  before: DemoGuideState["skipped"],
+  after: DemoGuideState["skipped"]
+): boolean {
+  const skippedSomething = (after.task && !before.task)
+    || (after.ask && !before.ask)
+    || (after.help && !before.help);
+  return skippedSomething && DEMO_GUIDE_RUNNING_PHASES.includes(previous);
+}
+
+/**
  * 预填文案由界面按当前语言给出（`{name}` 是演示成员的昵称），这里只负责换一个 nonce：
  * 同一个 nonce 不重复填，用户改过的内容不会被再覆盖一次。
  */
