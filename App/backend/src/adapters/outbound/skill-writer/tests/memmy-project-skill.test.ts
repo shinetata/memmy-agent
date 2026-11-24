@@ -44,8 +44,8 @@ describe("memmy-project skill", () => {
     expect(skill).toContain("问代码现在是什么样，以代码为准");
   });
 
-  it("describes the three kinds of work, including the indirect ways people ask for a member's computer", () => {
-    expect(description).toContain("处理三类事");
+  it("describes the four kinds of work, including the indirect ways people ask for a member's computer", () => {
+    expect(description).toContain("处理四类事");
     expect(description).toContain("我这复现不了，请体验者那边查一下日志和版本");
     expect(description).toContain("需要的信息只在别人的电脑上时，用第三类");
     // 描述是一行 YAML 标量：冒号后跟空格会被读成另一个键。
@@ -57,6 +57,18 @@ describe("memmy-project skill", () => {
     const card = skill.slice(skill.indexOf("```bash"), skill.indexOf("```", skill.indexOf("```bash") + 3));
     expect(card).toContain("memmy-project assist ask");
     expect(card).toContain("每次最多 90 秒");
+  });
+
+  it("has the agent show the whole new text and wait before it rewrites the project's background and rules", () => {
+    // 背景与规范对所有成员的任务生效：Agent 自己拟一版就写进去，比写错一条规则的影响面大得多。
+    expect(skill).toContain("memmy-project instructions show");
+    expect(skill).toContain("memmy-project instructions set --project");
+    expect(skill).toContain("## 修改背景与规范");
+    expect(skill).toContain("先把新全文原样给用户看，等他确认，再写");
+    expect(skill).toContain("只有项目所有者能改");
+    expect(skill).toContain("只在用户明确要求时改");
+    expect(skill.indexOf("## 修改背景与规范")).toBeLessThan(skill.indexOf("## 先判断要不要查"));
+    expect(description).toContain("四、修改项目的背景与规范");
   });
 
   it("tells an external agent to wait in 90-second rounds without resending", () => {

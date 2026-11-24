@@ -429,6 +429,117 @@ describe("memmy-project", () => {
   });
 });
 
+describe("memmy-project instructions", () => {
+  /** 一个可写的全文文件：Agent 先把内容写进去再用 --file 交给命令。 */
+  function contentFile(text: string): string {
+    const root = mkdtempSync(join(tmpdir(), "memmy-instructions-"));
+    roots.push(root);
+    const path = join(root, "instructions.md");
+    writeFileSync(path, text, "utf8");
+    return path;
+  }
+
+  function listing(project: Record<string, unknown>) {
+    return (async (input: string | URL, init?: RequestInit) => {
+      const path = new URL(String(input)).pathname;
+      if (path === "/api/collab/projects") return new Response(JSON.stringify({ projects: [project] }));
+      if (path === "/api/collab/projects/p1" && init?.method === "PATCH") {
+        const body = JSON.parse(String(init.body));
+        return new Response(JSON.stringify({ project: { ...project, instructions: body.instructions } }));
+      }
+      return new Response(JSON.stringify({ error: { message: "Route not found" } }), { status: 404 });
+    }) as typeof fetch;
+  }
+
+  it("shows the whole text and the role the person has in the project", async () => {
+    const deps = { runtimeConfigPath: runtimeFile({ baseUrl: "http://127.0.0.1:62315", localToken: "t" }) };
+    const owner = listing({ id: "p1", name: "MemOS", role: "owner", instructions: "接口一律先改文档。" });
+    expect(await run(["instructions", "show", "--project", "MemOS"], { ...deps, fetch: owner }))
+      .toBe("项目「MemOS」的背景与规范（你是所有者）：\n\n接口一律先改文档。");
+
+    const empty = listing({ id: "p1", name: "MemOS", role: "member", instructions: "" });
+    expect(await run(["instructions", "show", "--project", "MemOS"], { ...deps, fetch: empty }))
+      .toBe("项目「MemOS」还没有设定背景与规范（你是成员）。");
+  });
+
+  it("writes the whole text for the owner and says when it takes effect", async () => {
+    const sent: Array<{ path: string; method?: string; body: unknown }> = [];
+    const fetcher = (async (input: string | URL, init?: RequestInit) => {
+      const path = new URL(String(input)).pathname;
+      sent.push({ path, method: init?.method, body: init?.body ? JSON.parse(String(init.body)) : undefined });
+      if (path === "/api/collab/projects") {
+        return new Response(JSON.stringify({ projects: [{ id: "p1", name: "MemOS", role: "owner", instructions: "旧的规范。" }] }));
+      }
+      const body = JSON.parse(String(init?.body));
+      return new Response(JSON.stringify({ project: { id: "p1", name: "MemOS", role: "owner", instructions: body.instructions } }));
+    }) as typeof fetch;
+    const deps = { fetch: fetcher, runtimeConfigPath: runtimeFile({ baseUrl: "http://127.0.0.1:62315", localToken: "t" }) };
+
+    const output = await run(["instructions", "set", "--project", "MemOS", "--file", contentFile("旧的规范。\n新增：提交信息只用英文。\n")], deps);
+
+    expect(output).toContain("已写入项目「MemOS」的背景与规范（18 字）");
+    expect(output).toContain("这个项目里的任务从下一轮开始按新内容执行");
+    expect(sent.at(-1)).toEqual({ path: "/api/collab/projects/p1", method: "PATCH", body: { instructions: "旧的规范。\n新增：提交信息只用英文。" } });
+  });
+
+  it("refuses anyone but the owner, and explains who can change it", async () => {
+    for (const [role, label] of [["member", "成员"], ["admin", "管理员"]] as const) {
+      const fetcher = listing({ id: "p1", name: "MemOS", role, instructions: "旧的规范。" });
+      const deps = { fetch: fetcher, runtimeConfigPath: runtimeFile({ baseUrl: "http://127.0.0.1:62315", localToken: "t" }) };
+      await expect(run(["instructions", "set", "--project", "MemOS", "--file", contentFile("新的规范。")], deps))
+        .rejects.toThrow(new RegExp(`只有项目所有者能修改背景与规范；你在项目「MemOS」里是${label}`, "u"));
+    }
+  });
+
+  it("does not write the same text again, and never guesses the content from the command line", async () => {
+    const paths: string[] = [];
+    const fetcher = (async (input: string | URL, init?: RequestInit) => {
+      paths.push(`${init?.method ?? "GET"} ${new URL(String(input)).pathname}`);
+      return new Response(JSON.stringify({ projects: [{ id: "p1", name: "MemOS", role: "owner", instructions: "旧的规范。" }] }));
+    }) as typeof fetch;
+    const deps = { fetch: fetcher, runtimeConfigPath: runtimeFile({ baseUrl: "http://127.0.0.1:62315", localToken: "t" }) };
+
+    await expect(run(["instructions", "set", "--project", "MemOS", "--file", contentFile("旧的规范。")], deps))
+      .resolves.toBe("项目「MemOS」的背景与规范没有变化，没有写入。");
+    expect(paths).toEqual(["GET /api/collab/projects"]);
+
+    // 正文不接在命令行上：说得清的都写进 --file 的文件。
+    await expect(run(["instructions", "set", "--project", "MemOS"], deps)).rejects.toThrow(/需要 --file/u);
+    await expect(run(["instructions", "set", "--project", "MemOS", "--file", join(tmpdir(), "不存在-instructions.md")], deps))
+      .rejects.toThrow(/找不到内容文件/u);
+  });
+
+  it("clears the text when the user asks for it, and stops at the cloud limit instead of trimming it itself", async () => {
+    const clears = (async (input: string | URL, init?: RequestInit) => {
+      const path = new URL(String(input)).pathname;
+      if (path === "/api/collab/projects") {
+        return new Response(JSON.stringify({ projects: [{ id: "p1", name: "MemOS", role: "owner", instructions: "旧的规范。" }] }));
+      }
+      const body = JSON.parse(String(init?.body));
+      return new Response(JSON.stringify({ project: { id: "p1", name: "MemOS", role: "owner", instructions: body.instructions } }));
+    }) as typeof fetch;
+    const deps = { fetch: clears, runtimeConfigPath: runtimeFile({ baseUrl: "http://127.0.0.1:62315", localToken: "t" }) };
+    await expect(run(["instructions", "set", "--project", "MemOS", "--file", contentFile("\n")], deps))
+      .resolves.toContain("已清空项目「MemOS」的背景与规范。");
+
+    const fetcher = listing({ id: "p1", name: "MemOS", role: "owner", instructions: "旧的规范。" });
+    const limit = { fetch: fetcher, runtimeConfigPath: runtimeFile({ baseUrl: "http://127.0.0.1:62315", localToken: "t" }) };
+    await expect(run(["instructions", "set", "--project", "MemOS", "--file", contentFile("规".repeat(10_001))], limit))
+      .rejects.toThrow(/不超过 10000 字，这一版有 10001 字/u);
+  });
+
+  it("asks for one project when the name is not enough", async () => {
+    const two = (async () => new Response(JSON.stringify({ projects: [
+      { id: "p1", name: "MemOS", role: "owner", instructions: "" },
+      { id: "p2", name: "MemOS", role: "owner", instructions: "" }
+    ] }))) as typeof fetch;
+    const deps = { fetch: two, runtimeConfigPath: runtimeFile({ baseUrl: "http://127.0.0.1:62315", localToken: "t" }) };
+    await expect(run(["instructions", "show", "--project", "MemOS"], deps)).rejects.toThrow(/有 2 个同名项目/u);
+    await expect(run(["instructions", "show", "--project", "设计评审"], deps)).rejects.toThrow(/没有项目「设计评审」/u);
+    await expect(run(["instructions", "show"], deps)).rejects.toThrow(/需要 --project/u);
+  });
+});
+
 describe("memmy-project assist", () => {
   function requestFile(): string {
     const root = mkdtempSync(join(tmpdir(), "memmy-assist-request-"));

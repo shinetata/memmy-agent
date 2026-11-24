@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 /**
  * `memmy-project`: lets an agent check which shared Memmy projects the person is in, find and read their sessions,
- * and add the current local task to one project. The desktop app holds the account and talks to the cloud, so
- * every command goes through its local API, found via ~/.memmy/runtime.json. Nothing here touches memory.
+ * add the current local task to one project, and — for a project the person owns — rewrite that project's background
+ * and rules. The desktop app holds the account and talks to the cloud, so every command goes through its local API,
+ * found via ~/.memmy/runtime.json. Nothing here touches memory.
  *
  * Only Node built-ins are imported: the desktop build copies this one file next to its launcher.
  */
@@ -43,9 +44,12 @@ const USAGE = [
   "  memmy-project assist end --project <project name> [--member <name>]",
   "  memmy-project agent connect --name <agent name> --skill-dir <directory>",
   "  memmy-project agent remove --name <agent name>",
+  "  memmy-project instructions show --project <project name>",
+  "  memmy-project instructions set --project <project name> --file <instructions file>",
   "  memmy-project session share [--project <project name>] [--off]",
   "",
   "assist cancel withdraws your request, or stops it when the other side has already started.",
+  "instructions set replaces the whole text, and only the project owner may write it.",
   "Finds and reads sessions of your shared Memmy projects, shares the current one to a project, and asks a member's",
   "computer to run a task for you. Memmy must be running."
 ].join("\n");
@@ -144,6 +148,9 @@ export async function runMemmyProject(argv: readonly string[], deps: MemmyProjec
   }
   if (resource === "assist") {
     return runAssist(deps, parsed, action, rest);
+  }
+  if (resource === "instructions") {
+    return runInstructions(deps, parsed, action, rest);
   }
   if (resource !== "session") throw new Error(`未知命令：${resource}\n\n${USAGE}`);
   if (action === "read") {
@@ -390,7 +397,7 @@ export function parseTurnCoordinate(reference: string): { reference: string; tur
 
 async function localApi(
   deps: MemmyProjectDeps,
-  method: "GET" | "POST",
+  method: "GET" | "POST" | "PATCH",
   path: string,
   body?: unknown,
   timeoutMs: number = REQUEST_TIMEOUT_MS
@@ -660,6 +667,80 @@ async function runAssist(
     return typeof result.text === "string" ? result.text : "";
   }
   throw new Error(`未知命令：assist ${action ?? ""}\n\n${USAGE}`);
+}
+
+/** 背景与规范的上限，与云端、看板一致。 */
+const INSTRUCTIONS_MAX_CHARS = 10_000;
+
+/**
+ * 项目的背景与规范：成员都能看，只有所有者能改。写入是整篇替换，没有增量修改。
+ *
+ * <p>命令只负责读写与权限校验；「改成什么」由 Agent 与用户商量，命令不替它拟内容。</p>
+ */
+async function runInstructions(
+  deps: MemmyProjectDeps,
+  parsed: ParsedArgs,
+  action: string | undefined,
+  rest: readonly string[]
+): Promise<string> {
+  if (action !== "show" && action !== "set") throw new Error(`未知命令：instructions ${action ?? ""}\n\n${USAGE}`);
+  if (rest.length) throw new Error(`instructions ${action} 用 --project 指定项目名称`);
+  const name = optionString(parsed, "project")?.trim();
+  if (!name) throw new Error(`instructions ${action} 需要 --project，先运行 memmy-project list 看项目名称`);
+  const project = await resolveProject(deps, name);
+  const projectName = text(project.name) || name;
+  const current = text(project.instructions).trim();
+  if (action === "show") {
+    const role = instructionRoleLabel(text(project.role));
+    if (!current) return `项目「${projectName}」还没有设定背景与规范（你是${role}）。`;
+    return `项目「${projectName}」的背景与规范（你是${role}）：\n\n${current}`;
+  }
+  // 背景与规范对这个项目所有成员的任务生效：只由所有者改，管理员与成员一律拒绝，避免 Agent 绕开界面权限。
+  if (text(project.role) !== "owner") {
+    throw new Error(`只有项目所有者能修改背景与规范；你在项目「${projectName}」里是${instructionRoleLabel(text(project.role))}，不能写入。可以请项目所有者修改。`);
+  }
+  const file = optionString(parsed, "file")?.trim();
+  if (!file) throw new Error("instructions set 需要 --file：把要写入的全文先写进文件");
+  const raw = await readFile(file, "utf8").catch(() => null);
+  if (raw === null) throw new Error(`找不到内容文件：${file}`);
+  const instructions = raw.trim();
+  const chars = [...instructions].length;
+  if (chars > INSTRUCTIONS_MAX_CHARS) {
+    throw new Error(`背景与规范不超过 ${INSTRUCTIONS_MAX_CHARS} 字，这一版有 ${chars} 字，先精简再写`);
+  }
+  // 与云端内容一样就不写：用户刚说过的话不必再落一次盘，也免得多出一个「改动」时间。
+  if (instructions === current) return `项目「${projectName}」的背景与规范没有变化，没有写入。`;
+  const id = text(project.id);
+  // 本机接口把云端返回的项目原样带回来：带回来的正是刚写的全文，才说明云端已经收下。
+  const result = await localApi(deps, "PATCH", `/api/collab/projects/${encodeURIComponent(id)}`, { instructions });
+  const echoed = isRecord(result.project) ? text(result.project.instructions).trim() : "";
+  const lines = [instructions.length
+    ? `已写入项目「${projectName}」的背景与规范（${chars} 字）。`
+    : `已清空项目「${projectName}」的背景与规范。`];
+  if (echoed === instructions) {
+    lines.push("这个项目里的任务从下一轮开始按新内容执行；其他成员下次打开或刷新 Memmy 时拿到同一份。");
+  }
+  return lines.join("\n");
+}
+
+/** 角色在用者面前的叫法：命令回给 Agent 的话直接转述给用户。 */
+function instructionRoleLabel(role: string): string {
+  if (role === "owner") return "所有者";
+  if (role === "admin") return "管理员";
+  return "成员";
+}
+
+/**
+ * 按名称或 id 找项目：同名项目不止一个时让用户指定 id，不替人挑一个。
+ * 用 `/api/collab/projects` 的成员视图：它带着本人的角色与当前的背景与规范，读与写都用这一份。
+ */
+async function resolveProject(deps: MemmyProjectDeps, reference: string): Promise<Record<string, unknown>> {
+  const projects = await listProjects(deps);
+  if (projects === null) throw new Error("读不到协作项目列表，请确认 Memmy 已登录并运行。");
+  const matched = projects.filter((item) => text(item.id) === reference || text(item.name) === reference);
+  if (!matched.length) throw new Error(`没有项目「${reference}」，或你不是项目成员`);
+  if (matched.length > 1) throw new Error(`有 ${matched.length} 个同名项目，请改用项目 id 指定`);
+  return matched[0]!;
 }
 
 /** 发起协助请求的 Agent 名称：外部 Agent 用它在记录里的名字，认不出来时退回 Memmy。 */
