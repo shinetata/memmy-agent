@@ -50,6 +50,7 @@ const USAGE = [
   "",
   "assist cancel withdraws your request, or stops it when the other side has already started.",
   "instructions set replaces the whole text, and only the project owner may write it.",
+  "--project takes a project name, its full id, or the first characters of an id (as printed after #).",
   "Finds and reads sessions of your shared Memmy projects, shares the current one to a project, and asks a member's",
   "computer to run a task for you. Memmy must be running."
 ].join("\n");
@@ -116,8 +117,10 @@ export async function runMemmyProject(argv: readonly string[], deps: MemmyProjec
     const query = rest.join(" ").trim();
     if (!query) throw new Error("knowledge search 需要检索问题");
     const project = optionString(parsed, "project")?.trim();
+    // 指定了项目就先把名字换成 id：同名项目在这里一次问清，不让云端或用户再猜一轮。
+    const target = project ? text((await resolveProject(deps, project)).id) : "";
     const running = runningConversation(deps.env ?? process.env);
-    const result = await localApi(deps, "POST", "/api/collab/knowledge/search", { query, ...(project ? { project } : {}), ...(running ?? {}) });
+    const result = await localApi(deps, "POST", "/api/collab/knowledge/search", { query, ...(target ? { project: target } : {}), ...(running ?? {}) });
     const projectName = isRecord(result.project) ? text(result.project.name) : "";
     const evidence = Array.isArray(result.evidence) ? result.evidence.filter(isRecord) : [];
     if (!result.enabled) return `项目「${projectName}」没有可检索的关联知识库。`;
@@ -575,6 +578,7 @@ async function runAssist(
     }
     const thread = optionString(parsed, "continue")?.trim();
     const wait = parsed.options.wait === true || parsed.options.wait === "true";
+    // 先校请求文件再查项目：自己手里的内容不对时，不必跑一趟项目列表。
     const request = await readAssistFile(file);
     const env = deps.env ?? process.env;
     // 发起方是哪个 Agent：对方弹窗里要说明「他的 Codex 需要……」，所以把它带上去。
@@ -583,8 +587,10 @@ async function runAssist(
     const sourceTask = env.MEMMY_TASK_ID?.trim();
     // Memmy 的任务记录由 sourceTask 找得到；其余读得到记录的 Agent（DeepSeek Harness）另带会话与记录路径。
     const session = requesterSessionFrom(env);
+    // 项目名换成完整 id 再发：同名时先把候选摆给用户，不让云端拿一个名字去猜。
+    const projectId = text((await resolveProject(deps, project)).id);
     const created = await withRequesterSession(deps, "/api/collab/assist/requests", {
-      project,
+      project: projectId,
       member,
       ...request,
       via,
@@ -663,7 +669,8 @@ async function runAssist(
     const project = optionString(parsed, "project")?.trim();
     if (!project) throw new Error("assist end 需要 --project");
     const member = optionString(parsed, "member")?.trim();
-    const result = await localApi(deps, "POST", "/api/collab/assist/end", { project, ...(member ? { member } : {}) });
+    const projectId = text((await resolveProject(deps, project)).id);
+    const result = await localApi(deps, "POST", "/api/collab/assist/end", { project: projectId, ...(member ? { member } : {}) });
     return typeof result.text === "string" ? result.text : "";
   }
   throw new Error(`未知命令：assist ${action ?? ""}\n\n${USAGE}`);
@@ -731,16 +738,90 @@ function instructionRoleLabel(role: string): string {
 }
 
 /**
- * 按名称或 id 找项目：同名项目不止一个时让用户指定 id，不替人挑一个。
+ * 按 id、id 的前几位或名称找项目。命令之间共用这一处，免得「能不能用 # 开头的那一段」各说一套。
+ *
+ * <p>id 前缀排在名称前面：同名项目的候选里给出的就是这一段，用户念回来的必须认。
+ * 用户从候选里抄 `#a1b2c3` 时连 `#` 一起带上了，也照认。</p>
+ */
+function matchProjects(projects: readonly Record<string, unknown>[], reference: string): Record<string, unknown>[] {
+  const value = reference.trim();
+  const bare = value.startsWith("#") ? value.slice(1).trim() : value;
+  if (!bare) return [];
+  const byId = projects.filter((item) => text(item.id) === bare);
+  if (byId.length) return byId;
+  const byPrefix = projects.filter((item) => text(item.id).startsWith(bare));
+  if (byPrefix.length) return byPrefix;
+  const byName = projects.filter((item) => text(item.name) === value);
+  if (byName.length) return byName;
+  const folded = value.toLowerCase();
+  return projects.filter((item) => text(item.name).toLowerCase() === folded);
+}
+
+/** 项目 id 在候选里露多少位：够分开同名的，也够用户念回来。 */
+const PROJECT_TAG_CHARS = 8;
+/** 候选里各写几条：再多也帮不上认项目，只会把输出拉长。 */
+const CANDIDATE_TASK_COUNT = 3;
+const CANDIDATE_MEMBER_COUNT = 6;
+
+function projectTag(id: string): string {
+  return id ? `#${id.slice(0, PROJECT_TAG_CHARS)}` : "";
+}
+
+/**
+ * 项目最近共享的几条任务：云端已按最近交互倒序，取前几条即可。读不到时当没有，不影响选项目。
+ */
+async function recentTasks(deps: MemmyProjectDeps, projectId: string): Promise<string[]> {
+  if (!projectId) return [];
+  const result = await localApi(deps, "GET", `/api/collab/projects/${encodeURIComponent(projectId)}/sessions`).catch(() => null);
+  const sessions = result && Array.isArray(result.sessions) ? result.sessions.filter(isRecord) : [];
+  return sessions.slice(0, CANDIDATE_TASK_COUNT).flatMap((session) => {
+    const title = text(session.title).trim();
+    if (!title) return [];
+    const at = formatTime(text(session.lastActiveAt));
+    return [at ? `${title}（${at}）` : title];
+  });
+}
+
+/**
+ * 同名项目摆给用户看的两样东西：谁在里面、最近在聊什么。有这两样通常就读得出是哪一个，
+ * 不必把 id、角色、创建时间、任务总数一起塞上去。两个都没有任务的同名项目谁也分不出来，
+ * 那时写「还没有任务」让用户自己判断。
+ *
+ * <p>只在真的分不出来时才取一次：成员与任务各一次请求，读不到就少写一行。</p>
+ */
+async function projectCandidateCard(deps: MemmyProjectDeps, matched: readonly Record<string, unknown>[]): Promise<string> {
+  const name = text(matched[0]!.name);
+  const names = await memberNames(deps, matched);
+  const tasks = await Promise.all(matched.map((project) => recentTasks(deps, text(project.id))));
+  const lines = [`有 ${matched.length} 个项目叫「${name}」，请用户选一个：`, ""];
+  matched.forEach((project, index) => {
+    const id = text(project.id);
+    const members = names.get(id) ?? [];
+    const people = members.length
+      ? `${members.slice(0, CANDIDATE_MEMBER_COUNT).join("、")}${members.length > CANDIDATE_MEMBER_COUNT ? ` 等 ${members.length} 人` : ""}`
+      : `${count(project.memberCount)} 位成员`;
+    lines.push(`${index + 1}. ${projectTag(id)} · 成员：${people}`);
+    const recent = tasks[index] ?? [];
+    lines.push(`   最近任务：${recent.length ? recent.join("、") : "还没有任务"}`);
+  });
+  lines.push("", "用户选定后，把对应的 # 片段（或完整 id）作为 --project 再运行同一条命令。");
+  return lines.join("\n");
+}
+
+/**
+ * 按名称或 id 找项目；分不出来时把候选摆出来，不替人挑一个。
  * 用 `/api/collab/projects` 的成员视图：它带着本人的角色与当前的背景与规范，读与写都用这一份。
  */
 async function resolveProject(deps: MemmyProjectDeps, reference: string): Promise<Record<string, unknown>> {
   const projects = await listProjects(deps);
   if (projects === null) throw new Error("读不到协作项目列表，请确认 Memmy 已登录并运行。");
-  const matched = projects.filter((item) => text(item.id) === reference || text(item.name) === reference);
-  if (!matched.length) throw new Error(`没有项目「${reference}」，或你不是项目成员`);
-  if (matched.length > 1) throw new Error(`有 ${matched.length} 个同名项目，请改用项目 id 指定`);
-  return matched[0]!;
+  if (!projects.length) throw new Error(NO_PROJECT);
+  const matched = matchProjects(projects, reference);
+  if (matched.length === 1) return matched[0]!;
+  if (matched.length > 1) throw new Error(await projectCandidateCard(deps, matched));
+  // 找不到时把手里有的列出来：名字记错一半是最常见的情况，这时应当能指着改。
+  const names = projects.map((project) => `${text(project.name)} ${projectTag(text(project.id))}`.replace(/\s+$/u, ""));
+  throw new Error(`没有项目「${reference}」，或你不是项目成员。\n你加入的是：${names.join("、")}\n用其中之一的名称或 # 片段重试。`);
 }
 
 /** 发起协助请求的 Agent 名称：外部 Agent 用它在记录里的名字，认不出来时退回 Memmy。 */
@@ -801,12 +882,7 @@ async function openRequestsTo(
   project: string,
   member: string
 ): Promise<Record<string, unknown>[]> {
-  const projects = await listProjects(deps);
-  if (projects === null) throw new Error("读不到协作项目列表，请确认 Memmy 已登录并运行。");
-  const matched = projects.filter((item) => text(item.id) === project || text(item.name) === project);
-  if (!matched.length) throw new Error(`没有项目「${project}」，或你不是项目成员`);
-  if (matched.length > 1) throw new Error(`有 ${matched.length} 个同名项目，请改用项目 id 指定`);
-  const projectId = text(matched[0]!.id);
+  const projectId = text((await resolveProject(deps, project)).id);
   const result = await localApi(deps, "GET", `/api/collab/projects/${encodeURIComponent(projectId)}/assist/threads`);
   const threads = Array.isArray(result.threads) ? result.threads.filter(isRecord) : [];
   const open = new Set(["pending", "confirm", "running"]);
@@ -832,12 +908,7 @@ async function latestRequestTo(
   project: string,
   member: string
 ): Promise<Record<string, unknown> | null> {
-  const projects = await listProjects(deps);
-  if (projects === null) throw new Error("读不到协作项目列表，请确认 Memmy 已登录并运行。");
-  const matched = projects.filter((item) => text(item.id) === project || text(item.name) === project);
-  if (!matched.length) throw new Error(`没有项目「${project}」，或你不是项目成员`);
-  if (matched.length > 1) throw new Error(`有 ${matched.length} 个同名项目，请改用项目 id 指定`);
-  const projectId = text(matched[0]!.id);
+  const projectId = text((await resolveProject(deps, project)).id);
   const result = await localApi(deps, "GET", `/api/collab/projects/${encodeURIComponent(projectId)}/assist/threads`);
   const threads = Array.isArray(result.threads) ? result.threads.filter(isRecord) : [];
   let latest: Record<string, unknown> | null = null;

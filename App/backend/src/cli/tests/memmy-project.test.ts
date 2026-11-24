@@ -21,6 +21,22 @@ function run(argv: string[], deps: Parameters<typeof runMemmyProject>[1]) {
   return runMemmyProject(argv, deps);
 }
 
+/**
+ * 命令会先把 --project 换成项目 id（同名时要在本地分清楚再发），所以只关心后续请求的用例
+ * 用这个包一层：项目列表统一由这里回答，其余照旧给它自己。
+ */
+function withProjectList(
+  fetcher: (input: string | URL, init?: RequestInit) => Promise<Response>,
+  projects: Array<Record<string, unknown>> = [{ id: "p1", name: "Memmy 内测反馈" }]
+): typeof fetch {
+  return (async (input: string | URL, init?: RequestInit) => {
+    if (new URL(String(input)).pathname === "/api/collab/projects") {
+      return new Response(JSON.stringify({ projects }));
+    }
+    return fetcher(input, init);
+  }) as typeof fetch;
+}
+
 describe("memmy-project", () => {
   it("shows the canonical command groups and rejects ungrouped session operations", async () => {
     for (const args of [[], ["help"], ["--help"], ["session"], ["session", "--help"], ["session", "help"]]) {
@@ -528,14 +544,71 @@ describe("memmy-project instructions", () => {
       .rejects.toThrow(/不超过 10000 字，这一版有 10001 字/u);
   });
 
-  it("asks for one project when the name is not enough", async () => {
-    const two = (async () => new Response(JSON.stringify({ projects: [
-      { id: "p1", name: "MemOS", role: "owner", instructions: "" },
-      { id: "p2", name: "MemOS", role: "owner", instructions: "" }
-    ] }))) as typeof fetch;
+  it("lays out same-named projects by who is in them and what they last worked on", async () => {
+    const two = (async (input: string | URL) => {
+      const path = new URL(String(input)).pathname;
+      if (path === "/api/collab/projects") {
+        return new Response(JSON.stringify({ projects: [
+          { id: "p1a2b3c4", name: "MemOS", role: "owner", memberCount: 3, instructions: "" },
+          { id: "q9z8y7x6", name: "MemOS", role: "member", memberCount: 1, instructions: "" }
+        ] }));
+      }
+      if (path === "/api/collab/projects/p1a2b3c4/members") {
+        return new Response(JSON.stringify({ members: [{ name: "你" }, { name: "李四" }, { name: "王五" }] }));
+      }
+      if (path === "/api/collab/projects/q9z8y7x6/members") {
+        return new Response(JSON.stringify({ members: [{ name: "李四" }] }));
+      }
+      if (path === "/api/collab/projects/p1a2b3c4/sessions") {
+        return new Response(JSON.stringify({ sessions: [
+          { title: "导出接口限流", lastActiveAt: "2026-11-21T02:00:00Z" },
+          { title: "分享弹窗重复提示", lastActiveAt: "2026-11-19T02:00:00Z" }
+        ] }));
+      }
+      return new Response(JSON.stringify({ sessions: [] }));
+    }) as typeof fetch;
     const deps = { fetch: two, runtimeConfigPath: runtimeFile({ baseUrl: "http://127.0.0.1:62315", localToken: "t" }) };
-    await expect(run(["instructions", "show", "--project", "MemOS"], deps)).rejects.toThrow(/有 2 个同名项目/u);
-    await expect(run(["instructions", "show", "--project", "设计评审"], deps)).rejects.toThrow(/没有项目「设计评审」/u);
+
+    // 同名时给用户两样能认出来的东西：里面是谁、最近在聊什么；id 只作为选定后传回去的坐标。
+    const card = await run(["instructions", "show", "--project", "MemOS"], deps).catch((error: Error) => error.message);
+    expect(card).toContain("有 2 个项目叫「MemOS」，请用户选一个：");
+    expect(card).toContain("1. #p1a2b3c4 · 成员：你、李四、王五");
+    expect(card).toContain("最近任务：导出接口限流（11/21");
+    expect(card).toContain("2. #q9z8y7x6 · 成员：李四");
+    expect(card).toContain("最近任务：还没有任务");
+    expect(card).toContain("作为 --project 再运行同一条命令");
+    // 成员与任务都没读到时也一样能选：按云端给的人数与「还没有任务」写。
+    expect(card).not.toContain("role");
+  });
+
+  it("takes the # snippet from the candidate card, or the first characters of an id", async () => {
+    const fetcher = (async (input: string | URL) => {
+      const path = new URL(String(input)).pathname;
+      if (path === "/api/collab/projects") {
+        return new Response(JSON.stringify({ projects: [
+          { id: "p1a2b3c4", name: "MemOS", role: "owner", instructions: "一" },
+          { id: "q9z8y7x6", name: "MemOS", role: "owner", instructions: "二" }
+        ] }));
+      }
+      return new Response(JSON.stringify({ error: { message: "Route not found" } }), { status: 404 });
+    }) as typeof fetch;
+    const deps = { fetch: fetcher, runtimeConfigPath: runtimeFile({ baseUrl: "http://127.0.0.1:62315", localToken: "t" }) };
+
+    // 用户会把卡片上的「#p1a2b3c4」原样念回来，也会只念前几位。
+    expect(await run(["instructions", "show", "--project", "#p1a2b3c4"], deps)).toContain("一");
+    expect(await run(["instructions", "show", "--project", "q9z8"], deps)).toContain("二");
+    expect(await run(["instructions", "show", "--project", "q9z8y7x6"], deps)).toContain("二");
+  });
+
+  it("lists the projects it does have when the name matches none", async () => {
+    const fetcher = (async () => new Response(JSON.stringify({ projects: [
+      { id: "p1a2b3c4", name: "MemOS", role: "owner", instructions: "" }
+    ] }))) as typeof fetch;
+    const deps = { fetch: fetcher, runtimeConfigPath: runtimeFile({ baseUrl: "http://127.0.0.1:62315", localToken: "t" }) };
+
+    // 名字记错一半时，手里有什么应当顺带说出来，而不是只说「没有」。
+    await expect(run(["instructions", "show", "--project", "设计评审"], deps))
+      .rejects.toThrow(/没有项目「设计评审」[\s\S]*你加入的是：MemOS #p1a2b3c4/u);
     await expect(run(["instructions", "show"], deps)).rejects.toThrow(/需要 --project/u);
   });
 });
@@ -563,11 +636,12 @@ describe("memmy-project assist", () => {
 
     const output = await run([
       "assist", "ask", "--project", "Memmy 内测反馈", "--member", "王雨", "--file", requestFile()
-    ], { fetch: fetcher, runtimeConfigPath: runtimeFile({ baseUrl: "http://127.0.0.1:62315", localToken: "t" }), env: { CODEX_THREAD_ID: "thread-1" } });
+    ], { fetch: withProjectList(fetcher), runtimeConfigPath: runtimeFile({ baseUrl: "http://127.0.0.1:62315", localToken: "t" }), env: { CODEX_THREAD_ID: "thread-1" } });
 
     // 请求只写要做的事和原因，不指定由哪个 Agent 执行；发起方是哪个 Agent 要带上去，弹窗里才说得清。
     expect(body).toMatchObject({
-      project: "Memmy 内测反馈",
+      // 项目名在本地已换成 id：同名时不让云端拿名字去猜。
+      project: "p1",
       member: "王雨",
       title: "收集 Cursor 任务读取相关的信息",
       reason: "关联任务弹窗里看不到 Cursor 的任务",
@@ -588,7 +662,7 @@ describe("memmy-project assist", () => {
       return new Response(JSON.stringify({ text: "还没结束" }));
     }) as typeof fetch;
     const env = { DSH_SESSION_ID: "dsh-1", DSH_SESSION_JSONL: "/Users/me/.dsh/sessions/x/session-dsh-1/session.v4.jsonl.zstd" };
-    const deps = { fetch: fetcher, runtimeConfigPath: runtimeFile({ baseUrl: "http://127.0.0.1:62315", localToken: "t" }), env };
+    const deps = { fetch: withProjectList(fetcher), runtimeConfigPath: runtimeFile({ baseUrl: "http://127.0.0.1:62315", localToken: "t" }), env };
 
     await run(["assist", "ask", "--project", "Memmy 内测反馈", "--member", "王雨", "--file", requestFile()], deps);
     await run(["assist", "wait", "A7F3K1"], deps);
@@ -613,7 +687,7 @@ describe("memmy-project assist", () => {
     }) as typeof fetch;
 
     const output = await run(["assist", "ask", "--project", "p", "--member", "王雨", "--file", requestFile()], {
-      fetch: fetcher, runtimeConfigPath: runtimeFile({ baseUrl: "http://127.0.0.1:62315", localToken: "t" }), env: { DSH_SESSION_ID: "dsh-1" }
+      fetch: withProjectList(fetcher, [{ id: "p", name: "p" }]), runtimeConfigPath: runtimeFile({ baseUrl: "http://127.0.0.1:62315", localToken: "t" }), env: { DSH_SESSION_ID: "dsh-1" }
     });
 
     expect(bodies).toHaveLength(2);
@@ -633,7 +707,7 @@ describe("memmy-project assist", () => {
 
     await run([
       "assist", "ask", "--project", "Memmy 内测反馈", "--member", "王雨", "--file", requestFile(), "--continue", "t1"
-    ], { fetch: fetcher, runtimeConfigPath: runtimeFile({ baseUrl: "http://127.0.0.1:62315", localToken: "t" }), env });
+    ], { fetch: withProjectList(fetcher), runtimeConfigPath: runtimeFile({ baseUrl: "http://127.0.0.1:62315", localToken: "t" }), env });
 
     expect(body).toHaveProperty("thread", "t1");
     // Caller identity is fixture-owned, independent of the agent running the test.
@@ -669,7 +743,7 @@ describe("memmy-project assist", () => {
 
     await expect(run([
       "assist", "ask", "--project", "Memmy 内测反馈", "--member", "王雨", "--file", requestFile()
-    ], { fetch: fetcher, runtimeConfigPath: runtimeFile({ baseUrl: "http://127.0.0.1:62315", localToken: "t" }) }))
+    ], { fetch: withProjectList(fetcher), runtimeConfigPath: runtimeFile({ baseUrl: "http://127.0.0.1:62315", localToken: "t" }) }))
       .rejects.toThrow("王雨还没有在「Memmy 内测反馈」中开启接收协助请求");
   });
 
@@ -811,11 +885,12 @@ describe("memmy-project assist ask 的附件", () => {
     return path;
   }
 
+  /** 附件用例只关心请求体：项目列表由 withProjectList 回答，名字叫 P 的那个先给好。 */
   function askFetcher(seen: { body?: Record<string, unknown> }) {
-    return (async (_input: string | URL, init?: RequestInit) => {
+    return withProjectList((async (_input: string | URL, init?: RequestInit) => {
       seen.body = JSON.parse(String(init?.body)) as Record<string, unknown>;
       return new Response(JSON.stringify({ request: { id: "abc-1" }, text: "已发送协助请求 abc-1。" }));
-    }) as typeof fetch;
+    }) as typeof fetch, [{ id: "p", name: "P" }, { id: "p2", name: "Memmy 内测反馈" }]);
   }
 
   it("reads the listed local files into inline attachments with a sha256 and the note", async () => {
