@@ -1439,7 +1439,9 @@
 }
 
 .readerToolFoldSummary {
-  display: block;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
   min-width: 0;
   list-style: none;
   cursor: pointer;
@@ -1491,6 +1493,15 @@
 
 .readerToolGroupSummary::-webkit-details-marker {
   display: none;
+}
+
+/* 「Bash ×10」是这一行的主体，不让入参预览把它挤成省略号；入参占剩余宽度、超出部分省略 */
+.readerToolGroupSummary .readerToolName {
+  flex: none;
+}
+
+.readerToolGroupSummary .readerToolInput {
+  flex: 1 1 auto;
 }
 
 /* 展开后的组内步骤：比外层再缩一档，看得出它们属于上面那一行 */
