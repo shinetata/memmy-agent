@@ -1672,6 +1672,12 @@ export class WebSocketChannel extends BaseChannel {
   /**
    * Seeds a finished WebUI chat from an already-generated user/assistant pair
    * (e.g. onboarding first report) without running the agent again.
+   *
+   * <p>不带 `assistant_text` 时只写用户那一句：新手引导第二步要的是一条“已经有第一句话、但还没有回复”的任务，
+   * 那条请求的卡片就挂在这条任务里。记录里同样以 `turn_end` 收尾，界面把这一轮视为已结束，不显示运行中。</p>
+   *
+   * <p>带 `project_id` 时按 {@link assistRunBinding} 的规则把任务挂到本机项目上：项目归属与工作目录都用项目的，
+   * 与在界面里从项目里新建的任务一致；不传时行为与以前完全一样。</p>
    */
   handleWebuiSeedChat(request: any): HttpLikeResponse {
     if (!this.checkApiToken(request)) return httpError(401, "Unauthorized");
@@ -1691,29 +1697,33 @@ export class WebSocketChannel extends BaseChannel {
     const userText = typeof decoded.user_text === "string" ? decoded.user_text.trim() : "";
     const assistantText = typeof decoded.assistant_text === "string" ? decoded.assistant_text.trim() : "";
     const title = typeof decoded.title === "string" ? decoded.title.trim() : "";
-    if (!userText || !assistantText) {
-      return httpError(400, "user_text and assistant_text are required");
+    if (!userText) {
+      return httpError(400, "user_text is required");
     }
+    const projectId = typeof decoded.project_id === "string" && UUID_RE.test(decoded.project_id)
+      ? decoded.project_id
+      : null;
 
-    let cwd: string;
+    let binding: { projectId: string | null; cwd: string };
     try {
-      cwd = this.createStandaloneTaskCwd();
-    } catch {
-      return httpError(422, "workspace_unavailable");
+      binding = this.assistRunBinding(projectId);
+    } catch (error) {
+      const status = error instanceof WebuiProjectError ? error.status : 422;
+      return httpJsonResponse({ error: this.webuiBindingErrorReason(error) }, { status });
     }
 
     const chatId = crypto.randomUUID();
     const sessionKey = `websocket:${chatId}`;
     const session = new Session({ key: sessionKey });
     session.metadata.webui = true;
-    session.metadata[WEBUI_PROJECT_ID_METADATA_KEY] = null;
-    session.metadata[WEBUI_WORKSPACE_CWD_METADATA_KEY] = cwd;
+    session.metadata[WEBUI_PROJECT_ID_METADATA_KEY] = binding.projectId;
+    session.metadata[WEBUI_WORKSPACE_CWD_METADATA_KEY] = binding.cwd;
     if (title) {
       session.metadata.title = title;
       session.metadata.titleUserEdited = true;
     }
     session.addMessage("user", userText);
-    session.addMessage("assistant", assistantText);
+    if (assistantText) session.addMessage("assistant", assistantText);
     this.sessionManager.save(session, { fsync: true });
 
     this.tryAppendWebuiTranscript(chatId, {
@@ -1721,12 +1731,14 @@ export class WebSocketChannel extends BaseChannel {
       chat_id: chatId,
       text: userText,
     });
-    this.tryAppendWebuiTranscript(chatId, {
-      event: "message",
-      chat_id: chatId,
-      text: assistantText,
-      content: assistantText,
-    });
+    if (assistantText) {
+      this.tryAppendWebuiTranscript(chatId, {
+        event: "message",
+        chat_id: chatId,
+        text: assistantText,
+        content: assistantText,
+      });
+    }
     this.tryAppendWebuiTranscript(chatId, {
       event: "turn_end",
       chat_id: chatId,

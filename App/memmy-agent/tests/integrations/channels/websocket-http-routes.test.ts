@@ -801,6 +801,85 @@ describe("WebSocket HTTP route helpers", () => {
     expect(sessions.some((row: any) => row.key === seededBody.session_key && row.title === "First report")).toBe(true);
   });
 
+  it("seeds a chat bound to a project and only writes the user message", async () => {
+    // 新手引导第二步要的是一条「已经有第一句话、但还没有回复」的任务，并且要落在演示项目里。
+    const root = tmpRoot("memmy-ws-seed-project-");
+    const workspace = path.join(root, "project-root");
+    fs.mkdirSync(workspace);
+    const projectStore = new ProjectStore({ filePath: path.join(root, "projects.json") });
+    const project = projectStore.add(workspace, "existing", "演示项目");
+    const manager = new SessionManager(path.join(root, "sessions"));
+    const channel = makeChannel({ sessionManager: manager, projectStore, workspacePath: root });
+    const headers = withApiToken(channel);
+
+    const seeded = await channel.dispatchHttp(localConnection, {
+      path: "/api/webui/seed-chat",
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        user_text: "请小饭团查一下上次分享会一共来了多少人",
+        project_id: project.id,
+        title: "请小饭团查一下上次分享会一共来了多少人",
+      }),
+    });
+    expect(seeded?.status).toBe(200);
+    const seededBody = responseJson(seeded!);
+    expect(seededBody.chat_id).toMatch(/^[0-9a-f-]{36}$/i);
+
+    const session = manager.get(seededBody.session_key);
+    expect(session).toBeTruthy();
+    expect(session!.metadata.webuiProjectId).toBe(project.id);
+    expect(session!.metadata.webuiWorkspaceCwd).toBe(fs.realpathSync(workspace));
+
+    const thread = await channel.dispatchHttp(localConnection, {
+      path: `/api/sessions/${encodeURIComponent(seededBody.session_key)}/webui-thread`,
+      headers,
+    });
+    const threadBody = responseJson(thread!);
+    // 只有用户那一句，没有假装有回复；这一轮同样算已结束，界面不显示运行中。
+    expect(threadBody.messages.map((msg: any) => msg.role)).toEqual(["user"]);
+    expect(threadBody.messages[0].content).toBe("请小饭团查一下上次分享会一共来了多少人");
+    expect(threadBody.last_turn_closed).toBe(true);
+  });
+
+  it("refuses to seed into a project that does not exist", async () => {
+    // 项目已删或不存在：按项目绑定那套状态码与原因返回，别建出一条归属不明的任务。
+    const root = tmpRoot("memmy-ws-seed-missing-");
+    const projectStore = new ProjectStore({ filePath: path.join(root, "projects.json") });
+    const channel = makeChannel({
+      sessionManager: new SessionManager(path.join(root, "sessions")),
+      projectStore,
+      workspacePath: root,
+    });
+    const headers = withApiToken(channel);
+
+    const seeded = await channel.dispatchHttp(localConnection, {
+      path: "/api/webui/seed-chat",
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        user_text: "查一下签到表",
+        project_id: "11111111-1111-4111-8111-111111111111",
+      }),
+    });
+    expect(seeded?.status).toBe(404);
+    expect(responseJson(seeded!)).toMatchObject({ error: "project_not_found" });
+  });
+
+  it("still needs the user message when seeding", async () => {
+    const root = tmpRoot("memmy-ws-seed-empty-");
+    const channel = makeChannel({ sessionManager: new SessionManager(root), workspacePath: root });
+    const headers = withApiToken(channel);
+
+    const seeded = await channel.dispatchHttp(localConnection, {
+      path: "/api/webui/seed-chat",
+      method: "POST",
+      headers,
+      body: JSON.stringify({ assistant_text: "只有回复没有提问" }),
+    });
+    expect(seeded?.status).toBe(400);
+  });
+
   it("allows local renderer CORS preflight for WebUI bootstrap", async () => {
     const channel = makeChannel({ config: { tokenIssueSecret: "secret" } });
     const port = await startChannel(channel);
