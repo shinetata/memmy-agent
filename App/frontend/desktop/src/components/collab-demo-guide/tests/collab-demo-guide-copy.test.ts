@@ -60,9 +60,11 @@ function stateFor(phase: DemoGuidePhase): DemoGuideState {
 error: null,
     done: { task: false, ask: false, help: false },
     skipped: { task: false, ask: false, help: false },
+    taskChatId: null,
     askSeen: false,
+    askRequestId: null,
+    askThreadId: null,
     askDelivered: false,
-    askTurnEnded: false,
     scan: { status: "done", count: 12 },
     prefill: null,
     endReason: null,
@@ -93,6 +95,29 @@ describe("the demo guide copy", () => {
     // 不带人名的句子照旧不写死叫法：执行中的状态只说结果回传给发起的人。
     expect(demoGuideCard(stateFor("help-running"), t).status)
       .toBe("正在本机执行，完成后结果会回传给小饭团。");
+  });
+
+  it("never says the member's own computer is running the second step", () => {
+    // 第二步由引导直接发请求、云端回放：小饭团只是一个身份，没有任何机器在替他执行，
+    // 也没有「他确认后」这一步，更不需要 Agent 跑一遍命令行。
+    const zh = translate("zh-CN");
+    const en = translate("en-US");
+    expect(demoGuideCard(stateFor("ask-compose"), zh).body)
+      .toBe("签到表在小饭团那边，请他帮忙查一下。点发送就会向他发出协助请求，结果会回写到这条任务。");
+    expect(demoGuideCard({ ...stateFor("ask-waiting"), askSeen: true }, zh).status)
+      .toBe("协助请求已发出，正在等小饭团返回结果…");
+    expect(demoGuideCard({ ...stateFor("ask-waiting"), askSeen: true, askDelivered: true }, zh).status)
+      .toBe("结果已回到这条任务，正在等 Agent 接着回复…");
+    // 引导结束时协助记录会删掉，所以不能说「完整的执行记录在协助中」。
+    expect(demoGuideCard(stateFor("ask-done"), zh).body)
+      .toBe("查询结果直接回到任务里，不需要对方手动发送文件。");
+
+    expect(demoGuideCard(stateFor("ask-compose"), en).body)
+      .toBe("The sign-in sheet is on Xiaofantuan's side. Ask him to look it up: pressing send sends the assist request, and the result comes back into this task.");
+    expect(demoGuideCard({ ...stateFor("ask-waiting"), askSeen: true }, en).status)
+      .toBe("Request sent; waiting for Xiaofantuan to send the result back…");
+    expect(demoGuideCard(stateFor("ask-done"), en).body)
+      .toBe("The answer comes back into the task itself; no one has to send a file by hand.");
   });
 
   it("keeps the five tour steps in the approved words", () => {

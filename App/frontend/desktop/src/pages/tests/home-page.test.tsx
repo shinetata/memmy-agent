@@ -10,7 +10,6 @@ import { AgentRuntimeBridge } from "../../app/agent-runtime-bridge.js";
 import { agentReducer, initialAgentState } from "../../state/agent-chat-slice.js";
 import { AppProviders } from "../../app/providers.js";
 import { FOCUSED_AGENT_CHAT_STORAGE_KEY } from "../../app/routes.js";
-import { zhCNMessages } from "../../i18n/messages.js";
 import type { SlashCommandPaletteItem, SlashCommandStorageLike } from "../agent-command-palette.js";
 import { buildAgentDisplayUnits } from "../agent-thread-messages.js";
 import {
@@ -19,7 +18,6 @@ import {
   ComposerCommandChip,
   ComposerMediaPreviewStrip,
   ComposerSubmitButton,
-  composeDemoGuideAssistSend,
   HomePage,
   AgentOperationErrorSlot,
   agentComposerPrimaryAction,
@@ -575,10 +573,9 @@ describe("HomePage", () => {
     expect(source).toContain("onSend={(prompt) => void sendMessage(prompt)}");
     expect(sendBlock).toContain("const messageInput = suggestedPrompt ?? input;");
     expect(sendBlock).toContain("const submittedAttachments = fromRecommendation ? [] : [...pendingAttachments];");
-    // 协助目标与新手引导演示都会在内容后追加执行提示，所以真正发出的是包装器的结果；
-    // 推荐路径下包装器原样返回，内容仍然是 contentWithAssist 那一份。
+    // 从协助页点头像进来时内容后面会追加执行提示；新手引导第二步不在这里发，它由引导直接建请求。
     expect(sendBlock).toContain("content: contentWithAssist");
-    expect(sendBlock).toContain("content: demoAssistSend.content,");
+    expect(sendBlock).toContain("await sendDemoGuideAsk();");
     expect(sendBlock).toContain('t("home.assist.hint", { name: assistTarget.name, project: assistTarget.projectName })');
     expect(sendBlock).toContain("clearComposer: () => { if (!fromRecommendation) stageComposerForSend(sendScopeKey); }");
   });
@@ -1753,57 +1750,9 @@ describe("HomePage", () => {
     expect(panel.style.getPropertyValue("--agent-composer-overlay-height")).toBe("223px");
   });
 
-  it("sends the guide's assist hint to the agent while the bubble keeps the sentence", async () => {
-    // 引导第二步：输入框里只有那一句话，执行提示随内容发给 Agent，气泡里不出现。
-    const sentence = "请小饭团查一下上次分享会一共来了多少人";
-    const hint = zhCNMessages["collab.demo.prefill.askHint"]
-      .replace("{name}", "小饭团")
-      .replace("{member}", "9001");
-    const composed = composeDemoGuideAssistSend({
-      status: "active",
-      phase: "ask-compose",
-      typed: sentence,
-      sentence,
-      hint,
-      content: sentence
-    });
-    expect(composed.displayContent).toBe(sentence);
-    expect(composed.content).toContain(sentence);
-    expect(composed.content).toContain("--member 9001");
-    expect(composed.displayContent).not.toContain("执行提示");
-
-    const sendMessage = vi.fn(async () => ({ status: "accepted" as const }));
-    const dispatch = vi.fn();
-    await expect(submitAgentComposerMessage({
-      chatId: "chat-demo",
-      connection: {
-        getReadyGeneration: () => 1,
-        newChat: vi.fn(async () => ({ chatId: "unused-chat", modelPreset: "desktop-openai-gpt-5" })),
-        submitMessage: sendMessage
-      },
-      content: composed.content,
-      displayContent: composed.displayContent ?? undefined,
-      pendingAttachments: [],
-      uploadAgentMedia: vi.fn(async () => []),
-      dispatch,
-      track: vi.fn(),
-      clearComposer: vi.fn()
-    })).resolves.toBe(true);
-
-    // 发给 Agent 的内容带着执行提示与 member。
-    expect(sendMessage).toHaveBeenCalledWith(expect.objectContaining({
-      content: expect.stringContaining("--member 9001")
-    }), 1);
-    // 气泡里只是那一句话，没有提示。
-    const queued = dispatch.mock.calls
-      .map(([action]) => action as { type?: string; content?: string })
-      .find((action) => action.type === "agent/userMessageQueued");
-    expect(queued?.content).toBe(sentence);
-    expect(queued?.content).not.toContain("执行提示");
-  });
-
-  it("names the task after the sentence the person saw", async () => {
-    // 第二步的内容里带着执行提示（含命令与 userId），任务标题不能从正文里取。
+  it("shows only what the person wrote when the wire text carries a reference or a hint", async () => {
+    // 发给 Agent 的正文可能与用户写的那句不同（引用、命令、协助提示）：气泡里只显示人写的那一句，
+    // 任务标题也在发出之后用同一句话显式定下来。
     const sentence = "请小饭团查一下上次分享会一共来了多少人";
     const onMessageSent = vi.fn();
 
@@ -1814,7 +1763,7 @@ describe("HomePage", () => {
         newChat: vi.fn(async () => ({ chatId: "unused-chat", modelPreset: "desktop-openai-gpt-5" })),
         submitMessage: vi.fn(async () => ({ status: "accepted" as const }))
       },
-      content: `${sentence}\n\n（执行提示：memmy-project assist ask --member 9001）`,
+      content: `${sentence}\n\n/Users/sunq/签到表.md`,
       displayContent: sentence,
       pendingAttachments: [],
       uploadAgentMedia: vi.fn(async () => []),
@@ -1826,20 +1775,6 @@ describe("HomePage", () => {
 
     // 发出之后才有 chatId：引导用它在拿到 id 之后把标题显式写成那一句话。
     expect(onMessageSent).toHaveBeenCalledWith("chat-demo");
-  });
-
-  it("leaves an edited second-step sentence alone, with no hint attached", () => {
-    const sentence = "请小饭团查一下上次分享会一共来了多少人";
-    const typed = "请小饭团查一下上次分享会";
-    const composed = composeDemoGuideAssistSend({
-      status: "active",
-      phase: "ask-compose",
-      typed,
-      sentence,
-      hint: "（执行提示：不要先反问）",
-      content: typed
-    });
-    expect(composed).toEqual({ content: typed, displayContent: null });
   });
 
   it("keeps the Goal command on the wire but shows only its objective", async () => {

@@ -949,8 +949,11 @@ export interface MemmyAgentClient {
   readWebuiThread(sessionKey: string): Promise<MemmyAgentWebuiThread>;
   seedWebuiChat(input: {
     userText: string;
-    assistantText: string;
+    /** 不传时只写入用户那一句：任务里只有这一句话、这一轮也已结束。 */
+    assistantText?: string;
     title?: string;
+    /** 挂到哪个本机项目：项目归属与工作目录都用项目的，与在项目里新建的任务一致。 */
+    projectId?: string;
   }): Promise<MemmyAgentSeededChat>;
   readLastCompaction(sessionKey: string): Promise<MemmyAgentLastCompaction>;
   renameSession(sessionKey: string, title: string): Promise<MemmyAgentSessionSummary>;
@@ -1596,16 +1599,21 @@ class HttpMemmyAgentClient implements MemmyAgentClient {
 
   async seedWebuiChat(input: {
     userText: string;
-    assistantText: string;
+    /** 不传时只写入用户那一句：任务里只有这一句话、这一轮也已结束。 */
+    assistantText?: string;
     title?: string;
+    /** 挂到哪个本机项目：项目归属与工作目录都用项目的，与在项目里新建的任务一致。 */
+    projectId?: string;
   }): Promise<MemmyAgentSeededChat> {
     const title = input.title?.trim();
+    const assistantText = input.assistantText?.trim();
     return this.request("/api/webui/seed-chat", SeedWebuiChatResponseSchema, {
       method: "POST",
       body: {
         user_text: input.userText,
-        assistant_text: input.assistantText,
-        ...(title ? { title } : {})
+        ...(assistantText ? { assistant_text: assistantText } : {}),
+        ...(title ? { title } : {}),
+        ...(input.projectId ? { project_id: input.projectId } : {})
       }
     });
   }

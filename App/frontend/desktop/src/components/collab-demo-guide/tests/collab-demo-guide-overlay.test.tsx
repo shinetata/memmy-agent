@@ -60,9 +60,11 @@ function activeState(phase: DemoGuideState["phase"]): DemoGuideState {
 error: null,
     done: { task: false, ask: false, help: false },
     skipped: { task: false, ask: false, help: false },
+    taskChatId: null,
     askSeen: false,
+    askRequestId: null,
+    askThreadId: null,
     askDelivered: false,
-    askTurnEnded: false,
     scan: { status: "idle", count: 0 },
     prefill: null,
     endReason: null,
@@ -305,7 +307,7 @@ describe("demo guide overlay tracking", () => {
   it("only says the request was sent after the cloud has it", async () => {
     anchor("conversation", () => rect({ left: 794, top: 74, width: 432, height: 400 }), "section");
     await mount("ask-waiting");
-    // 还没确认请求建出来：只能说正在发，不能说对方正在执行。
+    // 还没确认请求建出来：只能说正在发，不能说已经发出去了。
     expect(cardText()).toContain("正在向小饭团发出协助请求…");
     expect(cardText()).not.toContain("协助请求已发出");
 
@@ -325,7 +327,7 @@ describe("demo guide overlay tracking", () => {
       );
     });
     await frames(6);
-    expect(cardText()).toContain("协助请求已发出，小饭团电脑上的 Agent 正在执行…");
+    expect(cardText()).toContain("协助请求已发出，正在等小饭团返回结果…");
   });
 
   it("lights the link-a-task button during the tour without ringing it", async () => {    anchor("board-associate", () => rect({ left: 1060, top: 250, width: 92, height: 28 }), "button");

@@ -814,6 +814,8 @@ export interface CollabClient {
     reason?: string;
     items: string[];
     thread?: string;
+    /** 这次请求是在哪条 Memmy 任务里发起的：结果回来后送回这条任务。 */
+    sourceTask?: string;
   }): Promise<{ request: AssistRequest; threadId: string; text: string }>;
   /** 本机正在执行与排队中的请求。 */
   assistExecutions(): Promise<AssistExecution[]>;

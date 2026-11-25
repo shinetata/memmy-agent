@@ -13,15 +13,13 @@ import { getRuntimeConfig } from "../api/runtime-config.js";
 import { createHttpCollabClient, type CollabProjectSession } from "../api/collab-client.js";
 import { CollabAssistTaskChip, CollabAssistTaskDock, useAssistTask } from "./collab-assist-task.js";
 import { collabEnabledFor } from "../app/collab-mode.js";
+import { startDemoGuideAsk } from "../app/collab-demo-ask.js";
 import {
-  demoGuideSendsAssistHint,
   demoGuideSkipStopsTurn,
   demoGuideWentBack,
   dispatchDemoGuide,
   getDemoGuideState,
-  subscribeDemoGuide,
-  type DemoGuidePhase,
-  type DemoGuideStatus
+  subscribeDemoGuide
 } from "../app/collab-demo-guide-store.js";
 import { mentionEmptyLabelKey } from "./collab-session-mention.js";
 import { CollabShareToggle } from "./collab-share-toggle.js";
@@ -171,6 +169,12 @@ const FIRST_ENCOUNTER_MEMORY_VERIFY_TIMEOUT_MS = 60_000;
 const FIRST_ENCOUNTER_MEMORY_VERIFY_INTERVAL_MS = 2_000;
 /** Definition for stop confirmation grace ms. */
 export const STOP_CONFIRMATION_GRACE_MS = 8000;
+/**
+ * 新手引导第二步：结果已经送回任务、Agent 也空闲这么久之后，就当作这一步做完了。
+ *
+ * 送达之后一般会再起一轮回复，那一轮结束时会自己推进；这里只管「没有下一轮可等」的那一次。
+ */
+const DEMO_ASK_IDLE_SETTLE_MS = 4_000;
 
 export interface ComposerCommandDraft {
   command: typeof COMPOSER_GOAL_COMMAND | null;
@@ -354,7 +358,7 @@ export interface SubmitAgentComposerMessageInput {
   onNewChatMessageSent?: (chatId: string) => void;
   /**
    * 这一条已经发出去了：用来把任务标题显式定下来。
-   * 新手引导第二步给 Agent 的内容里带着执行提示，标题不能取正文，只能在这里写死成用户看到的那句话。
+   * 发给 Agent 的正文可能与用户写的那句不同（引用、命令、协助提示），那时标题要写成用户看到的那句话。
    */
   onMessageSent?: (chatId: string) => void;
   chatSelectionEpoch?: number;
@@ -780,28 +784,6 @@ export function thinkingPayloadForSend(
     ? resolveThinkingLevel(config, sessionThinking?.level)
     : null;
   return { thinkingEnabled, thinkingLevel };
-}
-
-/**
- * 新手引导第二步的发送内容：输入框里还是引导写好的那句话时，把执行提示追加到发给 Agent 的内容里，
- * 同时交出气泡该显示的那一句。用户改过句子就不追加，原样发出去。
- */
-export function composeDemoGuideAssistSend(input: {
-  status: DemoGuideStatus;
-  phase: DemoGuidePhase;
-  typed: string;
-  sentence: string;
-  hint: string;
-  content: string;
-}): { content: string; displayContent: string | null } {
-  const append = demoGuideSendsAssistHint({
-    status: input.status,
-    phase: input.phase,
-    typed: input.typed,
-    sentence: input.sentence
-  }) && input.hint.trim().length > 0;
-  if (!append) return { content: input.content, displayContent: null };
-  return { content: `${input.content}\n\n${input.hint}`, displayContent: input.typed.trim() };
 }
 
 export async function submitAgentComposerMessage(input: SubmitAgentComposerMessageInput): Promise<boolean> {
@@ -1529,6 +1511,12 @@ export function HomePage(props: { hiddenSurface?: boolean } = {}) {
   const demoAskSentenceRef = useRef("");
   const demoAskPhase = demoGuide.status === "active"
     && (demoGuide.phase === "ask-compose" || demoGuide.phase === "ask-waiting");
+  /**
+   * 第二步的输入框只读：那句话由引导写好，发送前不能改，只有发送可用。
+   *
+   * 改了字就与请求内容、与那条任务的第一句对不上，人也不知道自己改的那句算不算。
+   */
+  const demoAskComposerLocked = demoGuide.status === "active" && demoGuide.phase === "ask-compose";
   useEffect(() => {
     const sentence = demoGuide.status === "active"
       ? t("collab.demo.prefill.ask", { name: demoGuide.memberName, ask: demoGuide.copy.askSentence })
@@ -1554,6 +1542,13 @@ export function HomePage(props: { hiddenSurface?: boolean } = {}) {
   const stopTurnForDemoRef = useRef<(() => void) | null>(null);
 
   /**
+   * 第一步那句话发在哪条任务里：第二步的请求与结果都挂在它上面（`sourceTask`）。
+   *
+   * 新任务要到会话建好之后才有 id（`onChatResolved`），所以发送前先清空、建好后记下。
+   */
+  const demoTaskChatIdRef = useRef<string | null>(null);
+
+  /**
    * 第二步（请成员协助）一完成就把那句话清掉，不等到整轮结束：下一步是为成员执行任务，
    * 输入框里不该还留着上一句。用户自己改过的内容不动。
    */
@@ -1569,14 +1564,11 @@ export function HomePage(props: { hiddenSurface?: boolean } = {}) {
   }, [demoGuide.status, demoGuide.phase, demoGuide.memberName, dispatch, t]);
 
   /**
-   * 第二步那句话与它对应的执行提示：句子进输入框，提示只在发送时追加给 Agent。
-   * 两者都按当前语言现取，句子与预填时是同一句，所以能据此判断用户改没改过。
+   * 第二步那句话：进输入框、也作为请求的标题与条目（云端会换成剧本）。
+   * 按当前语言现取，与预填时是同一句。
    */
   const demoAssistSentence = demoGuide.status === "active"
     ? t("collab.demo.prefill.ask", { name: demoGuide.memberName, ask: demoGuide.copy.askSentence })
-    : "";
-  const demoAssistHint = demoGuide.status === "active"
-    ? t("collab.demo.prefill.askHint", { name: demoGuide.memberName, member: demoGuide.memberUserId ?? "" })
     : "";
 
   /**
@@ -1604,6 +1596,21 @@ export function HomePage(props: { hiddenSurface?: boolean } = {}) {
   }, [isCurrentAgentRunning, state.agent.operationErrorNotice, demoGuide.status, t]);
 
   /**
+   * 第二步的兜底收尾：结果已经送回那条任务，而这一轮 Agent 已经空闲了几秒。
+   *
+   * 正常路径靠上面的 `agent-settled`：送达之后任务里会再起一轮回复，那一轮结束时推进。
+   * 但送达之后未必还有一轮可等（本机送回结果时那条任务本来就是空的）：
+   * 那就等空闲几秒就自己收尾，卡片不会一直停在「已发出」。
+   */
+  useEffect(() => {
+    if (demoGuide.status !== "active" || demoGuide.phase !== "ask-waiting" || !demoGuide.askDelivered) return undefined;
+    // 还有一轮在写：等它结束，那时由 `agent-settled` 推进，不在这里抢。
+    if (isCurrentAgentRunning) return undefined;
+    const timer = setTimeout(() => dispatchDemoGuide({ type: "assist-settled" }), DEMO_ASK_IDLE_SETTLE_MS);
+    return () => clearTimeout(timer);
+  }, [demoGuide.status, demoGuide.phase, demoGuide.askDelivered, isCurrentAgentRunning]);
+
+  /**
    * 任何一步被跳过，或者人点了「上一步」：那一轮 Agent 还在替这句话干活，必须停下。
    *
    * 跳过与退回都只把引导挪到另一屏，不会动 Agent：不停的话请求照样会发出去、内容照样会写进对话，
@@ -1620,13 +1627,13 @@ export function HomePage(props: { hiddenSurface?: boolean } = {}) {
     demoPhaseRef.current = demoGuide.phase;
     demoSkippedRef.current = demoGuide.skipped;
     if (demoGuide.status !== "active") return;
-    // 退回上一屏：这一屏可能是「等 Agent 写/等 Agent 发」的那两屏，先停住。
+    // 退回上一屏：这一屏可能是「等 Agent 写」的那两屏，先停住。
     if (demoGuideWentBack(previous, demoGuide.phase)) {
       stopTurnForDemoRef.current?.();
       return;
     }
-    // 任何一步被「跳过这一步」跳掉时，那一轮 Agent 可能还在写（第一步写通知、第二步写请求）：先停住，
-    // 别让它接着把内容写进对话、把请求发出去。判据见 `demoGuideSkipStopsTurn`。
+    // 任何一步被「跳过这一步」跳掉时，那一轮 Agent 可能还在写（第一步写通知、第二步的结果回复）：先停住，
+    // 别让它接着把内容写进对话。判据见 `demoGuideSkipStopsTurn`。
     if (!demoGuideSkipStopsTurn(previous, skippedBefore, demoGuide.skipped)) return;
     stopTurnForDemoRef.current?.();
   }, [demoGuide.phase, demoGuide.status, demoGuide.skipped]);
@@ -2376,12 +2383,36 @@ export function HomePage(props: { hiddenSurface?: boolean } = {}) {
   }
 
   /**
+   * 新手引导第二步的发送：直接建一条协助请求，不经过用户的 Agent，也不拼执行提示。
+   *
+   * 与卡片上的「再试一次」走同一条路（见 `collab-demo-ask`）；输入框里那句话就是请求的内容。
+   * 发出去了就把那句话从输入框里清掉；没发出去就留着，人可以直接再点一次发送。
+   */
+  async function sendDemoGuideAsk() {
+    if (!collabClient) {
+      dispatchDemoGuide({ type: "fail", reason: t("collab.demo.failed.request") });
+      return;
+    }
+    const sent = await startDemoGuideAsk({
+      client: collabClient,
+      sentence: demoAssistSentence,
+      failureReason: t("collab.demo.failed.request")
+    });
+    if (sent) clearDraftIfUntouched(demoAssistSentence);
+  }
+
+  /**
    * Sends one round of a live Agent conversation.
    */
   async function sendMessage(suggestedPrompt?: string) {
     const fromRecommendation = suggestedPrompt !== undefined;
     const messageInput = suggestedPrompt ?? input;
     if (fromRecommendation && recommendationSendDisabled) return;
+    // 新手引导第二步：这句话不再交给 Agent，由引导直接向小饭团发协助请求。
+    if (!fromRecommendation && demoGuide.status === "active" && demoGuide.phase === "ask-compose") {
+      await sendDemoGuideAsk();
+      return;
+    }
     if (!fromRecommendation && runExactLocalSlashCommand(input)) {
       return;
     }
@@ -2424,17 +2455,11 @@ export function HomePage(props: { hiddenSurface?: boolean } = {}) {
       ? t("home.assist.hint", { name: assistTarget.name, project: assistTarget.projectName })
       : null;
     const contentWithAssist = assistHint ? `${contentWithReferences}\n\n${assistHint}` : contentWithReferences;
-    // 新手引导第二步：那句要求连同执行提示一起交给 Agent，气泡里仍然只有用户看到的那一句。
-    const demoAssistSend = composeDemoGuideAssistSend({
-      status: demoGuide.status,
-      phase: demoGuide.phase,
-      typed: composerInput,
-      sentence: demoAssistSentence,
-      hint: demoAssistHint,
-      content: contentWithAssist
-    });
     messageSendLocksRef.current.add(sendScopeKey);
     dispatch(agentActions.messageSendLockUpdated(sendScopeKey, clientRequestId));
+    // 新任务的 id 要到会话建好才知道：发送前先清掉上一次的，由 `onChatResolved` 填。
+    // 第二步不在这里发（它不建任务、不走 Agent），所以只认第一步。
+    if (demoGuide.status === "active" && demoGuide.phase === "compose") demoTaskChatIdRef.current = null;
     dispatch(agentActions.modelSelectionRequestStarted(
       sendScopeKey,
       state.agent.currentChatId,
@@ -2449,10 +2474,10 @@ export function HomePage(props: { hiddenSurface?: boolean } = {}) {
         clientRequestId,
         connection,
         ensureChatSubscription,
-        content: demoAssistSend.content,
-        // With references, a command, a rewritten prompt or the guide's hint the wire text differs from what was typed;
+        content: contentWithAssist,
+        // With references, a command or a rewritten prompt the wire text differs from what was typed;
         // show the typed part.
-        displayContent: (agentPrompt || submittedCommand || submittedMentions.length || assistHint || demoAssistSend.displayContent !== null) ? messageInput : undefined,
+        displayContent: (agentPrompt || submittedCommand || submittedMentions.length || assistHint) ? messageInput : undefined,
         language,
         pendingAttachments: submittedAttachments,
         uploadAgentMedia: (attachments) => clients!.memmyAgent.uploadAgentMedia(attachments),
@@ -2482,6 +2507,8 @@ export function HomePage(props: { hiddenSurface?: boolean } = {}) {
         ),
         onChatResolved: (chatId) => {
           threadPanel.promoteScope(sendScopeKey, chatId);
+          // 新手引导第一步：记下这条任务，第二步的请求与结果都挂在它上面。
+          if (demoGuide.status === "active" && demoGuide.phase === "compose") demoTaskChatIdRef.current = chatId;
           dispatch(agentActions.modelSelectionRequestStarted(
             sendScopeKey,
             chatId,
@@ -2506,21 +2533,13 @@ export function HomePage(props: { hiddenSurface?: boolean } = {}) {
               state: state.agent
             });
           }
-          : undefined,
-        // 新手引导第二步：任务标题只用用户看到的那一句话，不从正文（含执行提示）里取。
-        onMessageSent: demoAssistSend.displayContent !== null && clients?.memmyAgent
-          ? (chatId) => {
-            void clients.memmyAgent
-              .renameSession(clients.memmyAgent.chatIdToSessionKey(chatId), demoAssistSend.displayContent!)
-              .catch(() => undefined);
-          }
           : undefined
       });
       if (!submitted) {
         dispatch(agentActions.modelSelectionRequestCancelled(clientRequestId));
       } else {
         // 引导在等这一下：发出去了才进入「Agent 正在读取…」。
-        dispatchDemoGuide({ type: "composer-sent" });
+        dispatchDemoGuide({ type: "composer-sent", sourceTask: demoTaskChatIdRef.current ?? state.agent.currentChatId ?? null });
       }
     } catch (error) {
       dispatch(agentActions.modelSelectionRequestCancelled(clientRequestId));
@@ -3708,6 +3727,7 @@ export function HomePage(props: { hiddenSurface?: boolean } = {}) {
                   value={composerInput}
                   placeholder={composerPlaceholder}
                   rows={3}
+                  readOnly={demoAskComposerLocked}
                   className="w-full px-5 pt-4 pb-12 text-sm resize-none focus:outline-none rounded-card-lg bg-background-paper placeholder:text-text-ink/40"
                   onChange={(event) => {
                     setComposerCaret(event.target.selectionStart ?? 0);
@@ -4000,6 +4020,7 @@ export function HomePage(props: { hiddenSurface?: boolean } = {}) {
                       value={composerInput}
                       placeholder={composerPlaceholder}
                       rows={isComposerSingleLine ? 1 : 3}
+                      readOnly={demoAskComposerLocked}
                       className={`${isComposerSingleLine ? "agent-composer-input--single " : ""}agent-composer-input--conversation block w-full pl-4 py-3 text-sm rounded-card-lg bg-background-paper`}
                       onChange={(event) => {
                         setComposerCaret(event.target.selectionStart ?? 0);

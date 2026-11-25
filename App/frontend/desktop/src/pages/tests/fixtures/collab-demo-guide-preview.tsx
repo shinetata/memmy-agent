@@ -85,9 +85,11 @@ function stateFor(step: DemoGuidePreviewStep): DemoGuideState {
       help: step === "complete" || step === "3-done"
     },
     skipped: { task: false, ask: false, help: false },
+    taskChatId: null,
     askSeen: false,
+    askRequestId: null,
+    askThreadId: null,
     askDelivered: step === "2-done",
-    askTurnEnded: false,
     // 「关联会话」那一屏：预览里直接摆扫完的样子（列表 + 计数），主按钮可用；`t-associate-lock` 摆未授权的样子。
     scan: phase === "tour-associate-pick"
       ? (step === "t-associate-lock" ? { status: "locked", count: 0 } : { status: "done", count: 12 })

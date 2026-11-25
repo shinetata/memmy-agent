@@ -9,7 +9,6 @@ import {
   DEMO_GUIDE_BEFORE_PROJECT_PHASES,
   DEMO_GUIDE_TOUR_PHASES,
   clearDemoGuideDone,
-  demoGuideBackTarget,
   demoGuideHeartbeatStep,
   demoGuideIsBeforeProjectPhase,
   demoGuideIsTourPhase,
@@ -28,6 +27,7 @@ import {
   readDemoGuideDone,
   resetDemoGuideStore,
   setDemoGuideStorageForTest,
+  startDemoGuide,
   startDemoGuideBeforeProject,
   type DemoGuideEvent,
   type DemoGuideState
@@ -81,7 +81,7 @@ function run(state: DemoGuideState, events: DemoGuideEvent[]): DemoGuideState {
 const FIRST_STEP: DemoGuideEvent[] = [
   { type: "task-opened" },
   { type: "task-continued", prefill: "接着小饭团的安排，写一段分享会的通知" },
-  { type: "composer-sent" },
+  { type: "composer-sent", sourceTask: "chat-task" },
   { type: "agent-settled" }
 ];
 
@@ -92,7 +92,11 @@ function atAskCompose(): DemoGuideState {
 
 /** 走到第二步的结果回到对话。 */
 function atAskDone(): DemoGuideState {
-  return run(atAskCompose(), [{ type: "composer-sent" }, { type: "assist-delivered" }, { type: "agent-settled" }]);
+  return run(atAskCompose(), [
+    { type: "ask-sent", requestId: "req-1", threadId: "thread-1" },
+    { type: "assist-delivered" },
+    { type: "agent-settled" }
+  ]);
 }
 
 /** 走到第三步：第二步做完就直接等小饭团发来请求，中间不再有项目设置那一屏。 */
@@ -242,15 +246,17 @@ describe("demo guide state machine", () => {
     expect(skipped.endReason).toBe("skipped");
   });
 
-  it("prefills the composer when continuing the member's task, then waits for the agent", () => {
+  it("remembers the task the first step was sent from", () => {
     const state = run(started(), [
       { type: "task-opened" },
       { type: "task-continued", prefill: "接着小饭团的安排，写一段分享会的通知" }
     ]);
     expect(state.phase).toBe("compose");
     expect(state.prefill?.text).toBe("接着小饭团的安排，写一段分享会的通知");
-    const sent = demoGuideReducer(state, { type: "composer-sent" });
+    const sent = demoGuideReducer(state, { type: "composer-sent", sourceTask: "chat-task" });
     expect(sent.phase).toBe("reply-waiting");
+    // 第二步的请求与结果都挂在第一步这条任务上。
+    expect(sent.taskChatId).toBe("chat-task");
     expect(demoGuideReducer(sent, { type: "agent-settled" }).phase).toBe("reply-done");
   });
 
@@ -265,14 +271,12 @@ describe("demo guide state machine", () => {
   });
 
   it("only advances the asking step once the assist result is back and the agent settled again", () => {
-    const waiting = demoGuideReducer(atAskCompose(), { type: "composer-sent" });
+    const waiting = demoGuideReducer(atAskCompose(), { type: "ask-sent", requestId: "req-1", threadId: "thread-1" });
     expect(waiting.phase).toBe("ask-waiting");
-    // Agent 先回的那一句不算：结果还没回来就不能给「下一步」。
+    // 结果还没回来：先来的那一轮 Agent 结束也不能当成做完。
     const settled = demoGuideReducer(waiting, { type: "agent-settled" });
     expect(settled.phase).toBe("ask-waiting");
-    // 但它是「这一轮跑完了」的分界点：过了这里才允许判「没发出去」。
-    expect(waiting.askTurnEnded).toBe(false);
-    expect(settled.askTurnEnded).toBe(true);
+    expect(settled.done.ask).toBe(false);
     const delivered = demoGuideReducer(settled, { type: "assist-delivered" });
     expect(delivered.askDelivered).toBe(true);
     const done = demoGuideReducer(delivered, { type: "agent-settled" });
@@ -282,39 +286,42 @@ describe("demo guide state machine", () => {
     expect(done.prefill).toBeNull();
   });
 
-  it("marks the round as ended only when the agent really finished it", () => {
-    // 刚发出去：这一轮还没开始跑完，不能以此为由判失败。
-    const waiting = demoGuideReducer(atAskCompose(), { type: "composer-sent" });
-    expect(waiting.askTurnEnded).toBe(false);
-    // 再发一次就重新算：上一轮的「已结束」不会带进新的一轮。
-    const resent = demoGuideReducer({ ...atAskCompose(), askTurnEnded: true }, { type: "composer-sent" });
-    expect(resent.askTurnEnded).toBe(false);
-    // 这一轮跑完但结果还没回来：这时才置上。
-    expect(demoGuideReducer(waiting, { type: "agent-settled" }).askTurnEnded).toBe(true);
+  it("records which request this attempt sent and only trusts that one", () => {
+    // 首次发送与重试都是引导自己建请求：建出来才算「已发出」，并记下本次只认哪一条。
+    const waiting = demoGuideReducer(atAskCompose(), {
+      type: "ask-sent",
+      requestId: "req-7",
+      threadId: "thread-7",
+      sourceTask: "chat-7"
+    });
+    expect(waiting.askSeen).toBe(true);
+    expect(waiting.askRequestId).toBe("req-7");
+    expect(waiting.askThreadId).toBe("thread-7");
+    expect(waiting.askSourceTask).toBe("chat-7");
+    expect(waiting.askAttempt).toBe(1);
+    // 再发一次就换一条、换一个号：上一条撤回或失败的不再算本次。
+    const resent = demoGuideReducer(waiting, {
+      type: "ask-sent",
+      requestId: "req-8",
+      threadId: "thread-8"
+    });
+    expect(resent.askRequestId).toBe("req-8");
+    expect(resent.askRequestId).not.toBe(waiting.askRequestId);
+    expect(resent.askAttempt).toBe(2);
+    // 任务沿用已经记下的那一条：不传 sourceTask 时不会把它清掉。
+    expect(resent.askSourceTask).toBe("chat-7");
   });
 
-  it("only says the request was sent once the cloud has it", () => {
-    const waiting = demoGuideReducer(atAskCompose(), { type: "composer-sent" });
-    // 刚发出去：Agent 还在准备那次调用，请求还没建出来，这时不能说「已发出」。
-    expect(waiting.askSeen).toBe(false);
-    const seen = demoGuideReducer(waiting, { type: "assist-seen" });
-    expect(seen.askSeen).toBe(true);
-    // 再发一次重新算：上一轮遗留的「已发出」不会带进新的一轮。
-    expect(demoGuideReducer({ ...atAskCompose(), askSeen: true }, { type: "composer-sent" }).askSeen).toBe(false);
-  });
-
-  it("drops the failure once the request turns up after all", () => {
+  it("keeps the task once it is known so a failed send can be retried on it", () => {
+    // 第一步被跳过时，任务由引导新建：先记下来，建请求失败时重试还得挂回这一条。
     const failed = demoGuideReducer(
-      demoGuideReducer(atAskCompose(), { type: "composer-sent" }),
+      demoGuideReducer(atAskCompose(), { type: "ask-task", chatId: "chat-9" }),
       { type: "fail", reason: "协助请求没有发出去。" }
     );
+    expect(failed.askSourceTask).toBe("chat-9");
     expect(failed.error).toBe("协助请求没有发出去。");
-    // 请求后来才写进去：错误自己收起来，不需要人点「再试一次」。
-    const seen = demoGuideReducer(failed, { type: "assist-seen" });
-    expect(seen.error).toBeNull();
-    expect(seen.phase).toBe("ask-waiting");
-    // 没报过错时什么也不变：不白白换一个状态对象。
-    expect(demoGuideReducer(seen, { type: "assist-seen" })).toBe(seen);
+    // 发起失败当场就说：这一屏也算「没完成」，会把错误与「再试一次」画出来。
+    expect(failed.phase).toBe("ask-compose");
   });
 
   it("walks the last step from the request arriving to the finished assist", () => {
@@ -623,7 +630,7 @@ describe("demo guide state machine", () => {
     const skipped = run(atAskCompose(), [{ type: "skip", prefill: ASK_SENTENCE }]);
     const redone = run(skipped, [
       { type: "back" },
-      { type: "composer-sent" },
+      { type: "ask-sent", requestId: "req-1", threadId: "thread-1" },
       { type: "assist-delivered" },
       { type: "agent-settled" }
     ]);
@@ -745,18 +752,18 @@ describe("skipping a step", () => {
   const untouched = { task: false, ask: false, help: false };
 
   it("stops the running Agent when the skipped screen had one working", () => {
-    // 第一步在等回复、第二步在等写/等发：这三屏被跳过都要停掉那一轮，否则内容会继续写进对话。
-    for (const phase of ["reply-waiting", "ask-compose", "ask-waiting"] as const) {
+    // 第一步在等回复、第二步在等结果：这两屏被跳过都要停掉那一轮，否则内容会继续写进对话。
+    for (const phase of ["reply-waiting", "ask-waiting"] as const) {
       expect(demoGuideSkipStopsTurn(phase, untouched, { ...untouched, task: true }), phase).toBe(true);
       expect(demoGuideSkipStopsTurn(phase, untouched, { ...untouched, ask: true }), phase).toBe(true);
     }
   });
 
   it("leaves the Agent alone on screens with nothing running", () => {
-    // 只是输入框里预填了一句话（`compose`）、已经办成（`reply-done` / `ask-done`）、
-    // 以及跑在对方电脑上的第三步（`help-running`）都不该停本机这一轮。
-    for (const phase of ["compose", "reply-done", "ask-done", "help-running", "help-dialog", "tour-board"] as const) {
-      expect(demoGuideSkipStopsTurn(phase, untouched, { ...untouched, help: true }), phase).toBe(false);
+    // 只是输入框里预填了一句话（`compose`、`ask-compose`——后者由引导直接发请求，本机没有 Agent 在跑）、
+    // 已经办成（`reply-done` / `ask-done`）、以及跑在对方电脑上的第三步（`help-running`）都不该停本机这一轮。
+    for (const phase of ["compose", "ask-compose", "reply-done", "ask-done", "help-running", "help-dialog", "tour-board"] as const) {
+      expect(demoGuideSkipStopsTurn(phase, untouched, { ...untouched, ask: true }), phase).toBe(false);
     }
   });
 
@@ -764,5 +771,99 @@ describe("skipping a step", () => {
     expect(demoGuideSkipStopsTurn("reply-waiting", untouched, untouched)).toBe(false);
     // 完成一步也抹掉过 skipped 标记，但那不是跳过：标记从有到无同样不该触发停止。
     expect(demoGuideSkipStopsTurn("reply-waiting", { ...untouched, task: true }, untouched)).toBe(false);
+  });
+});
+
+describe("the asking step once the cloud replays the result", () => {
+  it("keeps the scripted copy the cloud sent with the demo", () => {
+    // 云端下发的剧本要从这里进到界面：漏了它，卡片永远说兜底那一套。
+    const copy = {
+      taskTitle: "季度复盘会",
+      taskNext: "写一段复盘通知",
+      askSentence: "查一下上次复盘会的出席人数",
+      helpSentence: "确认 Node 版本"
+    };
+    resetDemoGuideStore();
+    startDemoGuide({ ...START, copy, client: {} as never });
+    expect(getDemoGuideState().copy).toEqual(copy);
+    resetDemoGuideStore();
+  });
+
+  it("remembers which task the request was sent from and counts each attempt", () => {
+    const waiting = demoGuideReducer(atAskCompose(), {
+      type: "ask-sent",
+      requestId: "req-7",
+      threadId: "thread-7",
+      sourceTask: "chat-7"
+    });
+    expect(waiting.askSourceTask).toBe("chat-7");
+    // 第一次发送是第 1 次尝试；重发一次就换一个号，之前那几条排查不再算本次。
+    expect(waiting.askAttempt).toBe(1);
+    const resent = demoGuideReducer({ ...atAskCompose(), askAttempt: 1 }, {
+      type: "ask-sent",
+      requestId: "req-8",
+      threadId: "thread-8",
+      sourceTask: "chat-7"
+    });
+    expect(resent.askAttempt).toBe(2);
+    // 没带任务 id 时不清掉已经记下的那条：重试新建的请求仍要送回同一条任务。
+    expect(demoGuideReducer(atAskCompose(), { type: "ask-sent", requestId: "req-9", threadId: "thread-9" }).askSourceTask).toBeNull();
+  });
+
+  it("starts a fresh attempt when the person retries the asking step", () => {
+    const waiting = demoGuideReducer(atAskCompose(), {
+      type: "ask-sent",
+      requestId: "req-1",
+      threadId: "thread-1",
+      sourceTask: "chat-7"
+    });
+    const failed = demoGuideReducer(waiting, { type: "fail", reason: "协助请求没有发出去。" });
+    const retried = demoGuideReducer(failed, { type: "retry" });
+    // 重试只把错误收起来：新请求建出来时才算新一次，任务仍是同一条。
+    expect(retried.error).toBeNull();
+    expect(retried.phase).toBe("ask-waiting");
+    expect(retried.askAttempt).toBe(1);
+    expect(retried.askSourceTask).toBe("chat-7");
+    const resent = demoGuideReducer(retried, { type: "ask-sent", requestId: "req-2", threadId: "thread-2" });
+    expect(resent.askAttempt).toBe(2);
+    expect(resent.askRequestId).toBe("req-2");
+    expect(resent.askDelivered).toBe(false);
+    expect(resent.askSourceTask).toBe("chat-7");
+  });
+
+  it("fills the sentence again after the guide opens that task", () => {
+    // 进第二步时先打开那条任务：换任务会把已经填好的句子收回去，所以打开之后再填一次。
+    const asking = demoGuideReducer(atAskCompose(), { type: "refill" });
+    expect(asking.phase).toBe("ask-compose");
+    expect(asking.prefill?.text).toBe(ASK_SENTENCE);
+    expect(asking.prefill?.nonce).toBeGreaterThan(atAskCompose().prefill?.nonce ?? 0);
+    // 已经发出去了（等结果）就不再往输入框里塞。
+    const waiting = demoGuideReducer(atAskCompose(), { type: "ask-sent", requestId: "req-1", threadId: "thread-1" });
+    expect(demoGuideReducer(waiting, { type: "refill" })).toBe(waiting);
+  });
+
+  it("does not repeat a delivery it has already recorded", () => {
+    const delivered = demoGuideReducer(
+      demoGuideReducer(atAskCompose(), { type: "ask-sent", requestId: "req-1", threadId: "thread-1" }),
+      { type: "assist-delivered" }
+    );
+    expect(delivered.askDelivered).toBe(true);
+    // 轮询每拍都读到同一条已送达的请求：不换状态对象，订阅方不必跟着重画。
+    expect(demoGuideReducer(delivered, { type: "assist-delivered" })).toBe(delivered);
+  });
+
+  it("closes the step on the idle fallback only once the result is in the task", () => {
+    const waiting = demoGuideReducer(atAskCompose(), { type: "ask-sent", requestId: "req-1", threadId: "thread-1" });
+    // 结果还没回来：兜底也不能把这一步当成做完了。
+    expect(demoGuideReducer(waiting, { type: "assist-settled" }).phase).toBe("ask-waiting");
+
+    const delivered = demoGuideReducer(waiting, { type: "assist-delivered" });
+    const done = demoGuideReducer(delivered, { type: "assist-settled" });
+    // 送达之后未必还有一轮可等：空闲几秒就收尾。
+    expect(done.phase).toBe("ask-done");
+    expect(done.done.ask).toBe(true);
+    expect(done.prefill).toBeNull();
+    // 已经不在这一屏时什么也不做：第三步与完成之后收到它不能倒着走。
+    expect(demoGuideReducer(atHelpWaiting(), { type: "assist-settled" }).phase).toBe("help-waiting");
   });
 });

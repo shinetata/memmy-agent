@@ -18,6 +18,7 @@ import {
   resetDemoGuideStore,
   setDemoGuideStateForTest
 } from "../../../app/collab-demo-guide-store.js";
+import { registerDemoAskSurface, resetDemoAskSurfaceForTest } from "../../../app/collab-demo-ask.js";
 import { I18nProvider } from "../../../i18n/i18n-provider.js";
 import { CollabDemoGuideHost } from "../collab-demo-guide-host.js";
 
@@ -46,8 +47,14 @@ function demoState(phase: DemoGuideState["phase"], overrides: Partial<DemoGuideS
 error: null,
     done: { task: false, ask: false, help: false },
     skipped: { task: false, ask: false, help: false },
+    taskChatId: "chat-1",
+    askSeen: true,
+    askSourceTask: "chat-1",
+    askAttempt: 1,
+    askRequestId: "req-1",
+    askThreadId: "thread-ask",
     askDelivered: false,
-    askTurnEnded: false,
+    scan: { status: "done", count: 0 },
     prefill: null,
     endReason: null,
     cloudEnded: false,
@@ -55,17 +62,34 @@ error: null,
   };
 }
 
-/** 第二步：我发起、执行人是演示成员的那次协助。 */
-function askThread(status: "pending" | "done" | "failed") {
+/**
+ * 第二步：引导自己发出的那条请求所在的排查。
+ *
+ * `deliveredAt` 是结果被送回任务的时间：没有它就只是一份写好、还没送回来的结果。
+ */
+function askThread(
+  status: "pending" | "running" | "done" | "failed" | "stopped" | "cancelled",
+  options: { requestId?: string; threadId?: string; deliveredAt?: string | null } = {}
+) {
   return {
-    threadId: "thread-ask",
+    threadId: options.threadId ?? "thread-ask",
     requester: ME,
     executor: MEMBER,
     projectId: "cloud-1",
     title: "查一下上次分享会来了多少人",
     updatedAt: "2026-11-14T07:00:00.000Z",
-    requests: [{ id: "req-1", status, title: "查一下上次分享会来了多少人" }]
+    requests: [{
+      id: options.requestId ?? "req-1",
+      status,
+      title: "查一下上次分享会来了多少人",
+      deliveredAt: options.deliveredAt ?? null
+    }]
   };
+}
+
+/** 打开一次排查的回应：`readAskOutcome` 按它认本次那条请求。 */
+function askDetail(status: Parameters<typeof askThread>[0], options: Parameters<typeof askThread>[1] = {}) {
+  return { thread: askThread(status, options), serverTime: null };
 }
 
 /** 第三步：演示成员发来、由我执行的请求。 */
@@ -107,12 +131,26 @@ function stubAnchor(name: string, box: { left: number; top: number; width: numbe
 describe("the demo guide host", () => {
   let container: HTMLDivElement;
   let root: Root;
+  let unregisterSurface: (() => void) | null = null;
 
   async function mount(
     collab: CollabClient,
     state: DemoGuideState,
-    options: { route?: string; openBoard?: (localProjectId: string) => void; openTaskPage?: () => void } = {}
+    options: {
+      route?: string;
+      openBoard?: (localProjectId: string) => void;
+      openTaskPage?: () => void;
+      onNotice?: (message: string) => void;
+      /** 引导第二步要用的页面能力：打开某条任务、开一张演示项目的新任务草稿。 */
+      surface?: { openTask?: () => void; openDraft?: () => void; createTask?: () => Promise<string | null> };
+    } = {}
   ): Promise<void> {
+    // 每挂一次都换一份注册：上一个用例的出口不能留在下一份里。
+    unregisterSurface = registerDemoAskSurface({
+      openTask: options.surface?.openTask ?? vi.fn(),
+      openDraft: options.surface?.openDraft ?? vi.fn(),
+      createTask: options.surface?.createTask ?? (async () => null)
+    });
     setDemoGuideStateForTest(state, collab);
     await act(async () => {
       root.render(
@@ -123,7 +161,7 @@ describe("the demo guide host", () => {
             boardProjectId={null}
             openBoard={options.openBoard ?? vi.fn()}
             openTaskPage={options.openTaskPage ?? vi.fn()}
-            onNotice={vi.fn()}
+            onNotice={options.onNotice ?? vi.fn()}
           />
         </I18nProvider>
       );
@@ -141,66 +179,32 @@ describe("the demo guide host", () => {
 
   afterEach(async () => {
     await act(async () => root.unmount());
+    unregisterSurface?.();
+    unregisterSurface = null;
+    resetDemoAskSurfaceForTest();
     container.remove();
     for (const element of Array.from(document.querySelectorAll("[data-demo-guide]"))) element.remove();
     resetDemoGuideStore();
     vi.useRealTimers();
   });
 
-  it("never calls the request failed while the agent is still running", async () => {
-    // 请求根本没发出去（CLI 连不上、Agent 没照做），但这一轮 Agent 还在跑：超过多久都不能报警。
-    await mount(client({}), demoState("ask-waiting"));
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(5 * 60_000);
-    });
-    expect(getDemoGuideState().error).toBeNull();
-    expect(getDemoGuideState().phase).toBe("ask-waiting");
-  });
-
-  it("stops waiting once the round ended and the request never showed up", async () => {
-    await mount(client({}), demoState("ask-waiting", { askTurnEnded: true }));
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(89_000);
-    });
-    // 还没到时限：卡片仍然说「请求已发出」，不提前报警。
-    expect(getDemoGuideState().error).toBeNull();
-
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(3_000);
-    });
-    expect(getDemoGuideState().phase).toBe("ask-waiting");
-    expect(getDemoGuideState().error).toBe("协助请求没有发出去。");
-  });
-
-  it("clears the failure as soon as the request turns up after all", async () => {
-    const threads: { threads: ReturnType<typeof askThread>[] } = { threads: [] };
-    const collab = client({ assistThreads: vi.fn().mockImplementation(() => Promise.resolve(threads)) });
-    await mount(collab, demoState("ask-waiting", { askTurnEnded: true, error: "协助请求没有发出去。" }));
+  it("reads the request the guide sent, not the latest one in the project", async () => {
+    // 请求由引导自己建，id 已知：只认这一条，撤回或做完的那几条不会被当成本次的结果。
+    const assistThread = vi.fn().mockResolvedValue(askDetail("running", { requestId: "req-9", threadId: "thread-9" }));
+    const collab = client({ assistThread });
+    await mount(collab, demoState("ask-waiting", { askRequestId: "req-9", askThreadId: "thread-9" }));
     await act(async () => {
       await vi.advanceTimersByTimeAsync(2_000);
     });
-    expect(getDemoGuideState().error).toBe("协助请求没有发出去。");
-
-    // 请求晚一步才写进去：错误自己收起来，人不用卡在失败卡片上。
-    threads.threads = [askThread("pending")];
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(2_000);
-    });
+    expect(assistThread).toHaveBeenCalledWith("cloud-1", "thread-9");
+    // 还在跑：不能当成结果已回，也不能报错。
     expect(getDemoGuideState().error).toBeNull();
-    expect(getDemoGuideState().phase).toBe("ask-waiting");
-
-    // 结果回来了就接着往下走。
-    threads.threads = [askThread("done")];
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(2_000);
-    });
-    expect(getDemoGuideState().askDelivered).toBe(true);
-    expect(getDemoGuideState().error).toBeNull();
+    expect(getDemoGuideState().askDelivered).toBe(false);
   });
 
   it("counts a rejected request as a step that did not finish", async () => {
-    const threads = { threads: [askThread("pending")] };
-    const collab = client({ assistThreads: vi.fn().mockResolvedValue(threads) });
+    const assistThread = vi.fn().mockResolvedValue(askDetail("pending"));
+    const collab = client({ assistThread });
     await mount(collab, demoState("ask-waiting"));
     await act(async () => {
       await vi.advanceTimersByTimeAsync(2_000);
@@ -209,12 +213,22 @@ describe("the demo guide host", () => {
     expect(getDemoGuideState().error).toBeNull();
     expect(getDemoGuideState().askDelivered).toBe(false);
 
-    threads.threads = [askThread("failed")];
+    assistThread.mockResolvedValue(askDetail("failed"));
     await act(async () => {
       await vi.advanceTimersByTimeAsync(2_000);
     });
     expect(getDemoGuideState().error).toBe("协助请求没有发出去。");
     expect(getDemoGuideState().done.ask).toBe(false);
+  });
+
+  it("fails the step when the request it sent has disappeared", async () => {
+    // 请求被云端删掉（演示结束、清理）：这一步没有可等的结果，不能一直停在「已发出」。
+    const assistThread = vi.fn().mockResolvedValue(askDetail("running", { requestId: "req-other" }));
+    await mount(client({ assistThread }), demoState("ask-waiting"));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000);
+    });
+    expect(getDemoGuideState().error).toBe("协助请求没有发出去。");
   });
 
   it("waits for the person to allow the request instead of allowing it for her", async () => {
@@ -287,11 +301,28 @@ describe("the demo guide host", () => {
     expect(openTaskPage).not.toHaveBeenCalled();
   });
 
-  it("returns to the task once the person is done linking a task", async () => {
-    const openTaskPage = vi.fn();
-    await mount(client({}), demoState("ask-compose"), { route: "/collab", openTaskPage });
-    // 请成员协助要回到那条任务里发消息（看板没有输入框）。
-    expect(openTaskPage).toHaveBeenCalled();
+  it("opens the task the first step created when the asking screen starts", async () => {
+    // 第二步的输入框、请求卡片与结果都得在第一步那条任务里：只切路由不够，还要真的把它打开。
+    const openTask = vi.fn();
+    const openDraft = vi.fn();
+    await mount(client({}), demoState("ask-compose", { taskChatId: "chat-7" }), {
+      route: "/collab",
+      surface: { openTask, openDraft }
+    });
+    expect(openTask).toHaveBeenCalledWith("chat-7");
+    expect(openDraft).not.toHaveBeenCalled();
+  });
+
+  it("opens a draft in the demo project when the first step was skipped", async () => {
+    // 没有现成的任务：不要挂在用户当时打开的其他任务上，而是在演示项目里开一张新任务草稿。
+    const openTask = vi.fn();
+    const openDraft = vi.fn();
+    await mount(client({}), demoState("ask-compose", { taskChatId: null, skipped: { task: true, ask: false, help: false } }), {
+      route: "/main",
+      surface: { openTask, openDraft }
+    });
+    expect(openDraft).toHaveBeenCalledWith("local-1");
+    expect(openTask).not.toHaveBeenCalled();
   });
 
   it("drops back on the board once the completion dialog is closed", async () => {
@@ -421,5 +452,208 @@ describe("the demo guide host", () => {
     expect(getDemoGuideState().phase).toBe("reader");
     expect(openBoard).toHaveBeenCalledWith("local-1");
     expect(openTaskPage).not.toHaveBeenCalled();
+  });
+
+  it("takes back the request when the person skips the asking step", async () => {
+    // 跳过这一屏之后云端还在回放：不撤回来，那份结果照样会自己回到任务里。
+    const cancelAssist = vi.fn().mockResolvedValue({ id: "req-1", status: "cancelled" });
+    const collab = client({
+      assistThreads: vi.fn().mockResolvedValue({ threads: [askThread("running")] }),
+      cancelAssist
+    });
+    stubAnchor("conversation", { left: 100, top: 60, width: 1000, height: 620 });
+    await mount(collab, demoState("ask-waiting"));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000);
+    });
+
+    const skip = Array.from(document.querySelectorAll("button"))
+      .find((entry) => entry.textContent?.trim() === "跳过这一步");
+    expect(skip).toBeTruthy();
+    await act(async () => {
+      skip?.click();
+      await Promise.resolve();
+    });
+
+    expect(getDemoGuideState().phase).toBe("help-waiting");
+    expect(cancelAssist).toHaveBeenCalledWith("req-1");
+  });
+
+  it("says nothing when the skipped request could not be taken back", async () => {
+    // 撤不回来（已经跑完、本机接口不通）也不拦人：他已经跳过了，不必再弹一句。
+    const onNotice = vi.fn();
+    const collab = client({
+      assistThreads: vi.fn().mockResolvedValue({ threads: [askThread("running")] }),
+      cancelAssist: vi.fn().mockRejectedValue(new Error("boom"))
+    });
+    stubAnchor("conversation", { left: 100, top: 60, width: 1000, height: 620 });
+    await mount(collab, demoState("ask-waiting"), { onNotice });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000);
+    });
+    const skip = Array.from(document.querySelectorAll("button"))
+      .find((entry) => entry.textContent?.trim() === "跳过这一步");
+    await act(async () => {
+      skip?.click();
+      await Promise.resolve();
+    });
+    expect(getDemoGuideState().phase).toBe("help-waiting");
+    expect(onNotice).not.toHaveBeenCalled();
+  });
+
+  it("sends a fresh request straight away when the person retries the asking step", async () => {
+    // 再走一遍 Agent 只是重复同一段：重试直接新建一次请求，结果送回同一条任务。
+    const createAssistRequest = vi.fn().mockResolvedValue({ request: {}, threadId: "thread-new", text: "" });
+    const collab = client({ createAssistRequest });
+    stubAnchor("conversation", { left: 100, top: 60, width: 1000, height: 620 });
+    await mount(collab, demoState("ask-waiting", { error: "协助请求没有发出去。" }));
+
+    const retry = Array.from(document.querySelectorAll("button"))
+      .find((entry) => entry.textContent?.trim() === "再试一次");
+    expect(retry).toBeTruthy();
+    await act(async () => {
+      retry?.click();
+      await Promise.resolve();
+    });
+
+    expect(createAssistRequest).toHaveBeenCalledWith({
+      project: "cloud-1",
+      member: "9001",
+      title: "请小饭团查一下上次分享会一共来了多少人",
+      items: ["请小饭团查一下上次分享会一共来了多少人"],
+      sourceTask: "chat-1"
+    });
+    expect(getDemoGuideState().error).toBeNull();
+    expect(getDemoGuideState().askAttempt).toBe(2);
+  });
+
+  it("retries the first send from the card when it did not go out", async () => {
+    // 首次发送失败停在输入框那一屏：卡片给「再试一次」，点了就是同一条路再发一次。
+    const createAssistRequest = vi.fn().mockResolvedValue({ request: { id: "req-2" }, threadId: "thread-2", text: "" });
+    const collab = client({ createAssistRequest });
+    stubAnchor("composer", { left: 300, top: 600, width: 800, height: 120 });
+    await mount(collab, demoState("ask-compose", {
+      askSourceTask: "chat-1",
+      askRequestId: null,
+      askThreadId: null,
+      error: "协助请求没有发出去。"
+    }));
+
+    const retry = Array.from(document.querySelectorAll("button"))
+      .find((entry) => entry.textContent?.trim() === "再试一次");
+    expect(retry).toBeTruthy();
+    await act(async () => {
+      retry?.click();
+      await Promise.resolve();
+    });
+    expect(createAssistRequest).toHaveBeenCalledWith(expect.objectContaining({ sourceTask: "chat-1" }));
+    expect(getDemoGuideState().phase).toBe("ask-waiting");
+    expect(getDemoGuideState().askRequestId).toBe("req-2");
+  });
+
+  it("withdraws a request still hanging in running before it sends a fresh one", async () => {
+    // 超时时上一条还开着：云端不允许在它还在执行时重发，先撤回再建。
+    const order: string[] = [];
+    const cancelAssist = vi.fn().mockImplementation(() => {
+      order.push("cancel");
+      return Promise.resolve({});
+    });
+    const createAssistRequest = vi.fn().mockImplementation(() => {
+      order.push("create");
+      return Promise.resolve({ request: {}, threadId: "thread-new", text: "" });
+    });
+    const collab = client({
+      assistThreads: vi.fn().mockResolvedValue({ threads: [askThread("running", { requestId: "req-stuck" })] }),
+      assistThread: vi.fn().mockResolvedValue(askDetail("running", { requestId: "req-1" })),
+      cancelAssist,
+      createAssistRequest
+    });
+    stubAnchor("conversation", { left: 100, top: 60, width: 1000, height: 620 });
+    await mount(collab, demoState("ask-waiting"));
+    // 请求一直停在执行中：等过时限，卡片给出「再试一次」。
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(63_000);
+    });
+    expect(getDemoGuideState().error).toBe("等了太久还没有结果。");
+
+    const retry = Array.from(document.querySelectorAll("button"))
+      .find((entry) => entry.textContent?.trim() === "再试一次");
+    await act(async () => {
+      retry?.click();
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(cancelAssist).toHaveBeenCalledWith("req-stuck");
+    expect(order).toEqual(["cancel", "create"]);
+  });
+
+  it("treats a request that was stopped without the guide as unfinished", async () => {
+    const assistThread = vi.fn().mockResolvedValue(askDetail("running"));
+    const collab = client({ assistThread });
+    await mount(collab, demoState("ask-waiting"));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000);
+    });
+    expect(getDemoGuideState().askSeen).toBe(true);
+
+    // 不是引导撤回的、自己停下的：这一步确实没做成，给「再试一次」。
+    assistThread.mockResolvedValue(askDetail("stopped"));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000);
+    });
+    expect(getDemoGuideState().error).toBe("这次请求已经停止，没有拿到结果。");
+  });
+
+  it("gives up when this attempt's request never finishes", async () => {
+    const assistThread = vi.fn().mockResolvedValue(askDetail("running"));
+    const collab = client({ assistThread });
+    await mount(collab, demoState("ask-waiting"));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000);
+    });
+    // 回放一般十几秒就完：一直跑不完就不再干等。
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    expect(getDemoGuideState().error).toBeNull();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(40_000);
+    });
+    expect(getDemoGuideState().error).toBe("等了太久还没有结果。");
+    expect(getDemoGuideState().done.ask).toBe(false);
+  });
+
+  it("waits for the result to reach the task before calling the step finished", async () => {
+    // 云端写完结果不等于这一步做完了：结果要先送回那条任务（`deliveredAt`），
+    // 任务里那一轮 Agent 才开始接着回复。
+    const assistThread = vi.fn().mockResolvedValue(askDetail("running"));
+    const collab = client({ assistThread });
+    stubAnchor("conversation", { left: 100, top: 60, width: 1000, height: 620 });
+    await mount(collab, demoState("ask-waiting"));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000);
+    });
+
+    assistThread.mockResolvedValue(askDetail("done"));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000);
+    });
+    expect(getDemoGuideState().askDelivered).toBe(false);
+    expect(getDemoGuideState().phase).toBe("ask-waiting");
+
+    assistThread.mockResolvedValue(askDetail("done", { deliveredAt: "2026-11-14T07:00:05.000Z" }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000);
+    });
+    expect(getDemoGuideState().askDelivered).toBe(true);
+    // 送达之后还要等那一轮 Agent 结束：这一屏先留着，别抢在回复写完之前收尾。
+    expect(getDemoGuideState().phase).toBe("ask-waiting");
+
+    await act(async () => {
+      dispatchDemoGuide({ type: "agent-settled" });
+    });
+    expect(getDemoGuideState().phase).toBe("ask-done");
+    expect(getDemoGuideState().done.ask).toBe(true);
   });
 });

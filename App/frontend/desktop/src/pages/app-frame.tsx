@@ -44,6 +44,7 @@ import {
   subscribeCollabProjects
 } from "../app/collab-projects-store.js";
 import { collabEnabledFor } from "../app/collab-mode.js";
+import { registerDemoAskSurface } from "../app/collab-demo-ask.js";
 import { projectOperationErrorMessageKey } from "../app/project-operation-error.js";
 import { demoCleanupBaseline, demoSessionKey, demoTasksToRemove, removeDemoTasks } from "../app/collab-demo-cleanup.js";
 import {
@@ -408,14 +409,62 @@ export function AppFrame(props: AppFrameProps) {
   const { t, language } = useTranslation();
   const update = useOptionalUpdateCoordinator();
   const { track } = useAnalytics();
-  const taskStateCoordinator = useOptionalAgentRuntimeBridge()?.taskStateCoordinator
+  const runtimeBridge = useOptionalAgentRuntimeBridge();
+  const taskStateCoordinator = runtimeBridge?.taskStateCoordinator
     ?? standaloneRenderTaskStateCoordinator;
+  const ensureChatSubscription = runtimeBridge?.ensureChatSubscription;
   const taskBus = useTaskBus();
   const collabClient = useMemo(() => (clients ? createHttpCollabClient(clients.runtimeConfig) : null), [clients]);
   const collabSnapshot = useSyncExternalStore(subscribeCollabProjects, getCollabProjectsSnapshot, getCollabProjectsSnapshot);
   /** 协作项目只存在于账号模式：API Key 模式是纯本机环境，上一次登录的凭据不算数。 */
   const collabEnabled = collabEnabledFor(state.bootstrap?.app.userMode);
   const collabLoadedForAccount = useRef<string | null>(null);
+  /** 引导第二步要用到的最新一份界面状态与「新建任务」入口：注册一次，用到时现取。 */
+  const frameStateRef = useRef(state);
+  frameStateRef.current = state;
+  const openNewAgentRef = useRef(openNewAgent);
+  openNewAgentRef.current = openNewAgent;
+  /**
+   * 引导第二步的请求由引导自己发（见 `collab-demo-ask`）：挂在哪条任务上、第一步被跳过时新建哪条任务，
+   * 这两件只有应用根部知道，所以在这里注册。任务输入框的发送与卡片上的重试都从这里取。
+   */
+  useEffect(() => {
+    const memmyAgent = clients?.memmyAgent;
+    return registerDemoAskSurface({
+      async openTask(chatId) {
+        // 已经在它上面就什么都不做：别把正在看的滚动位置与输入框再加载一遍。
+        if (frameStateRef.current.agent.currentChatId === chatId) return false;
+        await openAgentTaskInChat({ memmyAgent, dispatch, task: { sessionKey: `websocket:${chatId}` } });
+        return true;
+      },
+      openDraft(localProjectId) {
+        openNewAgentRef.current({ kind: "project", projectId: localProjectId });
+      },
+      async createTask({ localProjectId, text }) {
+        if (!memmyAgent) return null;
+        const onlineProjectId = sharedProjectFor(getCollabProjectsSnapshot().projects, localProjectId)?.id ?? null;
+        try {
+          // 首条消息就是那句话，任务标题也是它：建任务这一步同样不走模型。
+          const seeded = await memmyAgent.seedWebuiChat({ userText: text, projectId: localProjectId, title: text });
+          ensureChatSubscription?.(seeded.chat_id);
+          // 普通新任务的默认做法：已共享的项目里新建的任务就共享给成员。
+          // 云端列表要认领到它，引导结束时也才能把它一并删掉。
+          if (collabClient && onlineProjectId) {
+            await collabClient.setTaskSharing(onlineProjectId, seeded.chat_id, true).catch(() => undefined);
+          }
+          taskStateCoordinator.refreshTaskState({
+            expectedChatId: seeded.chat_id,
+            reason: "new-chat",
+            state: frameStateRef.current.agent
+          });
+          await openAgentTaskInChat({ memmyAgent, dispatch, task: { sessionKey: seeded.session_key } });
+          return seeded.chat_id;
+        } catch {
+          return null;
+        }
+      }
+    });
+  }, [clients?.memmyAgent, collabClient, dispatch, taskStateCoordinator, ensureChatSubscription]);
   useEffect(() => {
     // Online projects need a signed-in account; loading once per account keeps the sidebar and the board in step.
     if (!collabClient || !collabEnabled || !state.account.userId) return;

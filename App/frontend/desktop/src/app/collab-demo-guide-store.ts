@@ -240,7 +240,9 @@ export function demoGuideWentBack(previous: DemoGuidePhase, next: DemoGuidePhase
  * 被撤回的请求回的）不能落在新的一屏上，否则人刚退回来就看到一句「这一步没有完成」。
  */
 export function demoGuideAcceptsFailure(phase: DemoGuidePhase): boolean {
+  // `ask-compose` 也算：第二步那个请求由引导直接发出，发不出去要当场说（不再等 Agent 那一轮）。
   return phase === "reply-waiting"
+    || phase === "ask-compose"
     || phase === "ask-waiting"
     || phase === "help-waiting"
     || phase === "help-running";
@@ -287,20 +289,32 @@ export interface DemoGuideState {
   done: { task: boolean; ask: boolean; help: boolean };
   /** 三步里跳过过哪几步，用来判断「都跳过」。 */
   skipped: { task: boolean; ask: boolean; help: boolean };
+  /** 第一步那条任务的会话 id：第二步的请求就挂在它上面，结果也回到这条任务。 */
+  taskChatId: string | null;
   /**
-   * 第二步那条协助请求是否已经在云端出现了。
+   * 第二步这次发出的请求是否已经建出来了。
    *
-   * 发送之后不代表请求就建出来了：Agent 要先调接口。请求出现之前不能说「已发出」，
-   * 否则人会觉得对方正在执行，其实连请求都还没建。
+   * 请求由引导直接创建（不再经 Agent 与 CLI），建出来就算「已发出」。
    */
   askSeen: boolean;
+  /**
+   * 第二步发出请求的那条任务。
+   *
+   * 请求在云端跑完之后，结果要送回这条任务（`sourceTask`）才有下文；「再试一次」新建请求时也靠它。
+   */
+  askSourceTask: string | null;
+  /**
+   * 第二步试到第几次：每发一次（含重试）加一。
+   *
+   * 撤回再重发、出错后重试，之前那几次留在云端的排查都不能算作这一次的结果，轮询按它重新计时。
+   */
+  askAttempt: number;
+  /** 第二步这次发出的请求 id：结果只认这一条。 */
+  askRequestId: string | null;
+  /** 这条请求所属的那次排查：轮询按它直接打开，不必再按「最新一条」猜。 */
+  askThreadId: string | null;
   /** 第二步的请求是否已经有结果回到了对话。 */
   askDelivered: boolean;
-  /**
-   * 第二步这一轮 Agent 已经结束。没有结果回来时，只有它说明「这句话已经执行完了」，
-   * 才允许判「协助请求没有发出去」：Agent 还在跑就不判失败。
-   */
-  askTurnEnded: boolean;
   /** 「关联会话」这一步的扫描进度：没扫出结果之前不给「下一步」。 */
   scan: DemoGuideScan;
   /** 输入框要预填的那句话；`nonce` 变一次填一次，填过的再读不会重复填。 */
@@ -362,11 +376,36 @@ export type DemoGuideEvent =
   | { type: "skip-join-entry" }
   | { type: "task-opened" }
   | { type: "task-continued"; prefill?: string }
-  | { type: "composer-sent" }
+  /**
+   * 第一步发出去了：记下那条任务。
+   *
+   * 第二步的请求与结果都挂在它上面（`sourceTask`）；这句话只由第一步的输入框发出。
+   */
+  | { type: "composer-sent"; sourceTask?: string | null }
   | { type: "agent-settled" }
   | { type: "assist-delivered" }
-  /** 第二步那条请求出现了（可能晚于「没有发出去」那句）：把错误收起来。 */
-  | { type: "assist-seen" }
+  /**
+   * 结果已经送回那条任务、那一轮 Agent 也已经空闲：兜底把第二步收尾。
+   *
+   * `agent-settled` 只在「这一轮从运行中变回空闲」时来；如果那一轮在送达之前就结束了、
+   * 送达之后也没有再起一轮，界面就在送达并空闲几秒之后补发这一条，免得卡片一直停在「已发出」。
+   */
+  | { type: "assist-settled" }
+  /** 第二步要发的那条请求已经有任务了：第一步那条，或引导刚为它新建的那条。 */
+  | { type: "ask-task"; chatId: string }
+  /**
+   * 第二步的请求已经建出来：记下它是哪一条。
+   *
+   * 之后只认这条请求的结果；之前撤回、失败、做完的那几条都不算本次。
+   */
+  | { type: "ask-sent"; requestId: string; threadId: string; sourceTask?: string | null }
+  /**
+   * 把输入框里那句话重新填一次。
+   *
+   * 进第二步时引导会先把那条任务打开：换任务会把已经填好的句子收回去，打开之后再填一次，
+   * 人就能在那条任务的输入框里直接点发送。
+   */
+  | { type: "refill" }
   | { type: "next"; prefill?: string }
   /**
    * 退回上一屏。
@@ -413,9 +452,13 @@ const IDLE: DemoGuideState = {
   error: null,
   done: { task: false, ask: false, help: false },
   skipped: { task: false, ask: false, help: false },
+  taskChatId: null,
   askSeen: false,
+  askSourceTask: null,
+  askAttempt: 0,
+  askRequestId: null,
+  askThreadId: null,
   askDelivered: false,
-  askTurnEnded: false,
   scan: { status: "idle", count: 0 },
   prefill: null,
   endReason: null,
@@ -446,21 +489,6 @@ export function demoGuideHeartbeatStep(phase: DemoGuidePhase): "1" | "2" | "3" |
   // 还没有进入体验段（建项目之前、加入提示窗、看板导览）：都算在第一步之前。
   if (step === null) return "1";
   return String(step) as "1" | "2" | "3";
-}
-
-/**
- * 第二步发送时要不要把执行提示一起交给 Agent：只有引导正等这一步的发送、并且输入框里还是引导写好的那句话
- * （用户没改过）时才算。改过就不追加，用户自己说的话原样发出去。
- */
-export function demoGuideSendsAssistHint(input: {
-  status: DemoGuideStatus;
-  phase: DemoGuidePhase;
-  typed: string;
-  sentence: string;
-}): boolean {
-  if (input.status !== "active" || input.phase !== "ask-compose") return false;
-  const sentence = input.sentence.trim();
-  return sentence.length > 0 && input.typed.trim() === sentence;
 }
 
 /** 引导的纯状态机：所有推进条件都在这里，界面只负责发事件与画卡片。 */
@@ -503,23 +531,43 @@ export function demoGuideReducer(state: DemoGuideState, event: DemoGuideEvent): 
         : state;
     case "composer-sent":
       if (state.status !== "active") return state;
-      if (state.phase === "compose") return { ...state, phase: "reply-waiting" };
-      if (state.phase === "ask-compose") {
-        return { ...state, phase: "ask-waiting", askSeen: false, askDelivered: false, askTurnEnded: false };
+      // 第一步发出去了：记下那条任务，第二步的请求就挂在它上面。
+      if (state.phase === "compose") {
+        return { ...state, phase: "reply-waiting", taskChatId: event.sourceTask ?? state.taskChatId };
       }
       return state;
+    case "ask-task":
+      // 请求已经有任务了：先记下来，建请求失败时「再试一次」还得挂回同一条。
+      if (state.status !== "active") return state;
+      if (state.phase !== "ask-compose" && state.phase !== "ask-waiting") return state;
+      return state.askSourceTask === event.chatId ? state : { ...state, askSourceTask: event.chatId };
+    case "refill":
+      // 只在这一屏重新填：那句话已经发出去、或已经离开这一步时不再往输入框里塞。
+      if (state.status !== "active" || state.phase !== "ask-compose" || !state.prefill) return state;
+      return { ...state, prefill: { text: state.prefill.text, nonce: state.prefill.nonce + 1 } };
+    case "ask-sent":
+      // 请求建出来了：进入等结果，并记下本次只认哪一条。
+      if (state.status !== "active") return state;
+      if (state.phase !== "ask-compose" && state.phase !== "ask-waiting") return state;
+      return {
+        ...state,
+        phase: "ask-waiting",
+        error: null,
+        askSeen: true,
+        askDelivered: false,
+        askRequestId: event.requestId,
+        askThreadId: event.threadId,
+        // 记下这条任务：「再试一次」新建的请求也要把结果送回同一条。
+        askSourceTask: event.sourceTask ?? state.askSourceTask,
+        // 换一次尝试：之前撤回或失败的那几条排查不再算「本次」。
+        askAttempt: state.askAttempt + 1
+      };
     case "assist-delivered":
       // 结果回来了就是这一步成了：之前那句「没有完成」随之收起。
-      return state.status === "active" && state.phase === "ask-waiting"
-        ? { ...state, askDelivered: true, error: null }
-        : state;
-    case "assist-seen":
-      // 请求出现了（先一步出现、或 CLI 慢一步晚到）：记下它已经在云端，卡片才能说「已发出」；
-      // 之前若报过「没有发出去」，那句也一并收起，人不用卡在失败卡片上。
-      // 轮询每拍都会读到同一条请求：已经记过又没有错误时不换状态对象，订阅方不必跟着重画。
+      // 轮询每拍都会读到同一条已经送达的请求：记过又没有错误时不换状态对象，订阅方不必跟着重画。
       if (state.status !== "active" || state.phase !== "ask-waiting") return state;
-      if (state.askSeen && state.error === null) return state;
-      return { ...state, askSeen: true, error: null };
+      if (state.askDelivered && state.error === null) return state;
+      return { ...state, askDelivered: true, error: null };
     case "agent-settled":
       if (state.status !== "active") return state;
       // 第二步的结果回来之后 Agent 还要再回一句：那时才给「下一步」。
@@ -532,21 +580,13 @@ export function demoGuideReducer(state: DemoGuideState, event: DemoGuideEvent): 
           skipped: { ...state.skipped, task: false }
         };
       }
-      if (state.phase === "ask-waiting" && state.askDelivered) {
-        // 这一步完成就把那句话从状态里拿掉：之后即使任务页重新挂载，也不会再把旧的那句填回输入框。
-        return {
-          ...state,
-          phase: "ask-done",
-          done: { ...state.done, ask: true },
-          skipped: { ...state.skipped, ask: false },
-          prefill: null
-        };
-      }
-      // 结果还没回来但这一轮已经跑完：从这一刻起才有资格判「没发出去」。
-      if (state.phase === "ask-waiting" && !state.askTurnEnded) {
-        return { ...state, askTurnEnded: true };
-      }
+      if (state.phase === "ask-waiting" && state.askDelivered) return askDone(state);
       return state;
+    case "assist-settled":
+      // 兜底收尾：只在结果真的已经送回那条任务时成立，别把「还在等结果」当成做完。
+      return state.status === "active" && state.phase === "ask-waiting" && state.askDelivered
+        ? askDone(state)
+        : state;
     case "next":
       if (state.status !== "active") return state;
       // 建项目之前的六屏：一屏一屏往下走；最后一屏靠人点真实的「创建项目」，没有「下一步」。
@@ -686,7 +726,9 @@ export function demoGuideReducer(state: DemoGuideState, event: DemoGuideEvent): 
       if (!demoGuideAcceptsFailure(state.phase)) return state;
       return state.status === "active" && state.error !== event.reason ? { ...state, error: event.reason } : state;
     case "retry":
-      return state.status === "active" && state.error !== null ? { ...state, error: null } : state;
+      // 只把错误收起来：第二步真的重发由「引导直接新建一条请求」完成，新请求建出来时再换一次尝试。
+      if (state.status !== "active" || state.error === null) return state;
+      return { ...state, error: null };
     case "cloud-ended":
       return { ...state, status: "ended", phase: "complete", endReason: "left", prefill: null, cloudEnded: true };
     case "end":
@@ -696,6 +738,21 @@ export function demoGuideReducer(state: DemoGuideState, event: DemoGuideEvent): 
     default:
       return state;
   }
+}
+
+/**
+ * 第二步收尾：结果已经回到那条任务，这一步就算做成了。
+ *
+ * 那句话也一并从状态里拿掉：之后即使任务页重新挂载，也不会再把旧的那句填回输入框。
+ */
+function askDone(state: DemoGuideState): DemoGuideState {
+  return {
+    ...state,
+    phase: "ask-done",
+    done: { ...state.done, ask: true },
+    skipped: { ...state.skipped, ask: false },
+    prefill: null
+  };
 }
 
 /**
@@ -717,15 +774,15 @@ function finishOrSkip(state: DemoGuideState, done: { help: boolean; allSkipped?:
 /**
  * 「跳过这一步」跳掉的那一屏背后，有没有一轮 Agent 在干活。
  *
- * 三屏算有：`reply-waiting`（等第一步的回复）、`ask-compose` / `ask-waiting`（等第二步把请求写出来、发出去）。
- * 其余屏要么还没有 Agent 在跑（`compose` 只是输入框里预填一句话），要么已经办成（`reply-done` / `ask-done`），
- * 要么跑在对方电脑上（`help-running`）。这一屏被跳过就要把那一轮停掉，否则内容会继续写进对话、
- * 请求会继续发出去——人看到的是「我点了跳过，它还在干」。
+ * 两屏算有：`reply-waiting`（等第一步的回复）、`ask-waiting`（第二步的请求已经在云端跑，本机可能在写结果）。
+ * 其余屏要么还没有 Agent 在跑（`compose`、`ask-compose` 只是输入框里预填一句话），要么已经办成
+ * （`reply-done` / `ask-done`），要么跑在对方电脑上（`help-running`）。这一屏被跳过就要把那一轮停掉，
+ * 否则内容会继续写进对话——人看到的是「我点了跳过，它还在干」。
  *
  * 按 `skipped` 的翻转判断而不是「哪一屏跳到哪一屏」：跳过的落点各不相同（第一步落到 `ask-compose`、
  * 第二步落到 `help-waiting`、第三步直接收场），而翻转只有一个来源。
  */
-const DEMO_GUIDE_RUNNING_PHASES: DemoGuidePhase[] = ["reply-waiting", "ask-compose", "ask-waiting"];
+const DEMO_GUIDE_RUNNING_PHASES: DemoGuidePhase[] = ["reply-waiting", "ask-waiting"];
 
 export function demoGuideSkipStopsTurn(
   previous: DemoGuidePhase,
@@ -901,7 +958,9 @@ export function startDemoGuide(input: DemoGuideStart): void {
       projectId: input.projectId,
       localProjectId: input.localProjectId,
       memberUserId: input.memberUserId,
-      memberName: input.memberName
+      memberName: input.memberName,
+      // 剧本里的那几句话也跟着进来：漏了它，云端下发的内容到不了界面，卡片永远说兜底那一套。
+      copy: input.copy ?? null
     }
   });
   startHeartbeat();

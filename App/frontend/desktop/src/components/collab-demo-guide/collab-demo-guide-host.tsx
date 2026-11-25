@@ -10,6 +10,12 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { CollabClient } from "../../api/collab-client.js";
 import { requestAssistFocus } from "../../app/collab-assist-focus.js";
+import {
+  cancelDemoAskRequest,
+  demoAskStatusIsOpen,
+  openDemoAskTask,
+  startDemoGuideAsk
+} from "../../app/collab-demo-ask.js";
 import { requestDemoGuideInvite } from "../../app/collab-demo-guide-invite.js";
 import {
   demoGuideBackTarget,
@@ -33,12 +39,12 @@ export const DEMO_GUIDE_POLL_MS = 1_500;
 const HELP_REQUEST_TIMEOUT_MS = 30_000;
 
 /**
- * 第二步等结果的时限：这么久本项目里还没有「我发起、执行人是演示成员」的请求，才可能说明这次没发出去。
+ * 第二步本次请求建出来之后的时限：这么久还没有结果就不再干等。
  *
- * 光有时限不够：Agent 还在跑（CLI 还没执行完）时请求本来就还没写进去，那时判失败就是误报。
- * 所以两个条件都要满足：这一轮 Agent 已经结束、并且超过这项时限仍然没有请求。
+ * 云端回放一般十几秒写完，本机每 5 秒送回一次，合起来远不到这里的时限。
  */
-const ASK_RESULT_TIMEOUT_MS = 90_000;
+export const ASK_FINISH_TIMEOUT_MS = 60_000;
+
 
 export function CollabDemoGuideHost(props: {
   collab: CollabClient | null;
@@ -67,8 +73,8 @@ export function CollabDemoGuideHost(props: {
   /** 第三步那条请求的 id：允许之后去那条任务，完成时回看板要展开的就是它。 */
   const helpThreadRef = useRef<string | null>(null);
   const helpSinceRef = useRef<number | null>(null);
-  /** 第二步从「请求已发出」算起，等这么久没有那条请求就按失败处理。 */
-  const askSinceRef = useRef<number | null>(null);
+  /** 本次那条请求第一次读到的时间：等够时限还没有结果就不再干等。 */
+  const askRequestSinceRef = useRef<{ id: string; at: number } | null>(null);
   /** 演示是否带着一个云端项目：从有到无（完成 / 退出 / 离开 / 心跳超时）要立刻把看板数据重读一遍。 */
   const demoOwnedProjectRef = useRef(false);
   /** 云端说演示已结束时已经提示过，避免每次重画都再提示一次。 */
@@ -119,8 +125,7 @@ export function CollabDemoGuideHost(props: {
     };
   }, [state.status]);
 
-  // 体验段才需要换页面：第一步（接续成员的任务）在任务页里，第二步（请成员协助）要回任务发消息，
-  // 第三步从看板的项目设置开始。看板导览全程停在同一个看板上，不在这里换任何页面。
+  // 第二步要回那条任务里发：第一步留下的任务，或第一步被跳过时新开的一张演示项目草稿。
   // 每个阶段只拉一次：人自己走开一下再回来，不至于被反复拽回去。
   const navigatedPhaseRef = useRef<string | null>(null);
   useEffect(() => {
@@ -128,12 +133,16 @@ export function CollabDemoGuideHost(props: {
       navigatedPhaseRef.current = null;
       return;
     }
-    // 第二步（请成员协助）要回到任务里发消息：从看板上过来时把对话页拉回来。
-    if (state.phase === "ask-compose" && props.route === "/collab" && navigatedPhaseRef.current !== "ask-compose") {
+    // 第二步的输入框、请求卡片与结果都得在那条任务里：只切路由不够，还要把那条任务真的打开。
+    // 换任务会把已经填好的那句话收回去，所以打开之后补填一次。
+    if (state.phase === "ask-compose" && navigatedPhaseRef.current !== "ask-compose") {
       navigatedPhaseRef.current = "ask-compose";
-      openTaskPageRef.current();
+      void openDemoAskTask({ taskChatId: state.taskChatId, localProjectId: state.localProjectId })
+        .then((opened) => {
+          if (opened) dispatchDemoGuide({ type: "refill" });
+        });
     }
-  }, [state.status, state.phase, state.localProjectId, props.route]);
+  }, [state.status, state.phase, state.taskChatId, state.localProjectId]);
 
   // 第二步（请成员协助）结束后回到看板：第三步那条请求要人在看板上接。
   // 只看「等请求」刚出现的那一拍：人自己走开一下再回来，不至于被反复拽回去。
@@ -159,37 +168,41 @@ export function CollabDemoGuideHost(props: {
     const client = props.collab;
     const projectId = state.projectId;
     const memberUserId = state.memberUserId;
-    /** 这一轮 Agent 是否已经结束：没结束就不判「没发出去」。 */
-    const askTurnEnded = state.askTurnEnded;
+    /** 第二步本次发出的那条请求：只认它，不再按「最新的那次排查」猜。 */
+    const askRequestId = state.askRequestId;
+    const askThreadId = state.askThreadId;
     let cancelled = false;
 
-    /** 第二步：本项目里由我发起、执行人是演示成员的那次协助有了结果。 */
-    const readAskOutcome = async () => {
-      const listing = await client.assistThreads(projectId);
-      const thread = listing.threads.find((item) => (
-        item.requester.mine && item.executor.userId === memberUserId
-      ));
-      const latest = thread?.requests[0];
+    /** 第二步：引导自己发出的那条请求跑到哪一步了。 */
+    const readAskOutcome = async (requestId: string, threadId: string) => {
+      const detail = await client.assistThread(projectId, threadId);
+      const latest = detail.thread.requests.find((item) => item.id === requestId);
       if (!latest) {
-        // 一直没有那条请求：Agent 还在跑时绝不判失败，只有这一轮已经结束、又过了时限，才说没发出去。
-        const started = askSinceRef.current ?? Date.now();
-        askSinceRef.current = started;
-        if (askTurnEnded && Date.now() - started > ASK_RESULT_TIMEOUT_MS) {
-          dispatchDemoGuide({ type: "fail", reason: t("collab.demo.failed.request") });
-        }
-        return;
-      }
-      askSinceRef.current = null;
-      // 请求后来才出现的（之前已经报过「没有发出去」）：先把那句错误收起来，不要卡在失败卡片上。
-      dispatchDemoGuide({ type: "assist-seen" });
-      if (latest.status === "done") {
-        dispatchDemoGuide({ type: "assist-delivered" });
-        return;
-      }
-      // `cancelled` 不在这里：那是引导自己撤回的那一条（人点了「上一步」），不算这一步没做成。
-      if (latest.status === "rejected" || latest.status === "failed" || latest.status === "expired") {
-        // 真的被拒或执行失败：这才是这一步确实没完成。
+        // 这条请求找不到了（演示结束、云端清理）：这一步没有可等的结果。
         dispatchDemoGuide({ type: "fail", reason: t("collab.demo.failed.request") });
+        return;
+      }
+      const seen = askRequestSinceRef.current;
+      // 本次这条请求第一次被读到：记下时间，时限从这里算。
+      const first = seen?.id !== latest.id;
+      const since = first ? Date.now() : seen!.at;
+      askRequestSinceRef.current = { id: latest.id, at: since };
+      if (latest.status === "done") {
+        // 写完不算这一步成了：本机每 5 秒把结果送回那条任务，送达之后 `deliveredAt` 才有值，
+        // 任务里那一轮 Agent 也才开始接着回复。送达是「结果真的到了」的证据。
+        if (latest.deliveredAt) dispatchDemoGuide({ type: "assist-delivered" });
+      } else if (!demoAskStatusIsOpen(latest.status)) {
+        // 已经结束、却不是带着结果结束的：撤回的、被停下的、被拒的、失败的、过期的，都不是这一步做成了。
+        const stopped = latest.status === "stopped" || latest.status === "cancelled";
+        dispatchDemoGuide({
+          type: "fail",
+          reason: t(stopped ? "collab.demo.failed.stopped" : "collab.demo.failed.request")
+        });
+        return;
+      }
+      // 回放一般十几秒就完：迟迟没有结果就不再干等，也不把已经送达的那一轮当成超时。
+      if (!latest.deliveredAt && Date.now() - since > ASK_FINISH_TIMEOUT_MS) {
+        dispatchDemoGuide({ type: "fail", reason: t("collab.demo.failed.timeout") });
       }
     };
 
@@ -247,8 +260,10 @@ export function CollabDemoGuideHost(props: {
 
     const run = async () => {
       try {
-        if (phase === "ask-waiting") await readAskOutcome();
-        else if (phase === "help-waiting") await readHelpRequest();
+        if (phase === "ask-waiting") {
+          // 没有记下具体是哪条请求就不猜：请求只由引导自己建，没记到就是还没发出去。
+          if (askRequestId && askThreadId) await readAskOutcome(askRequestId, askThreadId);
+        } else if (phase === "help-waiting") await readHelpRequest();
         else await readHelp();
       } catch {
         // 本机接口短暂不可用：下一轮再读。
@@ -265,7 +280,7 @@ export function CollabDemoGuideHost(props: {
       cancelled = true;
       clearInterval(timer);
     };
-  }, [state.status, state.phase, state.projectId, state.memberUserId, state.localProjectId, state.memberName, state.askTurnEnded, props.collab, t]);
+  }, [state.status, state.phase, state.projectId, state.memberUserId, state.localProjectId, state.memberName, state.askRequestId, state.askThreadId, props.collab, t]);
 
   /**
    * 演示带着一个云端项目、随后收场（完成 / 退出 / 离开 / 心跳超时）：立刻重读项目列表，
@@ -288,15 +303,19 @@ export function CollabDemoGuideHost(props: {
     noticeRef.current(t("collab.demo.ended"));
   }, [state.cloudEnded, t]);
 
-  // 换了一步就重新计时：第二步从请求发出算起，第三步从「开启接收」之后算起。
+  // 换了一步就重新计时：第三步从「开启接收」之后算起。
   // 重试（清掉 error）同样重新计一次：不然刚点完重试就立刻又报同一句。
   useEffect(() => {
     helpSinceRef.current = null;
-    askSinceRef.current = null;
   }, [state.phase, state.error]);
 
-  // 第二句只预填用户看到的那一句话；执行提示在发送时单独追加给 Agent（见 home-page）。
-  // 那句话里「请某某做什么」由云端剧本给，不在这边另写一份。
+  // 换了这一屏、或第二步又发了一次：上一条请求的出现时间不再算数。
+  // 不跟 error 一起清：报了「等了太久」之后每拍还会读到同一条请求，清了就等于从头再等一遍。
+  useEffect(() => {
+    askRequestSinceRef.current = null;
+  }, [state.phase, state.askAttempt]);
+
+  // 第二句只预填用户看到的那一句话：那句话里「请某某做什么」由云端剧本给，不在这边另写一份。
   const askPrefill = () => t("collab.demo.prefill.ask", { name: state.memberName, ask: state.copy.askSentence });
 
   /** 退回上一屏时要重新填进输入框的那句话：退到哪一屏就给哪一屏的句子，其余屏不带。 */
@@ -308,6 +327,38 @@ export function CollabDemoGuideHost(props: {
   };
 
   /**
+   * 撤回第二步已经发出去的那条请求。
+   *
+   * @param tellWhenFailed 没撤回来时要不要说一声：人点「上一步」要告诉他可能已经发出去了，
+   *   点「跳过这一步」则不必再拦一下。
+   */
+  const recallAskRequest = async (tellWhenFailed: boolean) => {
+    const client = props.collab;
+    const projectId = state.projectId;
+    const memberUserId = state.memberUserId;
+    if (!client || !projectId || !memberUserId) return;
+    const cancelled = await cancelDemoAskRequest(client, projectId, memberUserId);
+    // 撤不回来（已经跑完、本机接口不通）就实说，不要装作已经收回去了。
+    if (!cancelled && tellWhenFailed) setNotice(t("collab.demo.recallFailed"));
+  };
+
+  /**
+   * 第二步出错后直接重新发起一次请求，与首次发送走同一条路（见 `collab-demo-ask`）。
+   *
+   * 撤回后的重发本来就是白发的，回放没有成本，所以可以再发一次；任务仍是已经记下的那一条，
+   * 结果会送回同一条任务，跟第一次发出去的效果一样。
+   */
+  const retryAsk = async () => {
+    const client = props.collab;
+    if (!client) return;
+    await startDemoGuideAsk({
+      client,
+      sentence: askPrefill(),
+      failureReason: t("collab.demo.failed.request")
+    });
+  };
+
+  /**
    * 退回上一屏时把这一步已经做出去的事收回来，并把页面/弹窗恢复到那一屏该有的样子。
    *
    * 先换屏再收回：收回都是异步的，屏幕上不该先闪一句「正在停止」。
@@ -315,9 +366,6 @@ export function CollabDemoGuideHost(props: {
    */
   const onBack = () => {
     const phase = state.phase;
-    const projectId = state.projectId;
-    const memberUserId = state.memberUserId;
-    const client = props.collab;
     const target = demoGuideBackTarget(state);
     dispatchDemoGuide({ type: "back", prefill: backPrefill() });
     // 退回去的那一屏在哪个页面，就先把人放回那个页面：任务里的屏留在看板上、看板上的屏留在任务页，
@@ -329,13 +377,9 @@ export function CollabDemoGuideHost(props: {
         openBoardRef.current(state.localProjectId);
       }
     }
-    if (!client || !projectId) return;
-    // 第二步的请求已经建出来了：撤回来。不撤的话小饭团照样去执行，人重发一次就执行两遍。
-    if (phase === "ask-waiting" && memberUserId) {
-      void cancelAskRequest(client, projectId, memberUserId).then((cancelled) => {
-        // 撤不回来（对方已经接了）就实说，不要装作已经收回去了。
-        if (!cancelled) setNotice(t("collab.demo.recallFailed"));
-      });
+    // 第二步的请求已经建出来了：撤回来。不撤的话云端照样把结果写回去，人重发一次就多一份。
+    if (phase === "ask-waiting") {
+      void recallAskRequest(true);
       return;
     }
     // 「接收协助请求」不在这里收回：它默认就是开着的（第三步等请求时会补开一次），
@@ -358,17 +402,30 @@ export function CollabDemoGuideHost(props: {
             prefill: state.phase === "reply-done" ? askPrefill() : undefined
           });
       }}
-      onSkip={() => dispatchDemoGuide(state.phase === "tour-associate-pick"
-        // 「关联会话」不是一步，而是导览里的一站：跳过它只往下一站走，不结束整轮演示。
-        ? { type: "pass" }
-        : {
-          type: "skip",
-          // 跳过第一步就直接去请成员协助：那句话要跟着填上。导览段与后两步都不预填。
-          prefill: demoGuideStepNumberOf(state.phase) === 1 ? askPrefill() : undefined
-        })}
+      onSkip={() => {
+        const phase = state.phase;
+        dispatchDemoGuide(phase === "tour-associate-pick"
+          // 「关联会话」不是一步，而是导览里的一站：跳过它只往下一站走，不结束整轮演示。
+          ? { type: "pass" }
+          : {
+            type: "skip",
+            // 跳过第一步就直接去请成员协助：那句话要跟着填上。导览段与后两步都不预填。
+            prefill: demoGuideStepNumberOf(phase) === 1 ? askPrefill() : undefined
+          });
+        // 第二步的请求可能已经在云端跑：一并撤回来，不撤的话那份结果还会自己回到任务里。
+        // 撤不回来也不必拦人，他已经跳过了。
+        if (phase === "ask-compose" || phase === "ask-waiting") void recallAskRequest(false);
+      }}
       onGrant={() => dispatchDemoGuide({ type: "grant-access" })}
       onExit={() => void endDemoGuide("exited")}
-      onRetry={() => dispatchDemoGuide({ type: "retry" })}
+      onRetry={() => {
+        // 第二步出错后直接重发一次请求：与首次发送同一条路，回放没有成本。
+        if (state.phase === "ask-compose" || state.phase === "ask-waiting") {
+          void retryAsk();
+          return;
+        }
+        dispatchDemoGuide({ type: "retry" });
+      }}
       onCloseComplete={() => {
         // 完成弹窗关掉：回这个项目的看板。
         // 不再展开那次协助的详情：演示一收场，小饭团的会话与协助记录都会删掉，
@@ -394,34 +451,6 @@ export function useDemoGuideActiveFor(localProjectId: string | null): boolean {
   const state = useSyncExternalStore(subscribeDemoGuide, getDemoGuideState, getDemoGuideState);
   if (!localProjectId || state.status !== "active") return false;
   return state.localProjectId === localProjectId;
-}
-
-/**
- * 撤回第二步已经发出去的那条协助请求。
- *
- * 返回 false 表示没撤回来（对方已经接了、已经开始执行、或云端不允许撤）：
- * 那时界面要说「已经发出去了」，不能当作撤回成功。
- * 根本没建出请求（Agent 还没跑到那一步）也算收回成功：没有东西留在对方那边。
- */
-async function cancelAskRequest(client: CollabClient, projectId: string, memberUserId: string): Promise<boolean> {
-  let requestId: string | null = null;
-  try {
-    const listing = await client.assistThreads(projectId);
-    const thread = listing.threads.find((item) => item.requester.mine && item.executor.userId === memberUserId);
-    const latest = thread?.requests[0];
-    if (!latest) return true;
-    if (latest.status !== "pending" && latest.status !== "running" && latest.status !== "confirm") return true;
-    requestId = latest.id;
-  } catch {
-    // 读不到就没法确认对方已经动手：按没撤回来处理，让人知道可能已经发出去了。
-    return false;
-  }
-  try {
-    await client.cancelAssist(requestId);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 /** 全局是否在演示中：其他大卡与提示据此不出现。 */

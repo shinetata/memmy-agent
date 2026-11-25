@@ -82,6 +82,8 @@ export function ComposerHighlightedTextarea(props: {
   placeholder?: string;
   rows?: number;
   highlightedCommands?: readonly string[];
+  /** 只读：值由界面写好，人只能用键盘切换焦点与按发送，不能改里面的字。 */
+  readOnly?: boolean;
   textareaRef?: Ref<HTMLTextAreaElement>;
   onChange?: ChangeEventHandler<HTMLTextAreaElement>;
   onKeyDown?: KeyboardEventHandler<HTMLTextAreaElement>;
@@ -172,6 +174,7 @@ export function ComposerHighlightedTextarea(props: {
         placeholder={props.placeholder}
         rows={props.rows}
         style={props.style}
+        readOnly={props.readOnly}
         onChange={props.onChange}
         onKeyDown={handleKeyDown}
         onPaste={props.onPaste}
