@@ -66,7 +66,8 @@ describe("local session reader", () => {
         return windowed.scan(options);
       }
     };
-    const reader = readerWith([counted]);
+    // 每源条数在这里固定成 30：这个用例盯的是「窗口只扫一遍」，不是默认值。
+    const reader = createLocalSessionReader({ registry: createSourceRegistry([counted]), snapshotTtlMs: 0, sessionsPerSource: 30 });
 
     const { sessions } = await reader.available({ limit: 30 });
 
@@ -182,6 +183,37 @@ describe("local session reader", () => {
 
     await expect(reader.readMany({ sourceId: "codex", conversationIds: Array.from({ length: 51 }, (_, index) => `x-${index}`) }))
       .rejects.toThrow(/At most 50/u);
+  });
+
+  it("tells an archived session apart from one that is gone, without walking the store", async () => {
+    const scanned: number[] = [];
+    const adapter: SourceAdapter = {
+      descriptor: { sourceId: "codex", displayName: "Codex", builtin: true, dataPath: "/fake/codex" },
+      detect: async () => true,
+      scan: async function* (options) {
+        scanned.push(options.maxScanTargets ?? 0);
+        yield message("codex", "c-live", "user", "明文会话里的问题", "2026-10-21T08:00:00.000Z", "/repo");
+      }
+    };
+    const reader = createLocalSessionReader({
+      registry: createSourceRegistry([adapter]),
+      snapshotTtlMs: 0,
+      // 索引知道这条只剩压缩存档；「不存在」的那条返回 null。
+      locateSessionFile: async (sourceId, conversationId) => {
+        if (sourceId !== "codex") return null;
+        return conversationId === "c-old" ? { path: "/does/not/matter.jsonl.zst", archived: true } : null;
+      }
+    });
+
+    // 存档：明确说清是压缩存档读不出内容，而不是「本机已找不到该任务」。
+    await expect(reader.read({ sourceId: "codex", conversationId: "c-old" })).rejects.toMatchObject({
+      code: "toolkit_unsupported"
+    });
+    // 批量读取把存档单列，其余照常读；存档不必进扫描，扫描也读不到它。
+    const batch = await reader.readMany({ sourceId: "codex", conversationIds: ["c-old", "c-live"] });
+    expect(batch.archived).toEqual(["c-old"]);
+    expect(batch.sessions.map((session) => session.conversationId)).toEqual(["c-live"]);
+    expect(scanned).toEqual([100]);
   });
 
   it("strips host-injected blocks and automation ids from titles", () => {

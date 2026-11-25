@@ -10,6 +10,8 @@ import { discoverClaudeCodeSessions } from "@memmy/agent-source-readers/adapters
 import { discoverCodexSessions } from "@memmy/agent-source-readers/adapters/codex/session-discovery";
 import { readJsonlObjects } from "@memmy/agent-source-readers/adapters/jsonl-lines";
 import { readJsonlSessionTitle } from "@memmy/agent-source-readers/adapters/jsonl-session-title";
+import { stat } from "node:fs/promises";
+import type { FileTitleCache } from "./file-facts-cache.js";
 import { extractWorkbuddyMessage } from "@memmy/agent-source-readers/adapters/workbuddy/history-reader";
 import { discoverWorkbuddySessions } from "@memmy/agent-source-readers/adapters/workbuddy/session-discovery";
 import type { SourceAdapter } from "@memmy/agent-source-readers/adapters/types";
@@ -27,13 +29,21 @@ export interface JsonlMetadataPlan {
   files: JsonlSessionFile[];
 }
 
-/** Returns how to list this agent's sessions from metadata, or `null` when it has no such path. */
-export async function planJsonlSessions(adapter: SourceAdapter, window: number): Promise<JsonlMetadataPlan | null> {
+/**
+ * Returns how to list this agent's sessions from metadata, or `null` when it has no such path.
+ *
+ * @param titles 上次读出的标题；给了就只对文件有变化的会话重读标题。
+ */
+export async function planJsonlSessions(
+  adapter: SourceAdapter,
+  window: number,
+  titles?: FileTitleCache
+): Promise<JsonlMetadataPlan | null> {
   switch (adapter.descriptor.sourceId) {
     case CLAUDE_CODE_SOURCE_ID:
-      return planClaudeCode(adapter, window);
+      return planClaudeCode(adapter, window, titles);
     case WORKBUDDY_SOURCE_ID:
-      return planWorkbuddy(adapter, window);
+      return planWorkbuddy(adapter, window, titles);
     case CODEX_SOURCE_ID:
       return planCodex(adapter, window);
     default:
@@ -41,7 +51,34 @@ export async function planJsonlSessions(adapter: SourceAdapter, window: number):
   }
 }
 
-async function planClaudeCode(adapter: SourceAdapter, window: number): Promise<JsonlMetadataPlan> {
+/**
+ * 会话标题：读过的按文件状态缓存。
+ *
+ * <p>标题写在会话文件末尾（Claude Code 是 `custom-title`，WorkBuddy 是 `ai-title`），读一次要翻最多 1MB；
+ * 而这批文件在 122 个规模上每次扫描都重读，就是一百多兆。文件没变时标题也不会变——标题同样是追加写的。</p>
+ */
+async function readTitleCached(filePath: string, titles: FileTitleCache | undefined): Promise<string | null> {
+  if (!titles) return readJsonlSessionTitle(filePath);
+  let size = 0;
+  let mtimeMs = 0;
+  try {
+    const info = await stat(filePath);
+    if (!info.isFile()) return readJsonlSessionTitle(filePath);
+    size = info.size;
+    mtimeMs = info.mtimeMs;
+  } catch {
+    return readJsonlSessionTitle(filePath);
+  }
+  const cached = titles.get(filePath);
+  if (cached && cached.size === size && cached.mtimeMs === mtimeMs) {
+    return cached.title;
+  }
+  const title = await readJsonlSessionTitle(filePath);
+  titles.set(filePath, { size, mtimeMs, title });
+  return title;
+}
+
+async function planClaudeCode(adapter: SourceAdapter, window: number, titles?: FileTitleCache): Promise<JsonlMetadataPlan> {
   const sessions = await discoverClaudeCodeSessions({
     root: adapter.descriptor.dataPath,
     order: "recent_first",
@@ -51,7 +88,7 @@ async function planClaudeCode(adapter: SourceAdapter, window: number): Promise<J
     sessionFilePath: session.sessionFilePath,
     workspacePath: session.workspacePath,
     // The name a person sees in Claude Code lives in its own title record, read the way the scan reads it.
-    title: await readJsonlSessionTitle(session.sessionFilePath)
+    title: await readTitleCached(session.sessionFilePath, titles)
   })));
   return {
     source: {
@@ -67,7 +104,7 @@ async function planClaudeCode(adapter: SourceAdapter, window: number): Promise<J
   };
 }
 
-async function planWorkbuddy(adapter: SourceAdapter, window: number): Promise<JsonlMetadataPlan> {
+async function planWorkbuddy(adapter: SourceAdapter, window: number, titles?: FileTitleCache): Promise<JsonlMetadataPlan> {
   const sessions = await discoverWorkbuddySessions({
     projectsRoot: adapter.descriptor.dataPath,
     order: "recent_first",
@@ -78,7 +115,7 @@ async function planWorkbuddy(adapter: SourceAdapter, window: number): Promise<Js
   const files = await Promise.all(sessions.map(async (session) => ({
     sessionFilePath: session.sessionFilePath,
     workspacePath: session.workspacePath,
-    title: await readWorkbuddyTitle(session.sessionFilePath)
+    title: await readWorkbuddyTitleCached(session.sessionFilePath, titles)
   })));
   return {
     source: {
@@ -96,6 +133,23 @@ async function planWorkbuddy(adapter: SourceAdapter, window: number): Promise<Js
     },
     files
   };
+}
+
+/** WorkBuddy 的标题也按文件状态缓存：它同样只会被追加。 */
+async function readWorkbuddyTitleCached(filePath: string, titles: FileTitleCache | undefined): Promise<string> {
+  if (!titles) return readWorkbuddyTitle(filePath);
+  const cached = titles.get(filePath);
+  try {
+    const info = await stat(filePath);
+    if (cached && cached.size === info.size && cached.mtimeMs === info.mtimeMs) {
+      return cached.title ?? "";
+    }
+    const title = await readWorkbuddyTitle(filePath);
+    titles.set(filePath, { size: info.size, mtimeMs: info.mtimeMs, title });
+    return title;
+  } catch {
+    return readWorkbuddyTitle(filePath);
+  }
 }
 
 /** The newest name WorkBuddy wrote for a conversation, or "" when it has not named one. */

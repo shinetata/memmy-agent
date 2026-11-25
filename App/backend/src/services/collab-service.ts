@@ -11,7 +11,7 @@ import { dirname, join, posix, win32 } from "node:path";
 import { loadCollabAgents, submittedConversationId } from "./collab-added-agents.js";
 import { locateRecordFile, readRecordFile, type RecordBinding } from "./collab-record-file.js";
 import type { ApiErrorCode } from "./error-envelope.js";
-import { LocalSessionReadError, type LocalSessionReader } from "../adapters/outbound/agent-source/session-reference/local-session-reader.js";
+import { ARCHIVED_SESSION_TEXT, LocalSessionReadError, type LocalSessionReader } from "../adapters/outbound/agent-source/session-reference/local-session-reader.js";
 import {
   formatAdded,
   formatAlready,
@@ -300,6 +300,8 @@ export interface LocalAgentSession {
   group: LocalSessionGroup | null;
   updatedAt: string;
   turnCount: number;
+  /** 正文只存在压缩存档里：列得出来，但不能关联（读不出内容）。 */
+  archived?: boolean;
 }
 
 /** A whole group associated with a project, sessions that appear in it later included. */
@@ -472,7 +474,13 @@ interface UploadOutcome {
 }
 
 /** A session read ahead in its agent's batch: the record, gone from the agent, or not read ahead. */
-type PreloadedSession = Record<string, unknown> | "missing" | null;
+/**
+ * 预读的结果：会话正文、本机已经找不到、只在压缩存档里、或者没有预读到（要单独读一次）。
+ *
+ * <p>「存档」与「找不到」必须分开：前者是 Codex 把旧会话压成了 `.jsonl.zst`，任务还在、只是读不出内容，
+ * 告诉用户「找不到」会让人以为任务没了。</p>
+ */
+type PreloadedSession = Record<string, unknown> | "missing" | "archived" | null;
 
 export interface CollabSessionReference {
   session: CollabProjectSession;
@@ -1074,6 +1082,8 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
       ? isTaskShared(stored, session.conversationId)
       : covered.has(sessionKey(session)));
     return inScope
+      // 只存在压缩存档里的会话读不出正文：整组关联会顺带把它算进来，但它不该被上传，也不该计成失败。
+      .filter((session) => session.archived !== true)
       .sort((left, right) => (Date.parse(right.updatedAt) || 0) - (Date.parse(left.updatedAt) || 0))
       .slice(0, SESSIONS_PER_MEMBER)
       .filter((session) => {
@@ -1232,14 +1242,19 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
         for (const id of chunk) chunkOf.set(sessionKey({ sourceId, conversationId: id }), chunk);
       }
     }
-    const loads = new Map<string[], Promise<Map<string, Record<string, unknown>> | null>>();
+    const loads = new Map<string[], Promise<Map<string, PreloadedSession> | null>>();
     return async (session) => {
       const chunk = chunkOf.get(sessionKey(session));
       if (!chunk) return null;
       let load = loads.get(chunk);
       if (!load) {
         load = readLocal((reader) => reader.readMany({ sourceId: session.sourceId, conversationIds: chunk }))
-          .then((data) => new Map(data.sessions.map((raw) => [raw.conversationId, record(raw)] as const)))
+          .then((data) => {
+            const byId = new Map<string, PreloadedSession>(data.sessions.map((raw) => [raw.conversationId, record(raw)] as const));
+            // 没有 archived 字段的实现（云端 memory 服务）就不报存档，按原来的 missing 处理。
+            for (const conversationId of data.archived ?? []) byId.set(conversationId, "archived");
+            return byId;
+          })
           // A failed batch: its sessions are read one by one instead.
           .catch(() => null);
         loads.set(chunk, load);
@@ -1263,6 +1278,9 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
     }
     if (preloaded === "missing") {
       throw new CollabError("not_found", "本机已找不到该任务");
+    }
+    if (preloaded === "archived") {
+      throw new CollabError("toolkit_unsupported", ARCHIVED_SESSION_TEXT);
     }
     const local = preloaded
       ?? record(await readLocal((reader) => reader.read({ sourceId: session.sourceId, conversationId: session.conversationId })));
@@ -2920,15 +2938,25 @@ interface MemmySessionRecords {
   turns: CollabSessionTurn[];
 }
 
-/**
- * 成员协助的结果送回发起方任务时是一条以 {@code <memmy_assist_result} 开头的消息，内容来自执行方的电脑，
- * 只有协助双方看得到。发起方把这条任务共享到项目时，这一轮的提问只留下面这句说明，不把结果带给全体成员；
- * 发起方 Agent 收到后的分析是发起方自己的内容，照常共享。
- */
-export const ASSIST_RESULT_PLACEHOLDER = "（这里是一次成员协助的结果，只有协助双方看得到）";
-
 export function isAssistResult(content: string): boolean {
   return /^\s*<memmy_assist_result\b/u.test(content);
+}
+
+/**
+ * 协助结果那一轮在共享任务里的「提问」。
+ *
+ * 结果内容来自执行方的电脑，只有协助双方该看到，所以整段不带给全体成员；但这一轮的提问本身不是秘密——
+ * 请了谁、查什么，本来就在请求卡片和协助记录里写着。所以这里写成一句正常的话（「请孙起协助：查看版本」），
+ * 而不是一句解释可见性的注释：看板用它当预览，注释读起来像占位符。
+ */
+export function assistResultPreview(content: string): string {
+  const opening = /^\s*<memmy_assist_result\b([^>]*)>/u.exec(content)?.[1] ?? "";
+  const attr = (name: string) => new RegExp(`\\b${name}="([^"]*)"`, "u").exec(opening)?.[1]?.trim() ?? "";
+  const executor = attr("from");
+  const title = attr("title");
+  if (executor && title) return `请${executor}协助：${title}`;
+  if (executor) return `请${executor}协助`;
+  return title ? `请成员协助：${title}` : "请成员协助";
 }
 
 /**
@@ -2993,8 +3021,10 @@ async function readSessionRecords(path: string): Promise<MemmySessionRecords | n
     const role = text(raw.role);
     if (role === "user") {
       if (current) turns.push(current);
-      // 协助结果送回发起方任务的那条消息：内容来自执行方的电脑，只有协助双方看得到。这条任务共享到项目时只留一句说明。
-      const question = isAssistResult(text(raw.content)) ? ASSIST_RESULT_PLACEHOLDER : text(raw.content);
+      // 协助结果送回发起方任务的那条消息：结果内容来自执行方的电脑，只有协助双方看得到，共享时整段不带过去；
+      // 这一轮的提问换成一句正常的「请谁协助：查什么」，看板预览读起来才是任务本身而不是注释。
+      const rawContent = text(raw.content);
+      const question = isAssistResult(rawContent) ? assistResultPreview(rawContent) : rawContent;
       if (!isAssistResult(text(raw.content))) {
         lastQuestion = question;
         if (!firstQuestion && !isNotificationTurn(question)) firstQuestion = question;
@@ -3271,7 +3301,8 @@ function toLocalSession(raw: unknown): LocalAgentSession {
     workspacePath: nullableText(session.workspacePath),
     group: toGroup(session.group),
     updatedAt: text(session.updatedAt),
-    turnCount: number(session.turnCount)
+    turnCount: number(session.turnCount),
+    ...(session.archived === true ? { archived: true } : {})
   };
 }
 

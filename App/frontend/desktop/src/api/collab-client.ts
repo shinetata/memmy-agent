@@ -103,7 +103,9 @@ const LocalAgentSessionSchema = z.object({
   workspacePath: z.string().nullable(),
   group: LocalSessionGroupSchema.nullable(),
   updatedAt: z.string(),
-  turnCount: z.number()
+  turnCount: z.number(),
+  /** 正文只在 Agent 的压缩存档里：列得出来，不能关联。旧后端没有这个字段。 */
+  archived: z.boolean().optional()
 });
 
 const LinksSchema = z.object({

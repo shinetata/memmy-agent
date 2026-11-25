@@ -90,6 +90,24 @@ describe("the assist process inside a task", () => {
     expect(container.textContent).toContain("2 步");
   });
 
+  it("names the member and the agent that ran it, so it does not read as local steps", async () => {
+    // 这一段紧跟发起方自己的「执行了 N 步」：只写「执行过程」会被读成本机做的。
+    const client = collab();
+    await render(client, request({
+      status: "done",
+      agent: "memmy",
+      executor: { userId: "u-2", name: "孙起", mine: false }
+    } as Partial<AssistRequest>));
+    expect(container.textContent).toContain("孙起的 Memmy 执行过程");
+  });
+
+  it("falls back to the plain title when the request has no executor", async () => {
+    const client = collab();
+    await render(client, request({ status: "done", agent: "memmy" }));
+    expect(container.textContent).toContain("执行过程");
+    expect(container.textContent).not.toContain("undefined");
+  });
+
   it("does not offer the entry before it starts running, and reads nothing", async () => {
     const client = collab();
     await render(client, request({ status: "pending" }));

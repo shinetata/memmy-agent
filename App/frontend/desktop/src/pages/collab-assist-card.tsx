@@ -8,8 +8,6 @@ import { AlertCircle, ChevronDown, ChevronRight, FileText, HandHelping, X, WifiO
 import { useState } from "react";
 import type { AssistRequest, CollabClient } from "../api/collab-client.js";
 import { useTranslation } from "../i18n/use-translation.js";
-import { agentSourceSquareLogoUrl } from "./agent-source-logos.js";
-import { AssistProcessBlock } from "./collab-assist-process.js";
 import styles from "./collab-assist-card.module.css";
 import { assistClock, assistStopText, grantSummary } from "./collab-assist-view.js";
 
@@ -165,8 +163,6 @@ export function CollabAssistRequestCard(props: {
             ) : null}
           </>
         ) : null}
-        {/* 执行中还没有结果卡片，过程先放在这里看；结果回写后它就归到结果卡片，这一张不再带过程。 */}
-        {status === "running" ? <AssistProcessBlock collab={props.collab} request={request} /> : null}
         </div>
       </div>
       ) : null}
@@ -195,8 +191,11 @@ export function CollabAssistRequestCard(props: {
         ) : status === "running" ? (
           <>
             <span className={styles.spin} />
+            {/*
+             * 不摆执行 Agent 的图标：这行已经写着「孙起的 Memmy 正在执行」，图标是同一件事的重复；
+             * 同一张卡片上的组头、结果里都有它，多摆一处只是噪音。
+             */}
             <span className={styles.byline}>
-              <AgentLogo agent={request.agent} name={agentName} />
               {t("collab.assist.footerRunning", { name: executor, agent: agentName })}{grantNote}
             </span>
             {/* 执行中也能自己停下：同位置同样式，不另弹确认。 */}
@@ -256,15 +255,6 @@ export function agentLabel(sourceId: string | null, fallback: string): string {
     pi: "Pi"
   };
   return sourceId ? names[sourceId] ?? sourceId : fallback;
-}
-
-function AgentLogo(props: { agent: string | null; name: string }) {
-  const url = props.agent ? agentSourceSquareLogoUrl(props.agent) : null;
-  return (
-    <span className={styles.agentLogo}>
-      {url ? <img src={url} alt="" /> : <span className={styles.agentMark}>{Array.from(props.name)[0] ?? "A"}</span>}
-    </span>
-  );
 }
 
 function memberColor(userId: string): string {

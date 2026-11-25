@@ -11,6 +11,9 @@
  */
 import { readJsonlObjects } from "@memmy/agent-source-readers/adapters/jsonl-lines";
 import { readJsonlRowsCheap } from "./jsonl-lines-cheap.js";
+import type { FileFactsCache } from "./file-facts-cache.js";
+import { open } from "node:fs/promises";
+import { stat } from "node:fs/promises";
 import type { SourceAdapter } from "@memmy/agent-source-readers/adapters/types";
 import type { LocalSession } from "../local-session-reader.js";
 import {
@@ -22,7 +25,7 @@ import {
   type SessionBuilder
 } from "../session-shape.js";
 import { createSessionGrouper } from "../session-group.js";
-import { fileSize, lineBoundaryBefore, MAX_WINDOW_BYTES, readFileWindow, readTailChunk, WINDOW_GROWTH } from "./file-window.js";
+import { lineBoundaryBefore, MAX_WINDOW_BYTES, readFileWindow, readTailChunk, WINDOW_GROWTH } from "./file-window.js";
 
 /** One question a person asked, and when. */
 export interface QuestionFact {
@@ -144,18 +147,41 @@ const TAIL_CHUNK_BYTES = 32 * 1024;
 const TAIL_MAX_CHUNK_BYTES = 512 * 1024;
 
 /**
- * Reads one file's ends.
+ * Reads one file's facts.
  *
- * @param hasTitle Whether the agent keeps this session's title outside the file; when it does not, the head is
- * read far enough to find the first question the title would come from.
+ * <p>会话文件只被追加，而列表每分钟都要重算一次（后台同步）且每次打开弹窗也要重算，所以读过的结论按文件
+ * 缓存起来：大小与 mtime 都没变就是同一份文件，直接用上次的事实；变长了只读新追加的那一段，把新记录接着
+ * 上次的结论往下累积。变小或开始位置不在记录边界（被重写过）时重读整份。</p>
+ *
+ * @param hasTitle Whether the agent keeps this session's title outside the file; the whole-file read covers both.
+ * @param cache 上次扫描的结论，由调用方持有；不给时每次都重读整份。
  */
 export async function summarizeJsonlFile(
   filePath: string,
   source: JsonlMetadataSource,
-  options: { hasTitle: boolean }
+  options: { hasTitle: boolean },
+  cache?: FileFactsCache
 ): Promise<FileFacts> {
-  if ((await fileSize(filePath)) === 0) {
+  const state = await fileState(filePath);
+  if (!state) {
     return createFileFacts();
+  }
+  if (state.size === 0) {
+    return createFileFacts();
+  }
+  const cached = cache?.get(filePath);
+  // 同一份文件：上次读到的字节数与修改时间都对得上，一个字节也不用再读。
+  if (cached && cached.size === state.size && cached.mtimeMs === state.mtimeMs) {
+    return cached.facts;
+  }
+  // 只追加未重写：从上次读完的位置往下读，把新记录接在已有结论后面。
+  if (cached && cached.size < state.size && !isCompressedStore(filePath) && await startsAtRecord(filePath, cached.offset)) {
+    const facts = cloneFileFacts(cached.facts);
+    if (await readWholeFile(filePath, source, facts, cached.offset)) {
+      cache?.set(filePath, { offset: state.size, size: state.size, mtimeMs: state.mtimeMs, facts });
+      return facts;
+    }
+    // 追加的那一段读不下去：当作整份文件重读，宁可慢也不留半份结论。
   }
   // 整份顺序读一遍，不解析没人说的话。
   //
@@ -167,15 +193,68 @@ export async function summarizeJsonlFile(
   // <p>只读两端的前提是「文件中间没有要看的东西」，而列表要的恰好是文件里最新的一问，它在哪里事先不知道。
   // 顺序读一遍没有这个前提，标题、最后一问、最后活动时间因此与完整扫描逐字相同。</p>
   const facts = createFileFacts();
-  await readWholeFile(filePath, source, facts);
-  // 文件级的最后一个时间属于这个文件里最后出现的那个会话（记录按时间写）。
-  if (facts.fileUpdatedAt) {
-    const owner = facts.conversations.get(facts.lastConversationId) ?? [...facts.conversations.values()].at(-1);
-    if (owner && facts.fileUpdatedAt > owner.updatedAt) {
-      owner.updatedAt = facts.fileUpdatedAt;
-    }
+  if (await readWholeFile(filePath, source, facts)) {
+    settleFileUpdatedAt(facts);
+    cache?.set(filePath, { offset: state.size, size: state.size, mtimeMs: state.mtimeMs, facts });
+  } else {
+    cache?.delete(filePath);
   }
   return facts;
+}
+
+/** 文件级的最后一个时间属于这个文件里最后出现的那个会话（记录按时间写）。 */
+function settleFileUpdatedAt(facts: FileFacts): void {
+  if (!facts.fileUpdatedAt) return;
+  const owner = facts.conversations.get(facts.lastConversationId) ?? [...facts.conversations.values()].at(-1);
+  if (owner && facts.fileUpdatedAt > owner.updatedAt) {
+    owner.updatedAt = facts.fileUpdatedAt;
+  }
+}
+
+/** 一份事实的副本：追加读取要往旧结论上接着写，不能改到缓存里那份。 */
+function cloneFileFacts(facts: FileFacts): FileFacts {
+  return {
+    ...facts,
+    conversations: new Map([...facts.conversations].map(([conversationId, fact]) => [conversationId, { ...fact, questions: [...fact.questions] }])),
+    titles: new Map(facts.titles)
+  };
+}
+
+/**
+ * 这份存储是不是压缩过的会话存档（Codex 的 `rollout-*.jsonl.zst`、DeepSeek Harness 的 `.jsonl.zstd`）。
+ *
+ * <p>压缩流不能从中间的偏移继续读，追加也只会重写整帧，所以这类文件不做增量读取。后缀按大小写不敏感比较：
+ * Windows 与 macOS 的文件名不区分大小写，写了 `.ZST` 的存储装着同样的行。</p>
+ */
+function isCompressedStore(filePath: string): boolean {
+  return /\.(?:zst|zstd)$/iu.test(filePath);
+}
+
+/** 文件的大小与修改时间；读不到或不是普通文件时 null。 */
+async function fileState(filePath: string): Promise<{ size: number; mtimeMs: number } | null> {
+  try {
+    const info = await stat(filePath);
+    return info.isFile() ? { size: info.size, mtimeMs: info.mtimeMs } : null;
+  } catch {
+    return null;
+  }
+}
+
+/** 这个字节位置是不是一条记录的开头。不是的话说明文件被重写过，不能接在旧结论后面。 */
+async function startsAtRecord(filePath: string, offset: number): Promise<boolean> {
+  if (offset <= 0) return true;
+  try {
+    const handle = await open(filePath, "r");
+    try {
+      const previous = Buffer.alloc(1);
+      const { bytesRead } = await handle.read(previous, 0, 1, offset - 1);
+      return bytesRead === 1 && previous[0] === 0x0a;
+    } finally {
+      await handle.close();
+    }
+  } catch {
+    return false;
+  }
 }
 
 function createFileFacts(): FileFacts {
@@ -460,13 +539,18 @@ function mergeSide(merged: FileFacts, side: FileFacts): void {
   merged.humanCount += side.humanCount;
 }
 
-async function readWholeFile(filePath: string, source: JsonlMetadataSource, facts: FileFacts): Promise<void> {
+/**
+ * Reads the file forward into `facts`, optionally from a byte offset already covered by an earlier read.
+ *
+ * @returns Whether the whole requested range was read; false when the store could not be read at all.
+ */
+async function readWholeFile(filePath: string, source: JsonlMetadataSource, facts: FileFacts, fromByte = 0): Promise<boolean> {
   const observer = source.createObserver(filePath, { seedConversationId: facts.firstConversationId, backward: false });
   const sink = createSink(facts, false);
   // 每一行只在「可能含要看的记录」时解析：文件里绝大多数是工具输出，解析它们只为了取一个时间戳。
   const wantsParse = wantsParseFor(source);
   try {
-    for await (const row of readJsonlRowsCheap(filePath, wantsParse)) {
+    for await (const row of readJsonlRowsCheap(filePath, wantsParse, fromByte)) {
       const record = row.parsed;
       if (record) {
         observer(record, sink);
@@ -476,8 +560,10 @@ async function readWholeFile(filePath: string, source: JsonlMetadataSource, fact
       }
     }
   } catch {
-    // 读不动就用手上已有的事实。
+    // 读不动就用手上已有的事实；调用方据此决定这份结论能不能进缓存。
+    return false;
   }
+  return true;
 }
 
 /**
@@ -518,12 +604,13 @@ export async function listJsonlSessions(
   adapter: SourceAdapter,
   source: JsonlMetadataSource,
   files: readonly JsonlSessionFile[],
-  limit: number
+  limit: number,
+  cache?: FileFactsCache
 ): Promise<LocalSession[]> {
   const grouper = createSessionGrouper(adapter);
   const builders = new Map<string, SessionBuilder>();
   for (const file of files) {
-    const facts = await summarizeJsonlFile(file.sessionFilePath, source, { hasTitle: Boolean(file.title) });
+    const facts = await summarizeJsonlFile(file.sessionFilePath, source, { hasTitle: Boolean(file.title) }, cache);
     for (const [conversationId, fact] of facts.conversations) {
       let builder = builders.get(conversationId);
       if (!builder) {

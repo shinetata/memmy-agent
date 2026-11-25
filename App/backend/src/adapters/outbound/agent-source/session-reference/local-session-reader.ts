@@ -3,6 +3,7 @@
  * online project, and reads one session's turns so they can be uploaded to it. It runs in the desktop backend on
  * the backend's own agent adapters, so online projects do not depend on the Memory service.
  */
+import { statSync } from "node:fs";
 import type { SourceRegistry } from "@memmy/agent-source-readers/adapters/source-registry";
 import type { ConversationMessage, SourceAdapter } from "@memmy/agent-source-readers/adapters/types";
 import { rankLocalSessions } from "./local-session-rank.js";
@@ -14,7 +15,14 @@ import { createStoreDigest, type StoreDigest } from "./store-digest.js";
 export type { LocalSessionGroup } from "./session-group.js";
 export { cleanQuestion, isHumanQuestion, isInternalUserMessage, stripInjectedContext } from "./session-shape.js";
 
-const DEFAULT_SESSIONS_PER_SOURCE = 30;
+/**
+ * 每个 Agent 最多列出多少个最近任务。
+ *
+ * <p>这个数字同时决定扫描窗口（`recentScanWindow`）：窗口是它的四倍、封顶 200 个文件。提到 100 不会把窗口再放大
+ * （30 的窗口已经是 120 个文件，100 的窗口是 200），所以多出来的只有「返回更多条」，不是「多读文件」。
+ * 一台机器上会话文件本来就没有那么多时（本机 Claude Code 共 122 个），代价完全不变。</p>
+ */
+const DEFAULT_SESSIONS_PER_SOURCE = 100;
 /**
  * 列表要的是任务数，而窗口按文件算：空记录、后台派生的记录不出现在列表里。凑不满时向前扩大窗口，
  * 直到拿到要求数量的任务或到达这个上限。
@@ -52,6 +60,8 @@ export interface LocalSession {
   group: LocalSessionGroup | null;
   updatedAt: string;
   turns: LocalSessionTurn[];
+  /** 正文只存在压缩存档里：列表看得到，读不出内容，因此不能关联。 */
+  archived?: boolean;
 }
 
 /** A session as listed in the association picker, without its turns. */
@@ -65,6 +75,8 @@ export interface LocalSessionCandidate {
   group: LocalSessionGroup | null;
   updatedAt: string;
   turnCount: number;
+  /** 正文只存在压缩存档里：列得出来，但不能关联。 */
+  archived?: boolean;
 }
 
 /** The candidate pool, and whether a newer scan is running behind it. */
@@ -94,16 +106,53 @@ export interface LocalSessionReader {
   read(input: { sourceId: string; conversationId: string }): Promise<LocalSession>;
   /**
    * Rereads several sessions of one agent with one pass over its store. Reading them one by one costs a pass each,
-   * since a store is only read whole; `missing` lists the requested sessions it no longer has.
+   * since a store is only read whole; `missing` lists the requested sessions it no longer has, and `archived` the
+   * ones the agent has compressed into an archive the store cannot read back.
    */
-  readMany(input: { sourceId: string; conversationIds: readonly string[] }): Promise<{ sessions: LocalSession[]; missing: string[] }>;
+  readMany(input: { sourceId: string; conversationIds: readonly string[] }): Promise<LocalSessionBatch>;
 }
 
-/** A read the caller can explain: an unknown agent or session, or a batch larger than one read allows. */
+/** What one batch read found: the sessions, the ones gone, and the ones only an archive still holds. */
+export interface LocalSessionBatch {
+  sessions: LocalSession[];
+  missing: string[];
+  /** 会话被 Agent 压成了存档（Codex 的 `.jsonl.zst`）：列表里看得到，正文暂时读不出来。 */
+  archived: string[];
+}
+
+/**
+ * A read the caller can explain: an unknown agent or session, a batch larger than one read allows, or a session
+ * whose text only survives in an archive.
+ */
 export class LocalSessionReadError extends Error {
-  constructor(readonly code: "not_found" | "invalid_argument", message: string) {
+  constructor(readonly code: "not_found" | "invalid_argument" | "toolkit_unsupported", message: string) {
     super(message);
     this.name = "LocalSessionReadError";
+  }
+}
+
+/** 压缩存档读不出正文时给用户的话：说清是什么、为什么、还能做什么。 */
+export const ARCHIVED_SESSION_TEXT = "这个任务已经被 Codex 压缩成存档，暂时读不出它的内容。在 Codex 里重新打开它之后，新产生的任务可以正常关联。";
+
+/** 一个会话的文件：路径，以及它是不是压缩存档（只有存档时读不出正文）。 */
+export interface LocatedSessionFile {
+  path: string;
+  archived: boolean;
+}
+
+/**
+ * 索引说这份会话只有存档、而现在磁盘上也确实还是存档。
+ *
+ * <p>不能只看索引：在 Codex 里重新打开一个旧会话，它会写下新的明文 rollout，那份就能正常读了。所以再确认一次
+ * 磁盘上的状态，把「已经能读了」的情况让回扫描路径。</p>
+ */
+function stillArchived(located: LocatedSessionFile): boolean {
+  if (!located.archived) return false;
+  try {
+    return statSync(located.path).isFile();
+  } catch {
+    // 索引里有、磁盘上找不到：仍然不是能读的正文。
+    return true;
   }
 }
 
@@ -140,6 +189,13 @@ export interface CreateLocalSessionReaderDeps {
    * 没交出去、或者交出去没读成的源，照旧在本线程读。
    */
   offloadScan?: LocalSessionScanOffload;
+  /**
+   * 某个会话的会话文件，索引已知时由它给出，并说明它是不是压缩存档。
+   *
+   * <p>索引（Codex 的索引库、Cursor 的库）本来就知道文件在哪，因此不必为一条会话扫一遍整份历史。压缩存档
+   * （`.jsonl.zst`）读不出正文，用它区分「读不了」与「不存在」两种失败。</p>
+   */
+  locateSessionFile?: (sourceId: string, conversationId: string) => Promise<LocatedSessionFile | null>;
 }
 
 /** Creates the local session reader. */
@@ -263,6 +319,13 @@ export function createLocalSessionReader(deps: CreateLocalSessionReaderDeps): Lo
     return { sessions: await scan(list, digests), refreshing: false };
   }
 
+  /** 该源自己的文件定位；没配置时就是「不知道」，调用方按扫描的结果算。 */
+  async function locateOne(adapter: SourceAdapter, conversationId: string): Promise<LocatedSessionFile | null> {
+    const locate = deps.locateSessionFile;
+    if (!locate) return null;
+    return locate(adapter.descriptor.sourceId, conversationId).catch(() => null);
+  }
+
   return {
     async available(input) {
       const sources = input.sourceIds?.length ? new Set(input.sourceIds) : null;
@@ -282,7 +345,12 @@ export function createLocalSessionReader(deps: CreateLocalSessionReaderDeps): Lo
       if (!adapter) {
         throw new LocalSessionReadError("not_found", `Unknown agent source: ${input.sourceId}`);
       }
-      const [session] = await readSessions(adapter, [input.conversationId], sessionsPerSource);
+      // 先看索引怎么说：压缩存档读不出正文，这跟「这个任务已经没了」是两回事，要分开告诉用户。
+      const located = await locateOne(adapter, input.conversationId);
+      if (located && stillArchived(located)) {
+        throw new LocalSessionReadError("toolkit_unsupported", ARCHIVED_SESSION_TEXT);
+      }
+      const [session] = (await readSessions(adapter, [input.conversationId], sessionsPerSource)).sessions;
       if (!session) {
         throw new LocalSessionReadError("not_found", `Session not found: ${input.sourceId}/${input.conversationId}`);
       }
@@ -298,9 +366,16 @@ export function createLocalSessionReader(deps: CreateLocalSessionReaderDeps): Lo
       if (wanted.length > MAX_READ_MANY) {
         throw new LocalSessionReadError("invalid_argument", `At most ${MAX_READ_MANY} sessions per read`);
       }
-      const sessions = await readSessions(adapter, wanted, sessionsPerSource);
-      const found = new Set(sessions.map((session) => session.conversationId));
-      return { sessions, missing: wanted.filter((id) => !found.has(id)) };
+      // 索引说它是压缩存档的那些不必进扫描：扫描永远读不到它们，只会白扫一遍整份存储。
+      const archived: string[] = [];
+      const readable: string[] = [];
+      for (const conversationId of wanted) {
+        const located = await locateOne(adapter, conversationId);
+        if (located && stillArchived(located)) archived.push(conversationId);
+        else readable.push(conversationId);
+      }
+      const outcome = await readSessions(adapter, readable, sessionsPerSource);
+      return { sessions: outcome.sessions, missing: outcome.missing, archived };
     }
   };
 }
@@ -367,10 +442,19 @@ function recentScanWindow(limit: number): number {
  * Reads the requested conversations in one pass over the recent window, then one wider pass for any that are older.
  * Only requested conversations are built; the others in the window are skipped as they stream past.
  */
-async function readSessions(adapter: SourceAdapter, conversationIds: readonly string[], recentLimit: number): Promise<LocalSession[]> {
+/**
+ * Reads the given conversations: first those whose file is already known, then the rest by walking the recent window.
+ *
+ * @param locate Answers with a conversation's file when an index knows it; the file is then read on its own.
+ */
+async function readSessions(
+  adapter: SourceAdapter,
+  conversationIds: readonly string[],
+  recentLimit: number
+): Promise<LocalSessionBatch> {
   try {
     if (!(await adapter.detect())) {
-      return [];
+      return { sessions: [], missing: [...conversationIds], archived: [] };
     }
     const grouper = createSessionGrouper(adapter);
     const found: LocalSession[] = [];
@@ -395,9 +479,9 @@ async function readSessions(adapter: SourceAdapter, conversationIds: readonly st
       }
       remaining = new Set([...remaining].filter((id) => !builders.has(id)));
     }
-    return found;
+    return { sessions: found, missing: [...remaining], archived: [] };
   } catch {
-    return [];
+    return { sessions: [], missing: [...conversationIds], archived: [] };
   }
 }
 
@@ -444,7 +528,8 @@ function toCandidate(session: LocalSession): LocalSessionCandidate {
     workspacePath: session.workspacePath,
     group: session.group,
     updatedAt: session.updatedAt,
-    turnCount: session.turns.length
+    turnCount: session.turns.length,
+    ...(session.archived ? { archived: true } : {})
   };
 }
 

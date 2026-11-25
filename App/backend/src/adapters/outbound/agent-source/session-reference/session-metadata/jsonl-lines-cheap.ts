@@ -28,12 +28,15 @@ const MAX_RECORD_BYTES = 64 * 1024 * 1024;
  *
  * @param wantsParse Decides per line, on the raw text, whether the row is worth a JSON.parse. Keep it cheap: it runs
  * on every row.
+ * @param fromByte Offset to start at, which a caller that already read the file's beginning passes so only the
+ * appended rows are read. It must fall on a record boundary; the caller checks that before asking.
  */
 export async function* readJsonlRowsCheap(
   filePath: string,
-  wantsParse: (text: string) => boolean
+  wantsParse: (text: string) => boolean,
+  fromByte = 0
 ): AsyncIterable<CheapRow> {
-  const stream = createReadStream(filePath);
+  const stream = createReadStream(filePath, fromByte > 0 ? { start: fromByte } : undefined);
   const decoder = new StringDecoder("utf8");
   let carry = "";
   let tooLong = false;

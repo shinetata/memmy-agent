@@ -34,6 +34,7 @@ import { MEMMY_SOURCE_ID, assistAsksForApproval, assistRunnable } from "./servic
 import { createAssistReviewer } from "./services/assist/review.js";
 import { assistEnv } from "./services/assist/shell-env.js";
 import { createLocalSessionReader } from "./adapters/outbound/agent-source/session-reference/local-session-reader.js";
+import { codexSessionFileFor } from "./adapters/outbound/agent-source/session-reference/session-metadata/codex-index.js";
 import { createBuiltinAgentSourceRegistry } from "./services/builtin-agent-source-registry.js";
 import { defaultCollabHome, refreshCollabAgentSkills } from "./services/collab-added-agents.js";
 import { createCollabAgentAccessService } from "./services/collab-agent-access-service.js";
@@ -347,7 +348,13 @@ export async function createLocalBackend(options: CreateLocalBackendOptions): Pr
           return collabAgentRegistry.list().filter((adapter) => allowed.has(adapter.descriptor.sourceId));
         },
         // 读一份存储是几秒的同步解析：挪到别的线程去读，同时进来的发消息、切页面、同步就不必等它读完。
-        offloadScan: createSessionScanOffload()
+        offloadScan: createSessionScanOffload(),
+        // 上传要读正文：Codex 的索引库知道会话文件在哪，直接读那一份（压缩过的也一样），不扫整份历史。
+        locateSessionFile: async (sourceId, conversationId) => {
+          if (sourceId !== "codex") return null;
+          const adapter = collabAgentRegistry.get(sourceId);
+          return adapter ? codexSessionFileFor(adapter, conversationId) : null;
+        }
       }),
       agentAccess: () => collabAgentAccess.read(),
       ...(process.env.MEMMY_SESSION_LINK_BASE_URL?.trim() ? { linkBaseUrl: process.env.MEMMY_SESSION_LINK_BASE_URL.trim() } : {}),

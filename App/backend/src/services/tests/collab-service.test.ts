@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { LocalSessionReadError, type LocalSessionReader } from "../../adapters/outbound/agent-source/session-reference/local-session-reader.js";
 import {
+  assistResultPreview,
   createCollabService,
   linkedSessionKeys,
   pageOf,
@@ -919,7 +920,8 @@ describe("collab service", () => {
     const body = JSON.stringify(calls.find((call) => call.method === "PUT")!.body);
     expect(body).not.toContain("王雨电脑上的日志全文");
     expect(body).not.toContain("memmy_assist_result");
-    expect(body).toContain("（这里是一次成员协助的结果，只有协助双方看得到）");
+    // 这一轮的提问写成正常的一句话（请谁、查什么），不是一句解释可见性的注释：看板把它当预览用。
+    expect(body).toContain("请王雨协助");
     // 发起方自己的分析照常共享。
     expect(body).toContain("王雨那边是重复请求导致的 409。");
   });
@@ -1137,6 +1139,37 @@ describe("collab service", () => {
     const uploaded = calls.filter((call) => call.method === "PUT").map((call) => (call.body as { sessions: Array<{ sourceSessionId: string }> }).sessions[0]!.sourceSessionId);
     expect(uploaded.sort()).toEqual(["a1", "a2", "c1"]);
     expect(await svc.getSyncProgress("p-1")).toMatchObject({ completed: 4, failed: 1 });
+  });
+
+  it("leaves a session that only survives in an archive out of the upload", async () => {
+    const local: LocalAgentSession[] = [
+      localSession("codex", "live", "/repo", "2026-10-22T01:00:00.000Z"),
+      // Codex 把旧会话压成了存档：整组关联会顺带算上它，但它读不出正文。
+      { ...localSession("codex", "archived", "/repo", "2026-10-21T01:00:00.000Z"), archived: true }
+    ];
+    const { fetcher, calls } = fakeFetch({
+      "POST /api/v1/agent-sessions/available": () => ({ sessions: local, refreshing: false }),
+      "POST /api/v1/agent-sessions/read-many": (call) => {
+        const body = call.body as { conversationIds: string[] };
+        return {
+          sessions: body.conversationIds.map((id) => ({ conversationId: id, title: `会话 ${id}`, updatedAt: "2026-10-22T01:00:00.000Z", turns: [] })),
+          missing: []
+        };
+      },
+      "PUT /api/collab/projects/p-1/sessions": (call) => {
+        const upload = (call.body as { sessions: Array<{ sourceSessionId: string }> }).sessions[0]!;
+        return { code: 0, data: { sessions: [{ id: `id-${upload.sourceSessionId}` }] } };
+      }
+    });
+    const svc = service(fetcher);
+
+    await svc.saveLinks("p-1", { groups: [{ sourceId: "codex", groupId: "/repo", excluded: [] }], sessions: [] });
+    await waitForUploads(svc, "p-1");
+
+    const uploaded = calls.filter((call) => call.method === "PUT").map((call) => (call.body as { sessions: Array<{ sourceSessionId: string }> }).sessions[0]!.sourceSessionId);
+    expect(uploaded).toEqual(["live"]);
+    // 也不算成失败：它在列表里已经标明是存档，不需要每次同步都重试一遍。
+    expect(await svc.getSyncProgress("p-1")).toMatchObject({ failed: 0 });
   });
 
   it("uploads a linked group and a session linked later", async () => {
@@ -2101,5 +2134,22 @@ describe("the demo walkthrough passed through to the cloud", () => {
     const view = await svc.listMembers("p-9");
 
     expect(view.members.map((member) => member.demo)).toEqual([false, true]);
+  });
+});
+
+describe("协助结果在共享任务里的提问", () => {
+  it("writes who was asked and what for, instead of a note about visibility", () => {
+    const preview = assistResultPreview(
+      '<memmy_assist_result request="r1" from="孙起" agent="Memmy" status="done" attempt="1" title="查看电脑上 Hermes Agent 的版本">\n结果：\n孙起电脑上的内容\n</memmy_assist_result>'
+    );
+    expect(preview).toBe("请孙起协助：查看电脑上 Hermes Agent 的版本");
+    // 结果内容不进这句话：它来自对方的电脑，只有协助双方看得到。
+    expect(preview).not.toContain("孙起电脑上的内容");
+  });
+
+  it("still reads as a sentence when the tag carries no title or no sender", () => {
+    expect(assistResultPreview('<memmy_assist_result from="孙起">结果</memmy_assist_result>')).toBe("请孙起协助");
+    expect(assistResultPreview('<memmy_assist_result title="查看版本">结果</memmy_assist_result>')).toBe("请成员协助：查看版本");
+    expect(assistResultPreview("<memmy_assist_result>结果</memmy_assist_result>")).toBe("请成员协助");
   });
 });

@@ -10,6 +10,7 @@ import { ChevronRight, Loader2 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import type { AssistRequest, AssistTranscriptItem, CollabClient } from "../api/collab-client.js";
 import { useTranslation } from "../i18n/use-translation.js";
+import { assistAgentName } from "./collab-assist-view.js";
 import { TranscriptLine } from "./collab-assist-conversation.js";
 import styles from "./collab-assist-task.module.css";
 
@@ -85,6 +86,19 @@ const PROCESS_STATUS: ReadonlySet<AssistRequest["status"]> = new Set(["running",
 export function AssistProcessBlock(props: { collab: CollabClient | null; request: AssistRequest; inline?: boolean }) {
   const { t } = useTranslation();
   const available = PROCESS_STATUS.has(props.request.status);
+  /*
+   * 标题写清「谁、用哪个 Agent」：这一段紧跟在发起方自己的「执行了 N 步」下面，
+   * 只说「执行过程」会被读成发起方本机做的。成员名与 Agent 名都来自这次请求本身；
+   * 对方还没选执行 Agent 时（执行前）退回通用说法，不显示成空白。
+   */
+  const executorName = props.request.executor?.name?.trim() ?? "";
+  const executorAgent = assistAgentName(
+    props.request.grant?.agent ?? props.request.agent,
+    t("collab.assist.executorFallback")
+  );
+  const processTitle = executorName
+    ? t("collab.assist.process.titleOnTheirMachine", { name: executorName, agent: executorAgent })
+    : t("collab.assist.process.title");
   const running = props.request.status === "running";
   const [open, setOpen] = useState(false);
   const { items, loading, failed } = useAssistTranscript({
@@ -105,7 +119,7 @@ export function AssistProcessBlock(props: { collab: CollabClient | null; request
         onClick={() => setOpen((value) => !value)}
       >
         <ChevronRight size={12} aria-hidden="true" className={open ? styles.processChevronOpen : styles.processChevron} />
-        <span>{t("collab.assist.process.title")}</span>
+        <span>{processTitle}</span>
         {items.length ? <span className={styles.processCount}>· {t("collab.assist.process.count", { count: String(items.length) })}</span> : null}
       </button>
       {open ? (

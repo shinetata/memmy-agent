@@ -343,8 +343,10 @@
   cursor: pointer;
 }
 
+/* 悬停只把这一行读清楚一点：加深到正文色，不用强调色——它不是一条可执行的行动，
+   只是展开过程的入口，变绿会让它读起来像一个操作按钮。 */
 .processToggle:hover {
-  color: var(--color-action-sky-hover, #3aa893);
+  color: var(--color-text-ink, #111d1c);
 }
 
 .processChevron,

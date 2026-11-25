@@ -1090,6 +1090,8 @@ export const zhCNMessages = {
   "collab.assist.starting": "{agent} 正在启动",
   "collab.assist.notAllowed": "你没有允许这次请求，已告知{name}",
   "collab.assist.process.title": "执行过程",
+  /* 谁、用哪个 Agent 在做：读的人要一眼分清这是对方的机器，不是本机的步骤 */
+  "collab.assist.process.titleOnTheirMachine": "{name}的 {agent} 执行过程",
   "collab.assist.process.count": "{count} 步",
   "collab.assist.process.loading": "正在读取执行过程…",
   "collab.assist.process.failed": "这一项过程没读到，展开重试或稍后再看",
@@ -1199,6 +1201,9 @@ export const zhCNMessages = {
   "collab.pick.ungrouped.workbuddy": "临时任务",
   "collab.pick.wholeGroup": "整组关联，包含此后新增的任务",
   "collab.pick.excluded": "已排除",
+  // 正文只在 Agent 的压缩存档里（Codex 的 .jsonl.zst）：任务列出来，但关联过去也读不出内容。
+  "collab.pick.archived": "压缩存档",
+  "collab.pick.archivedHint": "这个任务已经被 Agent 压缩成存档，读不出它的内容，因此不能关联。在它自己那里重新打开之后，新产生的任务可以正常关联。",
   "collab.pick.loading": "正在读取本机任务…",
   "collab.pick.empty": "没有找到任务",
   // 新手引导里这张弹窗只做展示：不给勾选、不给保存。
@@ -4459,6 +4464,7 @@ export const enUSMessages: Record<keyof typeof zhCNMessages, string> = {
   "collab.assist.starting": "{agent} is starting",
   "collab.assist.notAllowed": "You did not allow this request. {name} has been told",
   "collab.assist.process.title": "What it did",
+  "collab.assist.process.titleOnTheirMachine": "{agent} run on {name}'s computer",
   "collab.assist.process.count": "{count} steps",
   "collab.assist.process.loading": "Loading what it did…",
   "collab.assist.process.failed": "Could not read the steps; expand again or check later",
@@ -4568,6 +4574,8 @@ export const enUSMessages: Record<keyof typeof zhCNMessages, string> = {
   "collab.pick.ungrouped.workbuddy": "One-off tasks",
   "collab.pick.wholeGroup": "Whole group linked, including sessions added later",
   "collab.pick.excluded": "Excluded",
+  "collab.pick.archived": "Archived",
+  "collab.pick.archivedHint": "This task has been compressed into an archive by its agent, so its content cannot be read and it cannot be associated. Tasks created after reopening it there can be associated.",
   "collab.pick.loading": "Reading sessions on this computer…",
   "collab.pick.empty": "No sessions found",
   "collab.pick.demoLocked": "Authorize to read the sessions on this computer.",

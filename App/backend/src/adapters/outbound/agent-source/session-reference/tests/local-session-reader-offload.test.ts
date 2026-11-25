@@ -24,8 +24,8 @@ describe("local session reader with the scan offloaded", () => {
     const listing = await reader.available({});
 
     expect(asked).toEqual([[
-      { sourceId: "codex", dataPath: "/fake/codex", limit: 30 },
-      { sourceId: "claude_code", dataPath: "/fake/claude_code", limit: 30 }
+      { sourceId: "codex", dataPath: "/fake/codex", limit: 100 },
+      { sourceId: "claude_code", dataPath: "/fake/claude_code", limit: 100 }
     ]]);
     // 交出去的源不再在本线程读：这正是省下来的时间。
     expect(scans).toEqual([]);
