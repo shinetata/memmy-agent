@@ -650,6 +650,8 @@ describe("memmy-project assist", () => {
     });
     expect(body).not.toHaveProperty("thread");
     expect(output).toContain("已发送协助请求 A7F3K1。");
+    // 末尾带一行运行时认的标记：界面靠它知道这一轮发过协助请求，不必去猜命令文本。
+    expect(output.trimEnd().endsWith(`memmy-assist-request ${body.request_id ?? "a7f3k111"}`)).toBe(true);
   });
 
   it("names DeepSeek Harness as the asking agent and passes its session record to the desktop", async () => {

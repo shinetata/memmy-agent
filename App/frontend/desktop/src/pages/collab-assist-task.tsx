@@ -11,11 +11,8 @@
  * 结果送回任务后，卡片让位给消息流里的结果卡片。
  */
 import { useCallback, useEffect, useState } from "react";
-import { ChevronDown, ChevronRight, Send } from "lucide-react";
 import type { AssistTaskView, CollabClient } from "../api/collab-client.js";
 import { useTranslation } from "../i18n/use-translation.js";
-import { AgentMessageContent } from "./agent-message-content.js";
-import { CollabAssistRequestCard } from "./collab-assist-card.js";
 import { ConfirmCard, type ConfirmDecision } from "./collab-assist-detail.js";
 import {
   AssistAgentLogo,
@@ -153,25 +150,28 @@ export function CollabAssistTaskChip(props: { view: AssistTaskView; collab: Coll
   );
 }
 
-/** 任务底部：执行方的确认卡片与「结果已发给谁」，发起方还没送回结果的请求卡片。 */
+/**
+ * 任务底部：执行方要动手的确认卡片。
+ *
+ * 发起方的请求与执行过程都排在会话里（见 home-page 的 assistFlow），这里不再重复；
+ * 「结果已发给谁」也不写——结果与过程在会话里已经看得见，这一行只是噪音。
+ */
 export function CollabAssistTaskDock(props: { view: AssistTaskView; collab: CollabClient | null; onChanged: () => void }) {
   const { t } = useTranslation();
   const [busy, setBusy] = useState(false);
-  const [sentOpen, setSentOpen] = useState(false);
   const { view, collab } = props;
   const executing = view.executing;
   const thread = executing?.thread ?? null;
-  const latest = thread?.requests[0] ?? null;
-  const confirm = executing?.confirm ?? null;
-  // 发起方：结果还没送回这条任务的请求才在底部显示；送回之后由消息里的结果卡片承接。
-  const waiting = view.requested.filter((request) => !request.delivered);
+  const pendingConfirm = executing?.confirm ?? null;
+  if (!thread || !pendingConfirm) return null;
+  // 这一屏之后不再换人：闭包里用的是同一个请求。
+  const confirm = pendingConfirm;
   // 确认时由谁执行：与授权弹窗同一份候选，上一次的 Agent 仍能运行就用它，否则用默认项。
-  const choice = useAssistAgentChoice(collab, confirm?.projectId ?? null, confirm?.requester.userId ?? null, Boolean(confirm));
-  const confirmAgent = pickAssistAgent(choice, confirm?.lastAgent ?? thread?.agent ?? null);
-  if (!thread && !waiting.length) return null;
+  const choice = useAssistAgentChoice(collab, confirm.projectId, confirm.requester.userId, true);
+  const confirmAgent = pickAssistAgent(choice, confirm.lastAgent ?? thread.agent ?? null);
 
   async function decide(decision: ConfirmDecision) {
-    if (!collab || !confirm || busy) return;
+    if (!collab || busy) return;
     setBusy(true);
     try {
       const agent = confirmAgent ?? "memmy";
@@ -190,44 +190,13 @@ export function CollabAssistTaskDock(props: { view: AssistTaskView; collab: Coll
     ?? assistAgentName(confirmAgent, t("collab.assist.executorFallback"));
   return (
     <div className={styles.dock} data-collab-assist-dock="">
-      {thread && confirm ? (
-        <ConfirmCard
-          requesterName={thread.requester.name}
-          attempt={confirm.attempt}
-          agentName={agentName}
-          busy={busy}
-          onDecide={(decision) => void decide(decision)}
-        />
-      ) : null}
-      {thread && latest && !confirm && latest.status === "done" ? (
-        <div className={styles.sentBlock}>
-          <button type="button" className={styles.sentToggle} aria-expanded={sentOpen} onClick={() => setSentOpen((open) => !open)}>
-            <Send size={13} aria-hidden="true" />
-            <span>{t("collab.assist.sent", { name: thread.requester.name })}</span>
-            {latest.files.length ? <span>· {t("collab.assist.sentFiles", { count: String(latest.files.length) })}</span> : null}
-            {sentOpen ? <ChevronDown size={13} aria-hidden="true" /> : <ChevronRight size={13} aria-hidden="true" />}
-          </button>
-          {sentOpen ? (
-            <div className={styles.sentBody}>
-              {latest.resultItems.length ? (
-                <dl className={styles.sentItems}>
-                  {latest.resultItems.map((item) => (
-                    <div key={item.key}>
-                      <dt>{item.key}</dt>
-                      <dd>{item.value}</dd>
-                    </div>
-                  ))}
-                </dl>
-              ) : null}
-              {/* 回复按 Markdown 渲染，与对话正文一致，不露出原样的符号。 */}
-              {latest.reply ? <div className={styles.sentReply}><AgentMessageContent content={latest.reply} readOnlyFileReferences /></div> : null}
-            </div>
-          ) : null}
-        </div>
-      ) : null}
-      {waiting.map((request) => (
-        <CollabAssistRequestCard key={request.id} request={request} collab={collab} onChanged={() => props.onChanged()} />
-      ))}
+      <ConfirmCard
+        requesterName={thread.requester.name}
+        attempt={confirm.attempt}
+        agentName={agentName}
+        busy={busy}
+        onDecide={(decision) => void decide(decision)}
+      />
     </div>
   );
 }

@@ -154,11 +154,25 @@ function byRecentActivity(left: CollabProjectSession, right: CollabProjectSessio
   return (right.lastActiveAt ?? "").localeCompare(left.lastActiveAt ?? "");
 }
 
+/** 看板上的成员：项目成员列表里的一位。邀请进来还没共享任务的成员也要占一段，所以段不能只从任务里推。 */
+interface BoardMember {
+  userId: string;
+  name: string;
+  mine: boolean;
+}
+
+/** 成员名单没变就留着旧数组：看板每轮轮询不因此重画。 */
+function sameMembers(left: readonly BoardMember[], right: readonly BoardMember[]): boolean {
+  return left.length === right.length
+    && left.every((member, index) => member.userId === right[index]?.userId && member.name === right[index]?.name && member.mine === right[index]?.mine);
+}
+
 /**
- * 把一次读回来的任务按人分段。没有任务的成员不生成空段：空段叠在一起只会把列表拉长，本身没有内容可读。
+ * 把一次读回来的任务按人分段，再补上已经加入、还没共享任何任务的成员。
+ * 只从任务推段时，被邀请进来但还在观望的人在看板上整个消失，看板就看不出项目里到底有谁。
  * 段的先后在这里不管，由看板按「本人第一、其余按首次出现」定一次。
  */
-function groupByMember(sessions: readonly CollabProjectSession[]): MemberGroup[] {
+function groupByMember(sessions: readonly CollabProjectSession[], members: readonly BoardMember[] = []): MemberGroup[] {
   const mine: CollabProjectSession[] = [];
   const others = new Map<string, CollabProjectSession[]>();
   for (const session of sessions) {
@@ -179,6 +193,18 @@ function groupByMember(sessions: readonly CollabProjectSession[]): MemberGroup[]
   for (const [name, list] of others) {
     const sorted = [...list].sort(byRecentActivity);
     groups.push({ key: `member:${name}`, name, mine: false, sessions: sorted, latestAt: sorted[0]!.lastActiveAt ?? "" });
+  }
+  // 已经加入但还没有任务的人：照样占一段（任务数为 0），本人也不例外。
+  for (const member of members) {
+    if (member.mine) {
+      if (!groups.some((group) => group.mine)) {
+        groups.push({ key: "me", name: member.name, mine: true, sessions: [], latestAt: "" });
+      }
+      continue;
+    }
+    const name = member.name || "";
+    if (groups.some((group) => !group.mine && group.name === name)) continue;
+    groups.push({ key: `member:${name}`, name, mine: false, sessions: [], latestAt: "" });
   }
   return groups;
 }
@@ -594,6 +620,11 @@ const CollabBoard = memo(function CollabBoard(props: {
   const [membersOpen, setMembersOpen] = useState(false);
   /** 待审核的加入申请数：弹窗没开时也轮询，别人提交申请后「邀请」入口上直接出现角标。 */
   const [pendingRequests, setPendingRequests] = useState(0);
+  /**
+   * 项目成员名单：分段除了从任务里推，还要靠它把「已加入但还没任务」的人补成一段。
+   * 与待审核数同一次读取，不多跑一个接口。
+   */
+  const [boardMembers, setBoardMembers] = useState<readonly BoardMember[]>([]);
   const [deleting, setDeleting] = useState<CollabProjectSession | null>(null);
   /** 「协助」里要删除的那一次：删除只是从自己的列表中移除，另一方仍看得到。 */
   const [deletingAssist, setDeletingAssist] = useState<AssistThread | null>(null);
@@ -1009,9 +1040,10 @@ const CollabBoard = memo(function CollabBoard(props: {
     };
   }, [applyPage, collab, sharedId, query, pollKey]);
 
-  // 换一个项目就从头算角标，不把上个项目的待审核数带到这个项目上。
+  // 换一个项目就从头算角标，不把上个项目的待审核数与成员带到这个项目上。
   useEffect(() => {
     setPendingRequests(0);
+    setBoardMembers([]);
   }, [sharedId]);
 
   /**
@@ -1032,6 +1064,8 @@ const CollabBoard = memo(function CollabBoard(props: {
         const view = await collab.listMembers(sharedId);
         if (cancelled) return;
         setPendingRequests(view.canManage ? view.requests.length : 0);
+        // 成员名单与角标同一次读回来：看板据此给没任务的人留一行。
+        setBoardMembers((current) => (sameMembers(current, view.members) ? current : view.members));
         // 不是所有者或管理员就没有可审核的申请，学到这一点后本窗口不再查。
         if (!view.canManage) return;
       } catch {
@@ -1242,7 +1276,8 @@ const CollabBoard = memo(function CollabBoard(props: {
    * 定过的顺序记在 ref 里，本次停留期间的轮询不重排；新出现的人才追加到末尾。换项目时重算。
    */
   const memberGroups = useMemo<MemberGroup[]>(() => {
-    const groups = groupByMember(sessions ?? []);
+    // 搜索时不补空段：搜出来的是一批任务，给每个没命中的成员都摆一行「0 个」只会把结果冲淡。
+    const groups = groupByMember(sessions ?? [], query ? [] : boardMembers);
     const scope = sharedId ?? project?.id ?? "";
     if (groupOrderRef.current.scope !== scope) {
       groupOrderRef.current = { scope, order: new Map() };
@@ -1254,7 +1289,7 @@ const CollabBoard = memo(function CollabBoard(props: {
       if (!order.has(group.key)) order.set(group.key, order.size);
     }
     return ranked.sort((left, right) => (order.get(left.key) ?? 0) - (order.get(right.key) ?? 0));
-  }, [project?.id, sessions, sharedId]);
+  }, [boardMembers, project?.id, query, sessions, sharedId]);
 
   // Only this project's own tasks: nothing leaves the computer until sharing is on and sessions are chosen.
   const localTasks = useMemo(() => {
@@ -1429,6 +1464,8 @@ const CollabBoard = memo(function CollabBoard(props: {
     const shown = expanded ? group.sessions : group.sessions.slice(0, MEMBER_GROUP_ROWS);
     const rest = group.sessions.length - shown.length;
     const name = group.name || t("collab.session.you");
+    // 邀请进来还没共享任务的人照样占一段：段头写「暂无任务」，不用「0 个任务」那种计较的说法。
+    const noTasks = group.sessions.length === 0;
     /**
      * 协助上手的预演行：按「鼠标停在这一行」的样子画。
      *
@@ -1478,10 +1515,12 @@ const CollabBoard = memo(function CollabBoard(props: {
             {Array.from(name)[0] ?? "?"}
           </span>
           <span className={styles.groupHeadName} data-collab-member-name="">{name}</span>
-          <span className={styles.groupHeadCount}>
+          <span className={styles.groupHeadCount} data-collab-member-count={group.sessions.length}>
             {query
               ? t("collab.sessions.groupMatches", { count: String(group.sessions.length) })
-              : t("collab.sessions.groupCount", { count: String(group.sessions.length) })}
+              : noTasks
+                ? t("collab.sessions.groupEmpty")
+                : t("collab.sessions.groupCount", { count: String(group.sessions.length) })}
           </span>
           <span className={styles.grow} />
           {receiver ? (
@@ -1513,7 +1552,7 @@ const CollabBoard = memo(function CollabBoard(props: {
             className={`${styles.groupHeadCaret} ${collapsed ? styles.groupHeadCaretShut : ""}`}
           />
         </div>
-        {collapsed ? null : (
+        {collapsed || noTasks ? null : (
           <>
             <ul className={`${styles.list} ${styles.stream}`}>{shown.map(renderSessionRow)}</ul>
             {rest > 0 || (expanded && group.sessions.length > MEMBER_GROUP_ROWS) ? (

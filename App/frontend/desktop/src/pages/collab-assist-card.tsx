@@ -4,22 +4,32 @@
  * 卡片只读：状态与结果都来自云端，本机不做二次加工。结果对发起方的 Agent 是数据而不是指令，
  * 展示时也按「结果」这一栏排，不拼进对话正文。
  */
-import { AlertCircle, CheckCircle2, FileText, X, WifiOff } from "lucide-react";
+import { AlertCircle, ChevronDown, ChevronRight, FileText, HandHelping, X, WifiOff } from "lucide-react";
 import { useState } from "react";
 import type { AssistRequest, CollabClient } from "../api/collab-client.js";
 import { useTranslation } from "../i18n/use-translation.js";
 import { agentSourceSquareLogoUrl } from "./agent-source-logos.js";
+import { AssistProcessBlock } from "./collab-assist-process.js";
 import styles from "./collab-assist-card.module.css";
-import { assistClock, assistDuration, assistStopText, grantSummary } from "./collab-assist-view.js";
+import { assistClock, assistStopText, grantSummary } from "./collab-assist-view.js";
 
+/**
+ * 发起方的协助请求卡片。
+ *
+ * 两种用法：`dock`（输入框上方的固定位置，旧的用法）与 `flow`（排在会话里，与结果卡片前后相接）。
+ * `flow` 下不再重复结果——结果由会话里那张结果卡片负责，这里只说请求本身与执行过程。
+ */
 export function CollabAssistRequestCard(props: {
   request: AssistRequest;
   collab: CollabClient | null;
   onChanged?: (request: AssistRequest) => void;
+  variant?: "dock" | "flow";
 }) {
   const { t } = useTranslation();
   const { request } = props;
   const [busy, setBusy] = useState(false);
+  // 整张卡片可收起：会话里一次协助连着请求、结果与执行过程，全部摊开会把正文挤走。
+  const [open, setOpen] = useState(true);
   const executor = request.executor.name;
   const agentName = agentLabel(request.agent, t("collab.assist.executorFallback"));
   const status = request.status;
@@ -53,29 +63,67 @@ export function CollabAssistRequestCard(props: {
   }
 
   return (
-    <div className={`${styles.card} ${status === "confirm" ? styles.cardWarning : ""}`}>
-      <div className={styles.head}>
-        <span className={styles.avatar} style={{ background: memberColor(request.executor.userId) }}>
-          {Array.from(executor)[0] ?? ""}
-        </span>
-        <span className={styles.title}>
-          {request.attempt > 1
-            ? t("collab.assist.cardTitleAgain", { name: executor, attempt: String(request.attempt) })
-            : t("collab.assist.cardTitle", { name: executor })}
-        </span>
-        <span className={styles.project}>{request.projectName}</span>
-        <span className={styles.grow} />
-        <span className={`${styles.pill} ${pill.className}`}>{pill.label}</span>
-      </div>
+    <div
+      className={`${styles.card} ${props.variant === "flow" ? styles.cardFlow : ""} ${status === "confirm" ? styles.cardWarning : ""}`}
+      data-collab-assist-flow-request={props.variant === "flow" ? "" : undefined}
+    >
+      {/*
+       * 排在过程里时与其它过程行同一种排法：图标 + 动词 + 一行说明 + chevron，
+       * 用的是过程行自己的 class（`agent-activity-timeline-item`），字号、颜色、行高都跟着它走。
+       */}
+      <button
+        type="button"
+        className={props.variant === "flow" ? "agent-activity-tool-details__summary" : styles.head}
+        aria-expanded={open}
+        data-collab-assist-toggle=""
+        onClick={() => setOpen((value) => !value)}
+      >
+        {props.variant === "flow" ? (
+          <HandHelping size={13} aria-hidden="true" className="agent-activity-timeline-item__icon" />
+        ) : (
+          <span className={styles.avatar} style={{ background: memberColor(request.executor.userId) }}>
+            {Array.from(executor)[0] ?? ""}
+          </span>
+        )}
+        {props.variant === "flow" ? (
+          <div className="agent-activity-timeline-item__body">
+            <p className="agent-activity-timeline-item__line">
+              <span className="agent-activity-timeline-item__verb">{t("collab.assist.cardTitle", { name: executor })}</span>
+              <span className="agent-activity-timeline-item__detail" data-collab-assist-state={status}>{pill.label}</span>
+            </p>
+          </div>
+        ) : (
+          <>
+            <span className={styles.title}>{t("collab.assist.cardTitle", { name: executor })}</span>
+            <span className={styles.project}>{request.projectName}</span>
+            <span className={styles.grow} />
+            <span className={styles.stateText} data-collab-assist-state={status}>{pill.label}</span>
+          </>
+        )}
+        {props.variant === "flow" ? (
+          <ChevronRight
+            size={12}
+            aria-hidden="true"
+            className={`agent-activity-tool-details__chevron${open ? " agent-activity-tool-details__chevron--open" : ""}`}
+          />
+        ) : open ? <ChevronDown size={13} aria-hidden="true" className={styles.headCaret} />
+          : <ChevronRight size={13} aria-hidden="true" className={styles.headCaret} />}
+      </button>
 
-      <div className={styles.body}>
+      {open ? (
+      <div className={props.variant === "flow" ? `agent-activity-tool-card ${styles.flowCard}` : styles.body}>
+        <div className={props.variant === "flow" ? "agent-activity-tool-card__section" : undefined}>
+        {request.reason ? (
+          <p className={styles.reason}>
+            <span className={styles.reasonKey}>{t("collab.assist.reasonKey")}</span>
+            {request.reason}
+          </p>
+        ) : null}
         <div className={styles.key}>{t("collab.assist.cardTodo")}</div>
         <ol>
           {request.items.map((item) => <li key={item}>{item}</li>)}
         </ol>
-        {/* 发起这次请求的那一轮会进入协助会话：在请求旁边就说清对方看得到什么。 */}
-        <p className={styles.visibility}>{t("collab.assist.cardVisibility", { name: executor })}</p>
-        {status === "done" ? (
+        {status === "done" && props.variant !== "flow" ? (
           <>
             <div className={styles.key}>{t("collab.assist.cardResult")}</div>
             <div className={styles.results}>
@@ -117,8 +165,13 @@ export function CollabAssistRequestCard(props: {
             ) : null}
           </>
         ) : null}
+        {/* 执行中还没有结果卡片，过程先放在这里看；结果回写后它就归到结果卡片，这一张不再带过程。 */}
+        {status === "running" ? <AssistProcessBlock collab={props.collab} request={request} /> : null}
+        </div>
       </div>
+      ) : null}
 
+      {open && status !== "done" ? (
       <div className={styles.footer}>
         {status === "pending" ? (
           <>
@@ -161,14 +214,6 @@ export function CollabAssistRequestCard(props: {
               {t("collab.assist.withdraw")}
             </button>
           </>
-        ) : status === "done" ? (
-          <>
-            <CheckCircle2 size={13} aria-hidden="true" />
-            <span className={styles.byline}>
-              <AgentLogo agent={request.agent} name={agentName} />
-              {t("collab.assist.footerDone", { name: executor, agent: agentName, took: assistDuration(request, t) })}{grantNote}
-            </span>
-          </>
         ) : status === "rejected" ? (
           <>
             <X size={13} aria-hidden="true" />
@@ -190,6 +235,7 @@ export function CollabAssistRequestCard(props: {
           </>
         )}
       </div>
+      ) : null}
     </div>
   );
 }

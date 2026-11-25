@@ -557,6 +557,23 @@ async function readSubmission(
 }
 
 /**
+ * 交给运行时的机器可读标记：这一轮发过协助请求。
+ *
+ * 只有 Memmy 的 exec 认它：运行时（`App/memmy-agent` 的 runner）看到这一行就把它从输出里剥掉（模型看不到），
+ * 并给它这次调用的事件打上 `assist_request_id`；界面据此知道这一轮的正文属于工作过程，不必去猜命令文本
+ * （`grep assist ask`、`assist ask --help` 这类操作不会被误判）。手动在终端跑时它只是一行普通输出。
+ *
+ * 两边用的是同一个协议值：改这里要同步 `App/memmy-agent/src/core/agent-runtime/runner.ts` 的
+ * ASSIST_REQUEST_MARKER_PATTERN。
+ */
+export const ASSIST_REQUEST_MARKER = "memmy-assist-request";
+
+/** 标记行单独一行放末尾，便于调用方按整行剥掉。 */
+function assistRequestMarkerLine(requestId: string): string {
+  return requestId ? `\n${ASSIST_REQUEST_MARKER} ${requestId}` : "";
+}
+
+/**
  * 成员协助：请另一位成员的电脑执行任务。
  *
  * `ask` 只写要做的事与原因，不指定由哪个 Agent 执行——那由对方决定。同一次排查的后续请求带
@@ -567,8 +584,7 @@ async function runAssist(
   parsed: ParsedArgs,
   action: string | undefined,
   rest: readonly string[]
-): Promise<string> {
-  if (action === "ask") {
+): Promise<string> {  if (action === "ask") {
     if (rest.length) throw new Error("assist ask 用 --project、--member 与 --file 指定");
     const project = optionString(parsed, "project")?.trim();
     const member = optionString(parsed, "member")?.trim();
@@ -601,10 +617,10 @@ async function runAssist(
     const sent = typeof created.text === "string" ? created.text : `已发送协助请求 ${requestId}。`;
     // 正文很长又没带附件：对方多半得自己重写一做，提一句就好，不拦着发。
     const hint = longBodyHint(request);
-    if (!wait || !requestId) return `${sent}${hint}`;
+    if (!wait || !requestId) return `${sent}${hint}${assistRequestMarkerLine(requestId)}`;
     // --wait 在本轮里等结果：等待期间可以继续做别的，结果回来再接着分析。
     const waited = await waitForAssist(deps, requestId, waitTimeoutMs(parsed), session);
-    return `${sent}${hint}\n\n${text(waited.text)}`;
+    return `${sent}${hint}\n\n${text(waited.text)}${assistRequestMarkerLine(requestId)}`;
   }
   if (action === "wait") {
     const requestId = rest[0]?.trim();

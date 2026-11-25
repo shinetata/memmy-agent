@@ -180,3 +180,43 @@ describe("AgentRunner tool result safety", () => {
     expect(escalated.length).toBeGreaterThanOrEqual(1);
   });
 });
+
+describe("AgentRunner assist request marker", () => {
+  it("turns the CLI's marker line into a tool event field and keeps it out of the result", async () => {
+    // `memmy-project assist ask` 成功时会在输出末尾带一行标记。界面靠它知道这一轮发过协助请求，
+    // 从而把这一轮的正文归进工作过程；模型不该看到这一行。
+    const raw = [
+      "已发送协助请求 8DCD3A，等待孙起选择执行的 Agent 并授权。",
+      "",
+      "memmy-assist-request 8dcd3a2c-5cbd-4772-b644-f1b4a0b7091d"
+    ].join("\n");
+    const spec = new AgentRunSpec({
+      tools: { execute: async () => raw, get: () => null } as any,
+    });
+
+    const [executed] = await new AgentRunner().executeTools(spec, [
+      new ToolCallRequest({ id: "c1", name: "exec", arguments: { command: "memmy-project assist ask --member 孙起 --file x.json" } })
+    ]);
+
+    expect(executed!.event?.assist_request_id).toBe("8dcd3a2c-5cbd-4772-b644-f1b4a0b7091d");
+    expect(String(executed!.result)).toContain("已发送协助请求 8DCD3A");
+    expect(String(executed!.result)).not.toContain("memmy-assist-request");
+    expect(String(executed!.event?.detail)).not.toContain("memmy-assist-request");
+  });
+
+  it("leaves ordinary tool output alone, including lookalikes", async () => {
+    // 只是讨论协助（grep、--help）不会发请求，也就没有标记：不写字段、不改输出。
+    for (const raw of [
+      "SKILL.md:  memmy-project assist ask --project x --member y --file z",
+      "error: memmy-assist-request 上报失败",
+      "memmy-assist-request"
+    ]) {
+      const spec = new AgentRunSpec({ tools: { execute: async () => raw, get: () => null } as any });
+      const [executed] = await new AgentRunner().executeTools(spec, [
+        new ToolCallRequest({ id: "c1", name: "exec", arguments: { command: "grep assist ask SKILL.md" } })
+      ]);
+      expect(executed!.event?.assist_request_id).toBeUndefined();
+      expect(String(executed!.result)).toContain(raw.slice(0, 20).trim());
+    }
+  });
+});

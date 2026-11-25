@@ -24,7 +24,7 @@ import { CollabAssistRequestCard } from "../collab-assist-card.js";
 import { AssistBoardRow } from "../collab-page.js";
 import { CollabAssistDialog } from "../collab-assist-dialog.js";
 import { CollabAssistHost } from "../collab-assist-host.js";
-import { AssistMessageCard, parseAssistEnvelope } from "../collab-assist-message.js";
+import { AssistMessageCard, assistRequestBubbleText, parseAssistEnvelope } from "../collab-assist-message.js";
 import { CollabAssistProjectSettings } from "../collab-assist-settings.js";
 import { CollabAssistTaskChip, CollabAssistTaskDock } from "../collab-assist-task.js";
 import { NotificationCenterProvider } from "../../components/notification-center.js";
@@ -427,7 +427,7 @@ describe("执行方的协助任务", () => {
     expect(collab.decideAssist).toHaveBeenCalledWith("r2", { action: "allow", agent: "memmy", scope: "once" });
   });
 
-  it("结果发出后底部写明发给了谁，展开能看到发出去的内容", async () => {
+  it("结果发出后输入框上方不再写「结果已发给谁」", async () => {
     const done = request({
       status: "done",
       agent: "memmy",
@@ -441,19 +441,15 @@ describe("执行方的协助任务", () => {
         <CollabAssistTaskDock view={view} collab={client()} onChanged={() => undefined} />
       </I18nProvider>
     ));
-    expect(document.body.textContent).toContain("结果已发给孙起");
-    expect(document.body.textContent).not.toContain("Memmy 1.2.6，macOS 15.6。");
-    await act(async () => [...document.querySelectorAll("button")].find((item) => item.textContent?.includes("结果已发给孙起"))?.click());
-    expect(document.body.textContent).toContain("Memmy 1.2.6，macOS 15.6。");
-    // 展开后的回复按 Markdown 渲染，不露出原样的符号。
-    expect(document.body.textContent).not.toContain("**");
+    // 结果与过程都在会话里看得见，输入框上方不再重复一遍。
+    expect(document.body.textContent).toBe("");
   });
 
-  it("请求消息显示成卡片，看不到交给模型的格式要求", async () => {
+  it("接收方看到的是普通气泡里的请求内容，看不到交给模型的标签", async () => {
     const content = [
       '<memmy_assist_request request="r1" from="孙起" via="Claude Code" attempt="2">',
       "孙起正在排查一个问题，需要这台电脑上的信息。",
-      "起因：本机复现不了",
+      "背景：本机复现不了",
       "",
       "要做的事：查看系统与 Memmy 版本",
       "- 查看 Memmy 与 macOS 的版本",
@@ -461,35 +457,41 @@ describe("执行方的协助任务", () => {
     ].join("\n");
     const envelope = parseAssistEnvelope(content);
     expect(envelope?.kind).toBe("request");
-    await act(async () => root.render(
-      <I18nProvider language="zh-CN">
-        <AssistMessageCard envelope={envelope!} />
-      </I18nProvider>
-    ));
-    expect(document.body.textContent).toContain("孙起的 Claude Code 请求· 第 2 次");
-    expect(document.body.textContent).toContain("背景本机复现不了");
-    expect(document.body.textContent).toContain("查看 Memmy 与 macOS 的版本");
-    expect(document.body.textContent).not.toContain("memmy_assist_request");
+    // 不再画卡片：交给标准气泡一段 Markdown。
+    const text = assistRequestBubbleText(envelope!, (key, values) => {
+      const table: Record<string, string> = {
+        "collab.assist.bubbleTitle": "{name}请你协助",
+        "collab.assist.bubbleTitleAgain": "{name}请你协助（第 {attempt} 次）",
+        "collab.assist.bubbleReason": "背景：",
+        "collab.assist.cardTodo": "要做的事"
+      };
+      return (table[key] ?? key).replace(/\{(\w+)\}/g, (_match, name: string) => values?.[name] ?? "");
+    });
+    expect(text).toContain("孙起请你协助（第 2 次）");
+    expect(text).toContain("背景：本机复现不了");
+    expect(text).toContain("1. 查看 Memmy 与 macOS 的版本");
+    expect(text).not.toContain("memmy_assist_request");
     expect(parseAssistEnvelope("普通的一句话")).toBeNull();
   });
 });
 
 describe("发起方在 Memmy 中", () => {
-  it("结果还没送回时，任务底部显示请求卡片；送回后由消息里的结果卡片承接", async () => {
+  it("把发起方的请求留在会话流里，输入框上方的条只放执行方要动手的东西", async () => {
     const waiting = { ...request({ status: "running", agent: "memmy", mine: true, sourceTask: "chat-src" }), delivered: false };
     await act(async () => root.render(
       <I18nProvider language="zh-CN">
         <CollabAssistTaskDock view={{ executing: null, requested: [waiting] }} collab={client()} onChanged={() => undefined} />
       </I18nProvider>
     ));
-    expect(document.body.textContent).toContain("请求王雨协助");
-    expect(document.body.textContent).toContain("执行中");
+    // 请求卡片在会话里（见 home-page 的 assistFlow），这里不该再出现一份。
+    expect(document.body.textContent).not.toContain("请求王雨协助");
 
     await act(async () => root.render(
       <I18nProvider language="zh-CN">
         <CollabAssistTaskDock view={{ executing: null, requested: [{ ...waiting, status: "done", delivered: true }] }} collab={client()} onChanged={() => undefined} />
       </I18nProvider>
     ));
+    // 结果回写之后同样只由会话里的两张卡片承接。
     expect(document.body.textContent).not.toContain("请求王雨协助");
 
     const result = parseAssistEnvelope([
@@ -517,6 +519,83 @@ describe("发起方在 Memmy 中", () => {
     expect(document.body.textContent).toContain("- sessions：11G");
     expect(document.body.textContent).toContain("以上内容来自王雨的电脑");
     expect(document.body.textContent).not.toContain("请结合这份结果");
+  });
+});
+
+describe("发起方看到的两张卡片", () => {
+  const finished = (overrides: Partial<AssistRequest> = {}) => request({
+    status: "done",
+    agent: "memmy",
+    scope: "timed",
+    decidedMinutes: 30,
+    decidedAt: "2026-11-25T07:20:10Z",
+    finishedAt: "2026-11-25T07:20:19Z",
+    mine: true,
+    requester: { ...REQUESTER, mine: true },
+    executor: { ...ME, mine: false },
+    ...overrides
+  });
+
+  it("请求卡片不写第几次、不做状态胶囊，也不再说对方能看到这一轮", async () => {
+    await act(async () => root.render(
+      <I18nProvider language="zh-CN">
+        <CollabAssistRequestCard request={finished({ attempt: 2 })} collab={client()} variant="flow" />
+      </I18nProvider>
+    ));
+    expect(document.body.textContent).toContain("请求王雨协助");
+    expect(document.body.textContent).not.toContain("第 2 次");
+    expect(document.body.textContent).not.toContain("也能在协助会话里看到");
+    // 状态只写一句，不做成胶囊。
+    const state = document.querySelector<HTMLElement>("[data-collab-assist-state]");
+    // 排在过程里：状态跟在动词后面同一行，与工具行那条说明同一种排法。
+    expect(state?.textContent).toBe("已完成");
+    expect(state?.className).toContain("agent-activity-timeline-item__detail");
+    // 结果归结果卡片：请求卡片上不再有「由谁执行 · 用时」那一行。
+    expect(document.body.textContent).not.toContain("用时");
+  });
+
+  it("整张请求卡片可以收起，收起后只剩段头", async () => {
+    await act(async () => root.render(
+      <I18nProvider language="zh-CN">
+        <CollabAssistRequestCard request={finished()} collab={client()} variant="flow" />
+      </I18nProvider>
+    ));
+    expect(document.body.textContent).toContain("要做的事");
+    const head = document.querySelector<HTMLElement>("[data-collab-assist-toggle]")!;
+    expect(head.getAttribute("aria-expanded")).toBe("true");
+    await act(async () => head.click());
+    expect(head.getAttribute("aria-expanded")).toBe("false");
+    expect(document.body.textContent).not.toContain("要做的事");
+    expect(document.body.textContent).toContain("请求王雨协助");
+  });
+
+  it("结果卡片写用时与授权方式，并带上执行过程；同样可以整体收起", async () => {
+    const envelope = parseAssistEnvelope([
+      '<memmy_assist_result request="r1" short="R1" from="王雨" agent="Memmy" status="done" attempt="2" title="查看 Codex 的版本">',
+      "王雨的 Memmy 完成了协助请求「查看 Codex 的版本」（第 2 次）。",
+      "",
+      "结果：",
+      "codex-cli 0.149.1",
+      "</memmy_assist_result>"
+    ].join("\n"))!;
+    await act(async () => root.render(
+      <I18nProvider language="zh-CN">
+        <AssistMessageCard
+          envelope={envelope}
+          result={{ request: finished(), process: <p>执行过程的占位</p> }}
+        />
+      </I18nProvider>
+    ));
+    // 只显示用时与授权时间：不再写「由谁执行」。
+    expect(document.body.textContent).toContain("用时 9 秒");
+    expect(document.body.textContent).toContain("30 分钟内直接执行");
+    expect(document.body.textContent).not.toContain("由王雨的 Memmy 执行");
+    expect(document.body.textContent).toContain("执行过程的占位");
+
+    const head = document.querySelector<HTMLElement>("[data-collab-assist-toggle]")!;
+    await act(async () => head.click());
+    expect(document.body.textContent).not.toContain("执行过程的占位");
+    expect(document.body.textContent).toContain("王雨的 Memmy 完成了协助");
   });
 });
 

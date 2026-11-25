@@ -4474,7 +4474,8 @@ button.agent-activity-file-link.agent-activity-timeline-item__detail {
   transition: transform 120ms ease;
 }
 
-.agent-activity-tool-details[open] .agent-activity-tool-details__chevron {
+.agent-activity-tool-details[open] .agent-activity-tool-details__chevron,
+.agent-activity-tool-details__chevron--open {
   transform: rotate(90deg);
 }
 
@@ -15823,3 +15824,26 @@ body.memmy-platform-windows :is(
 .memmy-browser-history-entry__main span { color: var(--color-text-secondary, #777); font-size: 12px; }
 .memmy-browser-history-entry__source { flex: none; color: var(--color-text-secondary, #777); font-size: 12px; line-height: 1.4; white-space: nowrap; }
 .memmy-browser-history-entry__delete { flex: none; }
+
+/*
+ * 协助那一轮的播报（「已请某某协助…」）：它是工作过程的一部分，排法与思考正文一致——
+ * 左侧一根细竖线的引用块、62% 灰、同一档字号与行距。只作用于带标记的这一类旁白，
+ * 正常回答与普通旁白不受影响。
+ */
+.agent-activity-segment--narration-muted {
+  margin: 8px 0;
+  padding-left: 12px;
+  border-left: 2px solid color-mix(in srgb, var(--color-text-ink) 14%, transparent);
+  font-size: var(--chat-md-root);
+  line-height: 1.786;
+  color: color-mix(in srgb, var(--color-text-ink) 62%, transparent);
+}
+
+.agent-activity-segment--narration-muted .agent-message-content {
+  color: inherit;
+}
+
+.agent-activity-segment--narration-muted strong {
+  font-weight: 600;
+  color: inherit;
+}

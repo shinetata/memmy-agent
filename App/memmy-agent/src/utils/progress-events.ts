@@ -206,6 +206,8 @@ export function buildToolEventFinishPayloads(context: any): Array<Record<string,
       error: null,
       ...(typeof event.display_text === "string" ? { display_text: event.display_text } : {}),
       ...(event.output_file ? { output_file: event.output_file } : {}),
+      // 发出协助请求的那次调用：界面靠这个字段判断哪一轮属于工作过程，必须原样透传。
+      ...(typeof event.assist_request_id === "string" ? { assist_request_id: event.assist_request_id } : {}),
       files: eventFiles,
       embeds,
     };

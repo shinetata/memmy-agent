@@ -7,10 +7,13 @@ import { useConversationFeatures } from "./conversation-features.js";
 import { applySidebarRecordingAction, sidebarRecordingStatus } from "./recording-entry.js";
 import { pendingAgentQuestion, AgentQuestionCard, AgentQuestionActiveRequestContext } from "./agent-question-card.js";
 /** Home page module. */
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ChangeEvent, type ClipboardEvent, type CSSProperties, type DragEvent, type KeyboardEvent, type SetStateAction, type UIEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ChangeEvent, type ClipboardEvent, type CSSProperties, type DragEvent, type KeyboardEvent, type ReactNode, type SetStateAction, type UIEvent } from "react";
 import { resolveThinkingEnabled, resolveThinkingLevel, type AgentGatewayStartupIssue } from "@memmy/local-api-contracts";
 import { getRuntimeConfig } from "../api/runtime-config.js";
 import { createHttpCollabClient, type CollabProjectSession } from "../api/collab-client.js";
+import { CollabAssistRequestCard } from "./collab-assist-card.js";
+import { AssistProcessBlock } from "./collab-assist-process.js";
+import { parseAssistEnvelope } from "./collab-assist-message.js";
 import { CollabAssistTaskChip, CollabAssistTaskDock, useAssistTask } from "./collab-assist-task.js";
 import { collabEnabledFor } from "../app/collab-mode.js";
 import { startDemoGuideAsk } from "../app/collab-demo-ask.js";
@@ -137,6 +140,9 @@ export { agentChatScopeKey, updateComposerDraftForScope };
 export { hydrateAgentThreadInBackground };
 export { isComposingKeyboardEvent } from "../utils/keyboard.js";
 export type { PendingAttachment, PendingAttachmentBase, PendingFileAttachment, PendingImage };
+
+/** 稳定的空数组：会话流用 === 比较插入项，没有请求时不因新数组重画消息。 */
+const EMPTY_ASSIST_INSERTS: ReadonlyArray<{ beforeMessageId: string; node: ReactNode; autoOpen?: boolean }> = [];
 
 const AGENT_WS_SAFE_FRAME_BYTES = 1024 * 1024;
 const COMPOSER_HEIGHT_EPSILON = 2;
@@ -1150,6 +1156,53 @@ export function HomePage(props: { hiddenSurface?: boolean } = {}) {
     state.agent.currentChatId,
     collabEnabledFor(state.bootstrap?.app.userMode) && Boolean(state.account.userId)
   );
+  /**
+   * 发起方的协助请求排在会话里，不进输入框上方的固定条：与接收方看到的一样，
+   * 按发生顺序是「请求 → 执行 → 结果」。结果消息回来了就插在它前面（结果消息本身属于工作过程，
+   * 插在它前面就等于进了这一轮的过程）；还没回写就挂在最后一个工作过程上。
+   *
+   * 只依赖这两个确定事实：结果消息在不在、请求有没有送达。不从工具调用文本里推断哪一轮发过请求——
+   * `grep assist ask`、`assist ask --help` 这类操作会误判，一旦误判整轮正文都会被当成过程。
+   */
+  const assistFlow = useMemo(() => {
+    const requested = assistTask.view.requested;
+    if (!requested.length) return { inserts: EMPTY_ASSIST_INSERTS, pendingAssist: null as ReactNode, tail: null as ReactNode };
+    // 结果消息的锚点：`<memmy_assist_result request="…">` 里的那个 id 就是请求 id。
+    const anchorOf = new Map<string, string>();
+    for (const message of state.agent.messages) {
+      if (message.role !== "user" || typeof message.content !== "string") continue;
+      const envelope = parseAssistEnvelope(message.content);
+      const requestId = envelope?.kind === "result" ? envelope.attrs.request : null;
+      if (envelope && requestId) anchorOf.set(requestId, message.id);
+    }
+    const inserts: Array<{ beforeMessageId: string; node: ReactNode; autoOpen?: boolean }> = [];
+    const pending: ReactNode[] = [];
+    const tail: ReactNode[] = [];
+    for (const request of requested) {
+      const node = (
+        <div key={request.id} className="min-w-0">
+          <CollabAssistRequestCard
+            request={request}
+            collab={collabClient}
+            variant="flow"
+            onChanged={() => void assistTask.refresh()}
+          />
+          <AssistProcessBlock collab={collabClient} request={request} inline />
+        </div>
+      );
+      // 结果已经回来：排在结果那条消息之前（锚点稳定，消息 id 不会变）。
+      // 还在等：交给 pendingAssist，挂在最后一个工作过程上。
+      const delivered = anchorOf.get(request.id);
+      if (delivered) inserts.push({ beforeMessageId: delivered, node });
+      else if (!request.delivered) pending.push(node);
+      else tail.push(node);
+    }
+    return {
+      inserts,
+      pendingAssist: pending.length ? <>{pending}</> : null,
+      tail: tail.length ? <>{tail}</> : null
+    };
+  }, [assistTask.view.requested, collabClient, state.agent.messages]);
   const mentionQuery = useMemo(
     () => (mentionDismissed ? null : mentionQueryFromInput(composerInput, composerCaret)),
     [composerInput, composerCaret, mentionDismissed]
@@ -3870,6 +3923,9 @@ export function HomePage(props: { hiddenSurface?: boolean } = {}) {
                 messages={state.agent.messages}
                 afterMessageId={firstEncounterRelayAnchorMessageId}
                 afterMessageContent={firstEncounterRelayContent}
+                inserts={assistFlow.inserts}
+                pendingAssist={assistFlow.pendingAssist}
+                tail={assistFlow.tail}
                 forceMessageActionsForMessageId={firstEncounterRelayAnswerMessageId}
                 retryWaitStatus={state.agent.currentChatId ? state.agent.retryWaitStatusByChatId[state.agent.currentChatId] ?? null : null}
                 isSending={state.agent.isSending}

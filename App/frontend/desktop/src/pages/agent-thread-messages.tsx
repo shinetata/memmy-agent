@@ -1,5 +1,5 @@
 import { PluginToolActivity, isPluginToolFailure, useHasCompletedPluginInteraction, usePluginCapabilityLabel } from "./plugin-tool-activity.js";
-import { AssistMessageCard, parseAssistEnvelope } from "./collab-assist-message.js";
+import { assistRequestBubbleText, parseAssistEnvelope } from "./collab-assist-message.js";
 import { AgentTaskPlanBar } from "./agent-task-plan-bar.js";
 /**
  * Agent chat message rendering.
@@ -90,6 +90,21 @@ interface AgentThreadMessagesProps {
   messages: AgentChatMessage[];
   afterMessageId?: string | null;
   afterMessageContent?: ReactNode;
+  /**
+   * 插在指定消息之前：与 afterMessage 对称，可多条。协助请求按发生顺序排在它自己的结果消息之前，
+   * 消息流里就与接收方看到的一样是「请求 → 执行 → 结果」。
+   */
+  inserts?: readonly { beforeMessageId: string; node: ReactNode; autoOpen?: boolean }[];
+  /** 排在所有消息之后：兜底的一格，正常不该用到。 */
+  tail?: ReactNode;
+  /**
+   * 还在等回音的协助请求（请求行 + 对方执行过程）。
+   *
+   * 它固定挂在**最后一个工作过程**里，而不是按某条消息的 id 找位置：锚点会随会话变长而漂移，
+   * 之前正是这样出现了「先展开、随即收缩成一行」的抖动。挂在最后一个过程上位置稳定，
+   * 而且它本来就是这一轮正在做的事，收起过程时才看不见。
+   */
+  pendingAssist?: ReactNode;
   /** Shows standard reply actions on the final text reply when a supplement follows activity. */
   forceMessageActionsForMessageId?: string | null;
   retryWaitStatus?: AgentRetryWaitStatus | null;
@@ -117,6 +132,11 @@ export type AgentDisplayUnit =
       isRunning: boolean;
       isCurrentTurnActivity: boolean;
       stoppedByUser: boolean;
+      /**
+       * 这一段过程里请过成员协助、结果还没回来：过程保持展开，不随流式结束收成一行。
+       * 结果回来后（或没请过协助）为假，按普通会话折叠。
+       */
+      awaitsAssist?: boolean;
     }
   | { type: "retry_wait"; status: AgentRetryWaitStatus }
   | { type: "single"; message: AgentChatMessage };
@@ -159,10 +179,45 @@ type ClipboardItemConstructor = {
 
 export const AgentThreadMessages = memo(function AgentThreadMessages(props: AgentThreadMessagesProps) {
   const activeQuestionId = useContext(AgentQuestionActiveRequestContext);
+  const assistPending = props.pendingAssist != null;
   const units = useMemo(
-    () => buildAgentDisplayUnits(props.messages, { chatScopeKey: props.chatScopeKey, retryWaitStatus: props.retryWaitStatus ?? null }),
-    [props.chatScopeKey, props.messages, props.retryWaitStatus]
+    () => buildAgentDisplayUnits(props.messages, {
+      chatScopeKey: props.chatScopeKey,
+      retryWaitStatus: props.retryWaitStatus ?? null,
+      activeTurnId: props.activeTurnId ?? null
+    }),
+    [props.activeTurnId, props.chatScopeKey, props.messages, props.retryWaitStatus]
   );
+  /** 挂着等回音请求的那个过程：它的下标（没有就是 -1）。 */
+  const pendingAssistIndex = useMemo(() => {
+    if (!assistPending) return -1;
+    for (let index = units.length - 1; index >= 0; index -= 1) {
+      if (units[index]?.type === "activity") return index;
+    }
+    return -1;
+  }, [assistPending, units]);
+  /**
+   * 锚点消息已经不在会话里了（最常见的是上下文压缩把它压掉了）：这些插入项原本会静默消失，
+   * 协助请求与执行过程也跟着不见。把它们挪到消息流末尾，宁可位置不精确也不能丢。
+   */
+  const orphanInserts = useMemo(() => {
+    const inserts = props.inserts ?? [];
+    if (!inserts.length) return EMPTY_INSERTS;
+    const ids = new Set<string>();
+    for (const unit of units) {
+      if (unit.type === "activity") for (const message of unit.messages) ids.add(message.id);
+      else if (unit.type === "single") ids.add(unit.message.id);
+    }
+    const orphan = inserts.filter((item) => !ids.has(item.beforeMessageId));
+    return orphan.length ? orphan : EMPTY_INSERTS;
+  }, [props.inserts, units]);
+  /** 最后一个工作过程：等回音的协助请求挂在这里。 */
+  const lastActivityIndex = useMemo(() => {
+    for (let index = units.length - 1; index >= 0; index -= 1) {
+      if (units[index]?.type === "activity") return index;
+    }
+    return -1;
+  }, [units]);
   const taskPlanAnchor = props.taskPlan?.plan_id ? taskPlanActivityIndex(units, props.taskPlan) : -1;
   const hasCompletedInteractionTool = Boolean(props.pluginInteractionStatus?.agentToolCallId && props.messages.some((message) =>
     (message.toolEvents ?? []).some((event) => (event.phase === "end" || event.phase === "error")
@@ -217,10 +272,12 @@ export const AgentThreadMessages = memo(function AgentThreadMessages(props: Agen
     setManualOpenByActivityKey((current) => {
       let changed = false;
       const next = { ...current };
-      for (const unit of units) {
+      for (const [unitIndex, unit] of units.entries()) {
         if (unit.type !== "activity") {
           continue;
         }
+        // 这一步还在等对方的回音：别跟着流式结束一起收起，否则用户只看到一行。
+        if (unitIndex === pendingAssistIndex || unit.awaitsAssist) continue;
         const isAutoOpenRunning = activityRunningByKey[unit.activityKey] === true;
         const wasRunning = previousRunningByActivityKey.current[unit.activityKey] === true;
         if (!isAutoOpenRunning && (wasRunning || current[unit.activityKey] === undefined)) {
@@ -245,7 +302,7 @@ export const AgentThreadMessages = memo(function AgentThreadMessages(props: Agen
       if (live) nextLive.add(activityKey);
     }
     liveActivityKeysRef.current = nextLive;
-  }, [activityRunningByKey, props.isSending, units]);
+  }, [activityRunningByKey, pendingAssistIndex, props.isSending, units]);
 
   return (
     <>
@@ -256,9 +313,13 @@ export const AgentThreadMessages = memo(function AgentThreadMessages(props: Agen
         if (unit.type === "activity") {
           const isAutoOpenRunning = activityRunningByKey[unit.activityKey] === true;
           const manualOpen = manualOpenByActivityKey[unit.activityKey];
+          // 挂着等回音的协助请求：这一段过程默认展开，用户自己收起才收起。
+          // 判据只有会话里的消息（这一轮发过 assist ask、后面还没有结果），不看轮询回来的请求列表。
+          const assistOpen = unit.awaitsAssist === true
+            || (index === pendingAssistIndex && props.pendingAssist != null);
           const open = (processInteraction && index === interactionAnchor)
             || unit.messages.some((message) => Boolean(activeQuestionId && readAgentQuestionCard(message.agentUi)?.requestId === activeQuestionId))
-            || (isAutoOpenRunning ? manualOpen ?? true : manualOpen ?? unit.stoppedByUser);
+            || (assistOpen ? (manualOpen ?? true) : (isAutoOpenRunning ? manualOpen ?? true : manualOpen ?? unit.stoppedByUser));
           return (
             <Fragment key={unit.activityKey}>
               <AgentActivityCluster
@@ -276,6 +337,12 @@ export const AgentThreadMessages = memo(function AgentThreadMessages(props: Agen
                 artifactClient={props.artifactClient}
                 onPreviewFile={props.onPreviewFile}
                 onOpenActivityFile={props.onOpenActivityFile}
+                assistRun={(
+                  <>
+                    {insertsBefore(props.inserts, unit.messages.map((message) => message.id))}
+                    {index === lastActivityIndex ? props.pendingAssist : null}
+                  </>
+                )}
               />
               {unit.messages.some((message) => message.id === props.afterMessageId) ? props.afterMessageContent : null}
             </Fragment>
@@ -284,6 +351,7 @@ export const AgentThreadMessages = memo(function AgentThreadMessages(props: Agen
         const messageKey = unit.message.id || `${unit.message.role}-${index}`;
         return (
           <Fragment key={messageKey}>
+            {insertsBefore(props.inserts, [unit.message.id])}
             {unit.message.proactiveDelivery === "cron" ? <ProactiveMessageDivider message={unit.message} /> : null}
             <SingleMessage
               message={unit.message}
@@ -311,6 +379,9 @@ export const AgentThreadMessages = memo(function AgentThreadMessages(props: Agen
       })}
       {processInteraction && interactionAnchor < 0 ? <ProcessInteractionStatusLine status={processInteraction} /> : null}
       {props.taskPlan?.plan_id && taskPlanAnchor < 0 ? <AgentTaskPlanBar plan={props.taskPlan} runActive={taskPlanToolActive} /> : null}
+      {orphanInserts.map((item, index) => <Fragment key={`orphan-${index}`}>{item.node}</Fragment>)}
+      {lastActivityIndex < 0 ? props.pendingAssist : null}
+      {props.tail}
       {shouldShowThinkingPlaceholder(props.messages, props.isSending) && (
         <ThinkingPlaceholder />
       )}
@@ -318,10 +389,27 @@ export const AgentThreadMessages = memo(function AgentThreadMessages(props: Agen
   );
 }, areAgentThreadMessagesPropsEqual);
 
+/** 稳定的空数组：memo 比较用 ===，没有多余插入项时不因新数组重画。 */
+const EMPTY_INSERTS: readonly { beforeMessageId: string; node: ReactNode; autoOpen?: boolean }[] = [];
+
+/** 这一轮之前要插的内容：按 id 匹配，顺序以调用方给的为准。 */
+function insertsBefore(
+  inserts: readonly { beforeMessageId: string; node: ReactNode; autoOpen?: boolean }[] | undefined,
+  ids: readonly string[]
+): ReactNode {
+  if (!inserts?.length) return null;
+  const hit = inserts.filter((item) => ids.includes(item.beforeMessageId));
+  if (!hit.length) return null;
+  return <>{hit.map((item, index) => <Fragment key={index}>{item.node}</Fragment>)}</>;
+}
+
 function areAgentThreadMessagesPropsEqual(previous: AgentThreadMessagesProps, next: AgentThreadMessagesProps): boolean {
   return previous.messages === next.messages
     && previous.afterMessageId === next.afterMessageId
     && previous.afterMessageContent === next.afterMessageContent
+    && previous.inserts === next.inserts
+    && previous.tail === next.tail
+    && previous.pendingAssist === next.pendingAssist
     && previous.forceMessageActionsForMessageId === next.forceMessageActionsForMessageId
     && previous.artifactClient === next.artifactClient
     && previous.onPreviewFile === next.onPreviewFile
@@ -340,9 +428,59 @@ function areAgentThreadMessagesPropsEqual(previous: AgentThreadMessagesProps, ne
     && previous.onAnswerQuestion === next.onAnswerQuestion;
 }
 
-export function buildAgentDisplayUnits(messages: AgentChatMessage[], options: { chatScopeKey: string; retryWaitStatus?: AgentRetryWaitStatus | null }): AgentDisplayUnit[] {
+export function buildAgentDisplayUnits(messages: AgentChatMessage[], options: {
+  chatScopeKey: string;
+  retryWaitStatus?: AgentRetryWaitStatus | null;
+  /** 当前正在跑的那一轮：它里面的正文还在长，不能当成过程播报收起来。 */
+  activeTurnId?: string | null;
+}): AgentDisplayUnit[] {
   const units: AgentDisplayUnit[] = [];
   const lastUserIndex = findLastMessageIndex(messages, "user");
+  /**
+   * 哪几轮请过成员协助。
+   *
+   * 判据是运行时打在工具事件上的 `assist_request_id`：`memmy-project assist ask` 成功时输出一行标记，
+   * 运行时认它、把它从输出里剥掉、写到这次调用的事件上。所以这是数据里的事实，不是从命令文本里猜——
+   * `grep assist ask`、`assist ask --help` 这些不会打上标记，也就不会把一轮讨论误判成協助轮。
+   *
+   * 轮次用运行时的 `turnId` 切；没 turnId 的旧记录退回按用户消息切（协助结果本身也是用户消息，效果一样）。
+   * 手动在终端里跑 CLI 发起的请求没有经过 EXEC，就不带标记，这类旧会话退回
+   * {@link isAssistTurnNarration} 那一条：结果回来了就认，等着的时候不猜。
+   */
+  const turnKeyOf: string[] = [];
+  let currentTurnKey = "start";
+  for (const [index, message] of messages.entries()) {
+    if (message.turnId) currentTurnKey = `turn:${message.turnId}`;
+    else if (message.role === "user") currentTurnKey = `user:${index}`;
+    turnKeyOf[index] = currentTurnKey;
+  }
+  const assistTurnKeys = new Set<string>();
+  const resultTurnKeys = new Set<string>();
+  const seenTurnKeys = new Set<string>();
+  messages.forEach((message, index) => {
+    const turnKey = turnKeyOf[index] ?? "";
+    if (messageIssuedAssistRequest(message)) assistTurnKeys.add(turnKey);
+    if (seenTurnKeys.has(turnKey)) return;
+    seenTurnKeys.add(turnKey);
+    // 结果回来之后的那一轮：第一句就是协助结果，模型写的是最终回答。
+    if (message.role === "user" && isAssistResultMessage(message)) resultTurnKeys.add(turnKey);
+  });
+  /** 请过协助、结果还没回来的那几轮：这几轮的过程在等回音期间保持展开。 */
+  const awaitingAssistTurnKeys = new Set<string>();
+  for (const turnKey of assistTurnKeys) {
+    const start = turnKeyOf.indexOf(turnKey);
+    const answered = messages.some((message, index) => index > start && isAssistResultMessage(message));
+    if (!answered) awaitingAssistTurnKeys.add(turnKey);
+  }
+  const indexOfMessage = new Map<string, number>();
+  messages.forEach((message, index) => {
+    if (message.id && !indexOfMessage.has(message.id)) indexOfMessage.set(message.id, index);
+  });
+  // 按 id 认轮次：收进过程的旁白是一份改写过的副本，对象身份变了，id 不变。
+  const awaitsAssist = (activity: readonly AgentChatMessage[]): boolean => activity.some((message) => {
+    const index = indexOfMessage.get(message.id);
+    return index != null && awaitingAssistTurnKeys.has(turnKeyOf[index] ?? "");
+  });
   // A turn's activity (reasoning excerpts + tool-call batches) is ONE single
   // collapsible unit, matching Cursor's "Worked for Xm Ys" / "Thought for Xs"
   // wrapper. Inside that single unit we preserve the exact chronological
@@ -363,6 +501,7 @@ export function buildAgentDisplayUnits(messages: AgentChatMessage[], options: { 
       previous.isRunning = previous.messages.some(isActivityMessageRunningForDisplay);
       previous.isCurrentTurnActivity = previous.isCurrentTurnActivity || isCurrentTurnActivity;
       previous.stoppedByUser = previous.messages.some((item) => item.stoppedByUser);
+      previous.awaitsAssist = awaitsAssist(previous.messages);
       return;
     }
     const segmentId = activity.find((item) => item.activitySegmentId)?.activitySegmentId ?? null;
@@ -380,7 +519,8 @@ export function buildAgentDisplayUnits(messages: AgentChatMessage[], options: { 
       segmentId,
       isRunning: activity.some(isActivityMessageRunningForDisplay),
       isCurrentTurnActivity,
-      stoppedByUser: activity.some((item) => item.stoppedByUser)
+      stoppedByUser: activity.some((item) => item.stoppedByUser),
+      awaitsAssist: awaitsAssist(activity)
     });
   };
   let index = 0;
@@ -400,6 +540,20 @@ export function buildAgentDisplayUnits(messages: AgentChatMessage[], options: { 
       continue;
     }
 
+    /*
+     * 说协助那一轮的正文：它只是「我去请人了」的播报，真正的答案要等结果回来。
+     * 两条判据，都是确定事实：
+     * ① 这一轮发过 `assist ask`（运行时打在工具事件上的 `assist_request_id`）——从发出请求那一刻就成立；
+     * ② 它后面紧跟着的就是协助结果——没经过 EXEC 发出的请求（外部 Agent、旧会话）靠这一条。
+     * 都不命中时，主列的渲染与改动前完全一致；运行时的 resuming 语义（中途草稿标记 narration）不受影响。
+     */
+    if (message && isAssistantBodyMessage(message)
+      && (assistTurnKeys.has(turnKeyOf[index] ?? "") || isAssistTurnNarration(messages, index))) {
+      appendActivityUnit([narrationActivityMessage(message)], index);
+      index += 1;
+      continue;
+    }
+
     if (message) {
       if (shouldSplitAssistantReasoningForDisplay(message)) {
         appendActivityUnit([assistantReasoningActivityMessage(message)], index);
@@ -412,6 +566,53 @@ export function buildAgentDisplayUnits(messages: AgentChatMessage[], options: { 
   }
   insertRetryWaitUnit(units, messages, options.retryWaitStatus ?? null);
   return units;
+}
+
+/**
+ * 有正文的助手消息（真回答，或这一轮里的旁白）：排除过程条目、本机追问卡与模型报错那条
+ * （报错是卡片，不是回答；它前面已经输出的内容仍算回答，不能被折进过程）。
+ */
+function isAssistantBodyMessage(message: AgentChatMessage): boolean {
+  return message.role === "assistant"
+    && message.kind !== "trace"
+    && !readAgentQuestionCard(message.agentUi)
+    && !message.modelError
+    // 定时任务推送是各自独立的一条结果，不是某一轮里的旁白。
+    && !message.proactiveDelivery
+    && message.content.trim().length > 0;
+}
+
+/**
+ * 这一条正文是不是「发起协助请求」那一轮说的话。
+ *
+ * 只有一个判据：紧跟在它后面的就是协助结果消息。这是会话里确定存在的事实，不需要猜。
+ * 由此带来的边界（已知，不在这里补）：等待回音期间结果还没到，播报会留在主列；
+ * 要让它也在过程里，得由发出请求的一方把这个事实写进数据（例如运行时给这一轮打标记），
+ * 而不是靠匹配工具调用的命令文本——后者会把 `grep assist ask`、`assist ask --help`
+ * 这类操作误判成「请人了」，整轮正文都会被当成过程。
+ */
+function isAssistTurnNarration(
+  messages: readonly AgentChatMessage[],
+  index: number
+): boolean {
+  const next = messages[index + 1];
+  return Boolean(next && isAssistResultMessage(next));
+}
+
+/**
+ * 这条消息里的工具调用发过成员协助请求：运行时认到 `memmy-project assist ask` 的标记后，
+ * 会给那次调用的事件写上 `assist_request_id`。只看这个字段，不看命令文本——
+ * `grep assist ask`、`assist ask --help` 这些操作不会带上它。
+ */
+function messageIssuedAssistRequest(message: AgentChatMessage): boolean {
+  const events = message.toolEvents;
+  if (!Array.isArray(events)) return false;
+  return events.some((event) => typeof (event as { assist_request_id?: unknown }).assist_request_id === "string");
+}
+
+/** 把一段正文变成工作过程里的旁白：正文保留，思考另起一段。协助那一轮的播报另记一个标记，显示时置灰。 */
+function narrationActivityMessage(message: AgentChatMessage): AgentChatMessage {
+  return { ...message, kind: "narration", assistNarration: true };
 }
 
 function insertRetryWaitUnit(units: AgentDisplayUnit[], messages: AgentChatMessage[], status: AgentRetryWaitStatus | null): void {
@@ -643,19 +844,15 @@ const SingleMessage = memo(function SingleMessage(props: SingleMessageProps) {
 
   if (message.role === "user") {
     if (readAgentQuestionResponse(message.content)) return null;
-    // 成员协助的请求与结果：Memmy 写进任务的消息，显示成卡片而不是一大段原文。
+    // 成员协助的两条消息：结果不进主列（它已经在工作过程里），请求换成一段普通气泡。
     const assistEnvelope = parseAssistEnvelope(message.content);
-    if (assistEnvelope) {
-      return (
-        <div className="agent-user-turn flex min-w-0" data-agent-message-id={message.id || undefined}>
-          <AssistMessageCard envelope={assistEnvelope} />
-        </div>
-      );
-    }
-    const hasContent = message.content.trim().length > 0;
+    if (assistEnvelope?.kind === "result") return null;
+    const assistRequestText = assistEnvelope?.kind === "request" ? assistRequestBubbleText(assistEnvelope, t) : null;
+    const hasContent = (assistRequestText ?? message.content).trim().length > 0;
     // 新手引导第二步发出去的那句话后面跟着一段给 Agent 的执行提示：发送时必须带着，显示时去掉。
     // 去掉之后再判断一次有没有内容：只剩提示的那条消息不画气泡。
-    const visibleContent = withoutDemoGuideHint(message.content);
+    // 协助请求：输入框上方的胶囊已经说明这是谁的请求，气泡里只留背景与要做的事。
+    const visibleContent = assistRequestText ?? withoutDemoGuideHint(message.content);
     const hasVisibleContent = visibleContent.trim().length > 0;
     const timestamp = messageTimestamp(message.createdAt);
     const copyAction = <MessageBubbleCopyButton text={visibleContent} align="right" timestamp={timestamp} />;
@@ -2430,6 +2627,8 @@ function AgentActivityCluster(props: {
   artifactClient?: AgentArtifactClient | null;
   onPreviewFile?: InAppFilePreviewHandler;
   onOpenActivityFile?: (file: ActivityPreviewFile) => void;
+  /** 这一段过程里请过谁协助：请求卡片与对方的执行过程，排在过程正文的末尾。 */
+  assistRun?: ReactNode;
 }) {
   const { t } = useTranslation();
   const segments = useMemo(() => {
@@ -2477,6 +2676,7 @@ function AgentActivityCluster(props: {
                 onOpenActivityFile={props.onOpenActivityFile}
               />
             ))}
+            {props.assistRun}
             {props.pluginInteractionStatus ? <ProcessInteractionStatusLine status={props.pluginInteractionStatus} /> : null}
           </div>
         )}
@@ -2519,7 +2719,7 @@ function ActivitySegmentBlock(props: {
     return <ThoughtSegmentBlock text={segment.text} isLive={props.isLive === true} isOnlySegment={props.isOnlySegment === true} t={props.t} />;
   }
   if (segment.type === "narration") {
-    return <NarrationSegmentBlock text={segment.text} isLive={props.isLive === true} artifactClient={props.artifactClient} onPreviewFile={props.onPreviewFile} />;
+    return <NarrationSegmentBlock text={segment.text} muted={segment.muted === true} isLive={props.isLive === true} artifactClient={props.artifactClient} onPreviewFile={props.onPreviewFile} />;
   }
   return <ToolGroupSegmentBlock segment={segment} t={props.t} isLive={props.isLive === true} onOpenActivityFile={props.onOpenActivityFile} />;
 }
@@ -2595,12 +2795,12 @@ function isLongNarration(text: string): boolean {
  * fold row is nothing but the draft's own first line: no badges, no meta
  * commentary — the content speaks for itself.
  */
-function NarrationSegmentBlock(props: { text: string; isLive: boolean; artifactClient?: AgentArtifactClient | null; onPreviewFile?: InAppFilePreviewHandler }) {
+function NarrationSegmentBlock(props: { text: string; muted?: boolean; isLive: boolean; artifactClient?: AgentArtifactClient | null; onPreviewFile?: InAppFilePreviewHandler }) {
   const { open: followOpen, onToggle } = useFollowAlongOpen(props.isLive);
   const long = isLongNarration(props.text);
   const open = !long || followOpen;
   return (
-    <div className="agent-activity-segment agent-activity-segment--narration">
+    <div className={`agent-activity-segment agent-activity-segment--narration${props.muted ? " agent-activity-segment--narration-muted" : ""}`}>
       {long && !props.isLive && !open ? (
         // Collapsed: the draft's own first line is the whole affordance. Once
         // expanded there is NO residual header row — the prose stands alone
@@ -2986,6 +3186,8 @@ interface ActivityNarrationSegment {
   type: "narration";
   key: string;
   text: string;
+  /** 协助那一轮的播报：按过程文字的灰显示，与思考、工具行同一档。 */
+  muted?: boolean;
 }
 
 interface ActivityToolGroupSegment {
@@ -3084,6 +3286,8 @@ function buildActivitySegments(messages: AgentChatMessage[], t: Translate): Acti
   const hasQuestion = messages.some((message) => Boolean(readAgentQuestionCard(message.agentUi)));
   messages.forEach((message, messageIndex) => {
     const messageKey = message.id || `message-${messageIndex}`;
+    // 协助结果的正文不显示：用户要看的是模型据此写出的回答，这一条只作为过程的一环存在。
+    if (isAssistResultMessage(message)) return;
     if (message.reasoning) {
       segments.push({ type: "thought", key: `${messageKey}:thought`, text: message.reasoning });
     }
@@ -3093,7 +3297,12 @@ function buildActivitySegments(messages: AgentChatMessage[], t: Translate): Acti
     }
     if (message.kind === "narration") {
       if (message.content.trim()) {
-        segments.push({ type: "narration", key: `${messageKey}:narration`, text: message.content });
+        segments.push({
+          type: "narration",
+          key: `${messageKey}:narration`,
+          text: message.content,
+          ...(message.assistNarration ? { muted: true } : {})
+        });
       }
       return;
     }
@@ -3454,6 +3663,8 @@ function traceLinesForActivity(message: AgentChatMessage): string[] {
 
 function isAgentActivityMessage(message: AgentChatMessage): boolean {
   if (readAgentQuestionCard(message.agentUi)) return true;
+  // 成员的协助结果：对方回传的数据，不是用户说的话。放进工作过程，主列只留最终回答。
+  if (isAssistResultMessage(message)) return true;
   // The whole loop process — thoughts, tools, and mid-turn drafts (narration)
   // — belongs to ONE per-run "Worked for" cluster, exactly like Cursor: while
   // the turn runs it reads chronologically in place, and when the turn ends
@@ -3463,6 +3674,12 @@ function isAgentActivityMessage(message: AgentChatMessage): boolean {
     return true;
   }
   return message.role === "assistant" && !message.content.trim() && Boolean(message.reasoning || message.reasoningStreaming || message.isStreaming);
+}
+
+/** 这条消息是不是成员协助回传的结果（`<memmy_assist_result>`）。 */
+function isAssistResultMessage(message: AgentChatMessage): boolean {
+  if (message.role !== "user" || typeof message.content !== "string") return false;
+  return parseAssistEnvelope(message.content)?.kind === "result";
 }
 
 function shouldSplitAssistantReasoningForDisplay(message: AgentChatMessage): boolean {

@@ -1820,6 +1820,20 @@ export class WebSocketChannel extends BaseChannel {
 
     const clientRequestId = crypto.randomUUID();
     const recorder = new AssistRunRecorder({ chatId, clientRequestId });
+    /*
+     * 送回结果（deliver）：这条消息就是界面里这一轮的输入。它必须像用户发的那句话一样进到界面，
+     * 否则界面手里的一轮会“没有输入只是凭空写了一堆东西”——渲染层就只能靠猜哪一轮是协助，
+     * 而猜错的代价是整轮正文被当成过程。
+     *
+     * 必须在把协助订阅接进这条任务之前发：那条内部连接也会收到任务上的广播，它只需要记录这一轮的状态。
+     */
+    if (deliver) {
+      await this.sendTurnPayload(
+        chatId,
+        { event: "user", chat_id: chatId, text: content, client_request_id: clientRequestId },
+        { appendTranscript: false },
+      );
+    }
     const connection = this.assistRunConnection(recorder);
     this.rememberAssistRun(chatId, recorder, connection);
     this.attachConnection(connection, chatId);

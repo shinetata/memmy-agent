@@ -1,6 +1,6 @@
 /**
  * 临时预览页：把成员协助的各处界面用真实组件与样式渲出来，便于对照方案自查。
- * 地址参数 `?view=dialog|board-header|dialog-other|dialog-attachments|dialog-review|dialog-skipped|conversation-review|board|board-tasks|detail|conversation|conversation-attachments|chain|chain-memmy|task|task-ask|task-long|card|card-running|card-stopped-by-me|conversation-stop|task-stopped|requester|settings|settings-off|project-settings-owner|project-settings-member|project-settings-local`，不连接本机接口。
+ * 地址参数 `?view=dialog|board-header|dialog-other|dialog-attachments|dialog-review|dialog-skipped|conversation-review|board|board-tasks|detail|conversation|conversation-attachments|chain|chain-memmy|task|task-ask|task-long|card|card-running|card-process|card-process-done|task-delivered|card-stopped-by-me|conversation-stop|task-stopped|requester|settings|settings-off|project-settings-owner|project-settings-member|project-settings-local`，不连接本机接口。
  * `detail` 与 `conversation` 是同一份协助会话（两轮请求：发起方由 Memmy 发起、执行方由 Memmy 执行，第二轮按限时授权直接执行），
  * 没有发起方记录，就是旧记录的显示。`chain` 是完整链条：DeepSeek Harness 发起、Memmy 执行，两轮（第二轮 --continue）；
  * `chain-memmy` 是 Memmy 发起的完整链条，第二轮收到后的记录还在同步。
@@ -1040,6 +1040,29 @@ function Preview() {
           <CollabAssistRequestCard request={request({ status: "pending", autoRun: true, agent: null, scope: null, grant: { ...GRANT, agent: "memmy" }, mine: true })} collab={client} />
         </div>
       </div>
+    );
+  }
+
+  if (view === "card-process" || view === "card-process-done") {
+    // 任务窗口里的执行过程：执行中自动展开并带「正在执行」，结束后按最后一轮过程展示。
+    const done = view === "card-process-done";
+    return (
+      <div style={{ minHeight: "100vh", background: "#fff", padding: "32px 24px" }}>
+        <div style={{ maxWidth: 620, margin: "0 auto" }}>
+          <CollabAssistRequestCard request={done ? CONV_FIRST : CONV_SECOND} collab={client} variant="flow" onChanged={() => undefined} />
+        </div>
+      </div>
+    );
+  }
+
+  if (view === "task-delivered") {
+    // 结果已经回写：会话窗口底部仍留一行与「执行过程」，不随请求卡片一起消失。
+    return (
+      <TaskFrame
+        dock={<CollabAssistTaskDock view={{ executing: null, requested: [{ ...CONV_FIRST, delivered: true }] }} collab={client} onChanged={() => undefined} />}
+      >
+        <AssistMessageCard envelope={parseAssistEnvelope(RESULT_MESSAGE)!} />
+      </TaskFrame>
     );
   }
 

@@ -34,7 +34,7 @@ import { ASSIST_PANEL_WIDTH_STORAGE_KEY, useReaderPanelWidth } from "./collab-re
 import detailStyles from "./collab-assist-detail.module.css";
 import styles from "./collab-assist-conversation.module.css";
 
-type Translate = (key: MessageKey, values?: Record<string, string>) => string;
+export type Translate = (key: MessageKey, values?: Record<string, string>) => string;
 
 /** 执行中多久重读一次。 */
 const LIVE_POLL_MS = 3_000;
@@ -609,7 +609,7 @@ function SideHead(props: { label: string; agent: string | null; name: string }) 
  * 发起方记录的一段：用户说的话单独成气泡，其余（思考、说明、工具调用）与执行过程同一种排法；
  * 拿到结果的那一步突出显示为「收到的结果」。
  */
-function ChainItems(props: { items: readonly AssistTranscriptItem[]; t: Translate }) {
+export function ChainItems(props: { items: readonly AssistTranscriptItem[]; t: Translate }) {
   const { t } = props;
   const blocks: ReactElement[] = [];
   let group: AssistTranscriptItem[] = [];
@@ -738,7 +738,7 @@ function decisionText(
 }
 
 /** 一段原文（提示词、收到的内容）：默认显示前几行，可展开全文。 */
-function FoldedText(props: { text: string; t: Translate }) {
+export function FoldedText(props: { text: string; t: Translate }) {
   const [open, setOpen] = useState(false);
   const lines = props.text.split("\n");
   const long = lines.length > PREVIEW_LINES || props.text.length > 600;
@@ -759,7 +759,7 @@ function FoldedText(props: { text: string; t: Translate }) {
  * 执行过程里的一项：说明文字按 Markdown 显示；工具调用一行写做了什么，默认收起，展开后是命令或参数与完整输出，
  * 样式与对话页的工具步骤一致。
  */
-function TranscriptLine(props: { item: AssistTranscriptItem; t: Translate }) {
+export function TranscriptLine(props: { item: AssistTranscriptItem; t: Translate }) {
   const { item, t } = props;
   if (item.kind === "omitted") {
     return <p className={styles.omitted}>{t("collab.assist.conv.omitted", { count: String(item.count) })}</p>;

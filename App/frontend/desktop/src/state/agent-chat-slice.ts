@@ -134,6 +134,11 @@ export interface AgentChatMessage {
   questionResponse?: unknown;
   questionInterrupted?: boolean;
   activitySegmentId?: string;
+  /**
+   * 这一条是「发起协助请求」那一轮的播报，被收进工作过程显示。
+   * 只有它按过程文字的灰显示，正常的旁白与回答都不受这个字段影响。
+   */
+  assistNarration?: boolean;
   compactionId?: string;
   compactionStatus?: AgentCompactionStatus;
   createdAt?: number;

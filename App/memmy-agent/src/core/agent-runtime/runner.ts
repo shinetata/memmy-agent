@@ -1315,8 +1315,16 @@ export class AgentRunner {
         raw = raw + hint;
       } else {
         spec.outputLocation?.record(outputFiles);
+        // 发出协助请求的调用带一行标记：还剩它（模型不该看到），改成工具事件上的结构化字段。
+        const assist = extractAssistRequestMarker(raw);
+        if (assist) raw = assist.text.trimEnd();
         const detail = toolEventDetail(raw);
-        event = { name: call.name, status: "ok", detail };
+        event = {
+          name: call.name,
+          status: "ok",
+          detail,
+          ...(assist ? { assist_request_id: assist.requestId } : {}),
+        };
       }
       if (spec.abortSignal?.aborted) throw createAbortError();
       if (progressCallback && fileEditTrackers.length) {
@@ -2419,6 +2427,22 @@ function toolEventDetail(result: any): string {
   detail = detail.replace(/\n/g, " ").trim();
   if (!detail) return "(empty)";
   return detail.length > 120 ? `${detail.slice(0, 120)}...` : detail;
+}
+
+/**
+ * `memmy-project assist ask` 成功时会在输出末尾带一行机器可读标记，与
+ * `App/backend/src/cli/memmy-project.ts` 的 ASSIST_REQUEST_MARKER 同一个协议值。
+ *
+ * 认它而不是去猜命令文本：`grep assist ask`、`assist ask --help` 这类操作会误判，而这条标记只有
+ * 真正发出请求并成功时才写得出来。标记行会从输出里剥掉，不占模型的上下文；识别结果放在这次调用的
+ * 工具事件上（`assist_request_id`），界面据此知道这一轮的正文属于工作过程。
+ */
+const ASSIST_REQUEST_MARKER_PATTERN = /^[ \t]*memmy-assist-request[ \t]+(\S+)[ \t]*$/mu;
+
+function extractAssistRequestMarker(text: string): { requestId: string; text: string } | null {
+  const match = ASSIST_REQUEST_MARKER_PATTERN.exec(text);
+  if (!match) return null;
+  return { requestId: match[1]!, text: text.replace(ASSIST_REQUEST_MARKER_PATTERN, "") };
 }
 
 function eventDetail(prefix: string, text: string, limit: number): string {

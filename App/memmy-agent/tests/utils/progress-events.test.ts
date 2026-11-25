@@ -9,6 +9,27 @@ import {
   withProgressCapabilities,
 } from "../../src/utils/progress-events.js";
 
+describe("progress event payloads", () => {
+  it("carries the assist request marker through to the UI event", () => {
+    // 抬到界面的工具事件是白名单字段拼出来的：发出协助请求的标记必须显式透传，
+    // 否则界面拿不到，只能退回去猜命令文本。
+    const [finish] = buildToolEventFinishPayloads({
+      toolCalls: [{ id: "call-1", name: "exec", arguments: { command: "memmy-project assist ask" } }],
+      toolResults: ["已发送协助请求 8DCD3A。"],
+      toolEvents: [{ status: "ok", assist_request_id: "8dcd3a2c-5cbd" }],
+    });
+
+    expect(finish.assist_request_id).toBe("8dcd3a2c-5cbd");
+    // 普通调用不会多出这个字段。
+    const [plain] = buildToolEventFinishPayloads({
+      toolCalls: [{ id: "call-2", name: "exec", arguments: { command: "ls" } }],
+      toolResults: ["a.txt"],
+      toolEvents: [{ status: "ok" }],
+    });
+    expect(plain).not.toHaveProperty("assist_request_id");
+  });
+});
+
 describe("progress event capabilities", () => {
   it("does not infer structured support from callback arity", () => {
     const zeroArg = vi.fn();

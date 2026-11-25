@@ -20,9 +20,111 @@
   display: flex;
   align-items: center;
   gap: 8px;
+  width: 100%;
   padding: 10px 14px;
+  border: 0;
   border-bottom: 1px solid color-mix(in srgb, var(--color-border-stone, #cce0db) 40%, transparent);
   background: color-mix(in srgb, var(--color-canvas-oat, #f3f8f7) 60%, transparent);
+  /* 整行可点：收起或展开这张卡片 */
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.head:hover .headCaret {
+  color: var(--color-text-ink, #111d1c);
+}
+
+.headCaret {
+  flex: none;
+  color: color-mix(in srgb, var(--color-text-ink, #111d1c) 40%, transparent);
+}
+
+/* 状态只写一句，不做成胶囊 */
+.stateText {
+  flex: none;
+  font-size: 12px;
+  white-space: nowrap;
+  color: color-mix(in srgb, var(--color-text-ink, #111d1c) 45%, transparent);
+}
+
+.stateText[data-collab-assist-state="done"] {
+  color: #1f9e78;
+}
+
+.stateText[data-collab-assist-state="failed"],
+.stateText[data-collab-assist-state="stopped"],
+.stateText[data-collab-assist-state="rejected"],
+.stateText[data-collab-assist-state="expired"] {
+  color: #d2566b;
+}
+
+.cardFlow .head {
+  padding: 2px 0;
+  border-bottom: 0;
+  background: none;
+  font-size: 12.5px;
+  color: color-mix(in srgb, var(--color-text-ink, #111d1c) 62%, transparent);
+}
+
+.cardFlow .title {
+  font-size: 12.5px;
+  font-weight: 500;
+  color: color-mix(in srgb, var(--color-text-ink, #111d1c) 78%, transparent);
+}
+
+.cardFlow .head:hover .title {
+  color: var(--color-text-ink, #111d1c);
+}
+
+/* 状态跟在标题后面同一行：不带颜色，与过程行的说明同一档灰 */
+.cardFlow .stateText,
+.cardFlow .stateText[data-collab-assist-state="done"],
+.cardFlow .stateText[data-collab-assist-state="failed"],
+.cardFlow .stateText[data-collab-assist-state="stopped"],
+.cardFlow .stateText[data-collab-assist-state="rejected"],
+.cardFlow .stateText[data-collab-assist-state="expired"] {
+  flex: none;
+  margin-left: 0;
+  font-size: 12px;
+  color: color-mix(in srgb, var(--color-text-ink, #111d1c) 45%, transparent);
+}
+
+/* 展开后的正文：与过程正文同宽同档，不单独成块 */
+.cardFlow .body {
+  padding: 4px 0 2px 23px;
+  font-size: 13px;
+}
+
+/* 过程里不画竖线：与「要做的事」同一档标签，正文换行回到左边 */
+.cardFlow .reason {
+  margin: 0 0 6px;
+  padding: 0;
+  border: 0;
+  font-size: 12.5px;
+  line-height: 1.65;
+}
+
+.cardFlow .reasonKey {
+  display: block;
+  margin: 0 0 2px;
+  font-size: 12px;
+}
+
+/* 展开内容在工具卡片那个框里：与过程正文同档字号，列表照常缩进 */
+.flowCard .key {
+  font-size: 12px;
+}
+
+.flowCard ol,
+.flowCard ul {
+  margin: 0 0 4px;
+  padding-left: 18px;
+  list-style: decimal;
+  font-size: 12.5px;
+  line-height: 1.65;
+  /* 与「背景」下面那段正文同一档颜色，不用正文那么深 */
+  color: color-mix(in srgb, var(--color-text-ink, #111d1c) 70%, transparent);
 }
 
 .cardWarning .head {
@@ -102,6 +204,33 @@
   padding: 10px 14px 4px;
   font-size: 13px;
   color: color-mix(in srgb, var(--color-text-ink, #111d1c) 80%, transparent);
+}
+
+/*
+ * 排在工作过程里：不画框、不铺底、不加阴影，读起来与「思考」「运行命令」是同一层的东西。
+ * 段头就是一行小字，展开后是缩进正文。
+ */
+.cardFlow {
+  margin: 2px 0 2px;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
+  overflow: visible;
+}
+
+.reason {
+  margin: 0 0 8px;
+  padding: 2px 0 2px 10px;
+  border-left: 2px solid color-mix(in srgb, var(--color-action-sky, #5cbfae) 60%, transparent);
+  font-size: 12px;
+  line-height: 1.6;
+  color: color-mix(in srgb, var(--color-text-ink, #111d1c) 70%, transparent);
+}
+
+.reasonKey {
+  margin-right: 6px;
+  color: color-mix(in srgb, var(--color-text-ink, #111d1c) 40%, transparent);
 }
 
 .key {

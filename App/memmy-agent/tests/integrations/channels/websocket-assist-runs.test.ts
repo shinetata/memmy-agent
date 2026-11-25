@@ -337,6 +337,33 @@ describe("WebUI assist runs", () => {
     expect(responseJson(missing)).toEqual({ error: "chat_not_found" });
   });
 
+  it("pushes the delivered result to the task's UI as a user message", async () => {
+    // 界面手里没有这条消息时，这一轮看起来就像「没有输入却凭空写了回答」，
+    // 渲染层只能靠猜哪一轮是协助；所以送回结果时要像用户那句话一样推给界面。
+    const { sessions, project, channel, request } = setup();
+    const chatId = "6f0b0c3e-cccc-4222-8333-444455556666";
+    const source = new Session({ key: `websocket:${chatId}` });
+    source.metadata.webui = true;
+    source.metadata.webuiProjectId = project.id;
+    sessions.save(source);
+    const sent: Record<string, any>[] = [];
+    const ws = { send: (payload: string) => sent.push(JSON.parse(payload)), readyState: 1, remoteAddress: "127.0.0.1" };
+    channel.attachConnection(ws as any, chatId);
+
+    await request("POST", "/api/webui/assist/runs", {
+      chat_id: chatId,
+      content: "<memmy_assist_result request=\"req-1\">结果</memmy_assist_result>",
+      mode: "deliver",
+    });
+
+    const user = sent.find((payload) => payload.event === "user");
+    expect(user?.chat_id).toBe(chatId);
+    expect(user?.text).toContain("memmy_assist_result");
+    expect(typeof user?.client_request_id).toBe("string");
+    // 送进会话的那一份照旧：界面这一份只是让这一轮的输入在界面上可见。
+    expect(sessions.get(source.key)).toBeTruthy();
+  });
+
   it("requires the API token", async () => {
     const { channel } = setup();
     const response = await channel.dispatchHttp(localConnection, {

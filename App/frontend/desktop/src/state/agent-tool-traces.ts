@@ -19,6 +19,12 @@ export interface AgentToolProgressEvent {
   error?: unknown;
   files?: unknown[];
   embeds?: unknown[];
+  /**
+   * 这次调用真的发出了成员协助请求：`memmy-project assist ask` 成功时会在输出里带一行标记，
+   * 运行时认它并写到这个字段上，同时把标记从输出里剥掉。界面据此把这一轮的正文归进工作过程，
+   * 不必去猜命令文本。不是协助请求就没有这个字段。
+   */
+  assist_request_id?: string;
   function?: {
     name?: unknown;
     arguments?: unknown;

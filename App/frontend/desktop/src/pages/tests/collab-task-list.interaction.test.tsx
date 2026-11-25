@@ -2,7 +2,7 @@
 
 /**
  * 看板的任务列表按成员分区：本人第一段，其余成员各一段；段内默认五条，多的就地展开。
- * 行里只留时间，成员信息只在段头出现一次；没有任务的成员不占位。
+ * 行里只留时间，成员信息只在段头出现一次；已经加入但还没有任务的成员也留一段（写「暂无任务」）。
  */
 import { act } from "react";
 import type { ReactNode } from "react";
@@ -282,8 +282,8 @@ describe("collab task list", () => {
     expect(titlesIn("陈墨")).toHaveLength(1);
   });
 
-  it("does not reserve a section for a member without tasks", async () => {
-    // 云端列出了三位成员，但只有两人有任务：没有任务的许知不占段落，也不在末尾收成一行。
+  it("keeps a section for a member who has joined but has no tasks yet", async () => {
+    // 云端列出了三位成员，只有两人有任务：没有任务的许知也要占一段，否则看板看不出项目里有她。
     mocks.listMembers.mockResolvedValue({
       project: CLOUD_PROJECT,
       joinMode: "approval",
@@ -297,9 +297,35 @@ describe("collab task list", () => {
     });
     await renderBoard();
 
-    expect(groupNames()).toEqual(["林晓", "陈墨"]);
-    expect(document.body.textContent).not.toContain("许知 还没有任务");
-    expect(document.body.textContent).not.toContain("还没有任务");
+    expect(groupNames()).toEqual(["林晓", "陈墨", "许知"]);
+    // 空段的段头写「暂无任务」，不摆一行空列表。
+    expect(groupHead("许知").textContent).toContain("暂无任务");
+    expect(titlesIn("许知")).toEqual([]);
+  });
+
+  it("leaves out the members with no tasks while searching", async () => {
+    mocks.listMembers.mockResolvedValue({
+      project: CLOUD_PROJECT,
+      joinMode: "approval",
+      canManage: true,
+      members: [
+        { userId: "1", name: "林晓", role: "owner", mine: true },
+        { userId: "3", name: "许知", role: "member", mine: false }
+      ],
+      requests: []
+    });
+    await renderBoard();
+    expect(groupNames()).toContain("许知");
+
+    mocks.listSessions.mockImplementation(async (_project, options) => {
+      // 云端按查询词过滤：这里模拟同一条查询只回命中项。
+      const hits = options?.query ? [SESSIONS[0]!] : SESSIONS;
+      return { project: CLOUD_PROJECT, sessions: hits, total: hits.length };
+    });
+    await typeSearch("视觉重做");
+    await flush();
+    // 搜出来的是一批任务：没命中的成员不再占一段，免得把结果冲淡。
+    expect(groupNames()).toEqual(["林晓"]);
   });
 
   it("hides a summary that stopped on an agent's task notification", async () => {

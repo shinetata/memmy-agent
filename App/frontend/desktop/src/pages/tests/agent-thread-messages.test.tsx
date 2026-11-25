@@ -43,6 +43,157 @@ describe("delivered file save names", () => {
 });
 
 describe("AgentThreadMessages", () => {
+  it("keeps a member assist out of the main column: only the question and the final answer stay", () => {
+    const html = renderToString(
+      <I18nProvider language="zh-CN">
+        <AgentThreadMessages
+          chatScopeKey="chat-assist-flow"
+          messages={[
+            { id: "q-1", role: "user", content: "帮我看一下系统的版本" },
+            { id: "a-1", role: "assistant", content: "已把请求发给孙起了。" },
+            {
+              id: "r-1",
+              role: "user",
+              content: "<memmy_assist_result request=\"req-1\" status=\"done\">结果原文</memmy_assist_result>"
+            },
+            { id: "a-2", role: "assistant", content: "孙起那边查到了：macOS 27.0.1。" }
+          ]}
+          inserts={[{ beforeMessageId: "r-1", node: <p data-assist-run="">请求孙起协助</p> }]}
+          tail={<p data-assist-tail="">第二个请求</p>}
+        />
+      </I18nProvider>
+    );
+    // 结果原文不进主列：用户要看的是模型据此写出的回答。
+    expect(html).not.toContain("结果原文");
+    expect(html).not.toContain("data-collab-assist-result");
+    // 主列只剩用户的问题与最终回答。
+    expect(html).toContain("帮我看一下系统的版本");
+    expect(html).toContain("孙起那边查到了");
+    // 过程收起时请求卡片也不铺在主列上：它在工作过程里面，展开才看得见。
+    expect(html).not.toContain("data-assist-run");
+    // 没有结果消息可锚定的请求排在消息末尾。
+    expect(html).toContain("第二个请求");
+  });
+
+  it("keeps a normal multi-paragraph turn in the main column unchanged", () => {
+    // 同一轮里模型说了两段正文、中间没有协助：两段都留在主列，一段都不能收进过程。
+    const messages = [
+      { id: "u-1", role: "user" as const, content: "看一下这个报错" },
+      { id: "a-1", role: "assistant" as const, content: "我先查一下日志。" },
+      { id: "a-2", role: "assistant" as const, content: "日志里是端口占用，换个端口就好。" }
+    ];
+    const units = buildAgentDisplayUnits(messages, { chatScopeKey: "chat-normal-multi" });
+    const singles = units.filter((unit) => unit.type === "single").map((unit) => (unit as { message: { id: string } }).message.id);
+    expect(singles).toEqual(["u-1", "a-1", "a-2"]);
+  });
+
+  it("moves only the turn that asked for help into the process", () => {
+    const messages = [
+      { id: "u-1", role: "user" as const, content: "帮我看一下系统的版本" },
+      { id: "a-1", role: "assistant" as const, content: "已把请求发给孙起了。" },
+      {
+        id: "r-1",
+        role: "user" as const,
+        content: "<memmy_assist_result request=\"req-1\" status=\"done\">结果原文</memmy_assist_result>"
+      },
+      { id: "a-2", role: "assistant" as const, content: "孙起那边查到了：macOS 27.0.1。" }
+    ];
+    const units = buildAgentDisplayUnits(messages, { chatScopeKey: "chat-assist-narration" });
+    const singles = units.filter((unit) => unit.type === "single").map((unit) => (unit as { message: { id: string } }).message.id);
+    // 「已把请求发给孙起了」后面紧跟协助结果：收进过程；回答仍是主列那一条。
+    expect(singles).toEqual(["u-1", "a-2"]);
+    const activity = units.find((unit) => unit.type === "activity");
+    expect(activity?.type === "activity" && activity.messages.map((message) => message.id)).toContain("a-1");
+  });
+
+  it("folds the asking turn into the process from the marker, before any result arrives", () => {
+    // 判据是运行时打在工具事件上的 assist_request_id：不等结果、也不看轮询回来的请求列表。
+    const messages = [
+      { id: "u-1", role: "user" as const, content: "查一下 hermes 的版本", turnId: "turn-1" },
+      {
+        id: "ask",
+        role: "tool" as const,
+        kind: "trace" as const,
+        content: "",
+        turnId: "turn-1",
+        toolEvents: [{ phase: "end", call_id: "c1", name: "exec", assist_request_id: "8dcd3a2c" }]
+      },
+      { id: "narrate", role: "assistant" as const, content: "已请孙起协助，请求 8DCD3A。", turnId: "turn-1" }
+    ];
+    const units = buildAgentDisplayUnits(messages, { chatScopeKey: "chat-assist-marker" });
+    const singles = units.filter((unit) => unit.type === "single").map((unit) => (unit as { message: { id: string } }).message.id);
+    expect(singles).toEqual(["u-1"]);
+    const activity = units.find((unit) => unit.type === "activity");
+    expect(activity?.type === "activity" && activity.messages.map((m) => m.id)).toContain("narrate");
+    expect(activity?.type === "activity" && activity.awaitsAssist).toBe(true);
+  });
+
+  it("does not fold a turn that only talked about assist", () => {
+    // grep、--help 这类操作没有 assist_request_id：整轮照常留在主列。
+    const messages = [
+      { id: "u-1", role: "user" as const, content: "协助是怎么实现的", turnId: "turn-1" },
+      {
+        id: "grep",
+        role: "tool" as const,
+        kind: "trace" as const,
+        content: "SKILL.md: memmy-project assist ask --member x --file y",
+        turnId: "turn-1",
+        toolEvents: [{ phase: "end", call_id: "c1", name: "exec", arguments: { command: "grep assist ask SKILL.md" } }]
+      },
+      { id: "answer", role: "assistant" as const, content: "它通过 CLI 发请求。", turnId: "turn-1" }
+    ];
+    const units = buildAgentDisplayUnits(messages, { chatScopeKey: "chat-assist-lookalike" });
+    const singles = units.filter((unit) => unit.type === "single").map((unit) => (unit as { message: { id: string } }).message.id);
+    expect(singles).toEqual(["u-1", "answer"]);
+  });
+
+  it("keeps the result turn's answer in the main column and stops waiting", () => {
+    const messages = [
+      { id: "u-1", role: "user" as const, content: "查一下 hermes 的版本", turnId: "turn-1" },
+      {
+        id: "ask",
+        role: "tool" as const,
+        kind: "trace" as const,
+        content: "",
+        turnId: "turn-1",
+        toolEvents: [{ phase: "end", call_id: "c1", name: "exec", assist_request_id: "8dcd3a2c" }]
+      },
+      { id: "narrate", role: "assistant" as const, content: "已请孙起协助。", turnId: "turn-1" },
+      {
+        id: "result",
+        role: "user" as const,
+        content: "<memmy_assist_result request=\"8dcd3a2c\" status=\"done\">结果</memmy_assist_result>",
+        turnId: "turn-2"
+      },
+      { id: "answer", role: "assistant" as const, content: "孙起那边查完了：v0.20.0。", turnId: "turn-2" }
+    ];
+    const units = buildAgentDisplayUnits(messages, { chatScopeKey: "chat-assist-answered-marker" });
+    const singles = units.filter((unit) => unit.type === "single").map((unit) => (unit as { message: { id: string } }).message.id);
+    expect(singles).toEqual(["u-1", "answer"]);
+    const activity = units.find((unit) => unit.type === "activity");
+    expect(activity?.type === "activity" && activity.awaitsAssist).toBe(false);
+  });
+
+  it("keeps the process open, and does not fold it, while a member assist is still waiting", () => {
+    // 这一段过程里有一次还没回音的协助：曲终不散——流式结束后也不收起，只有用户自己才收。
+    const messages = [
+      { id: "u-1", role: "user" as const, content: "再请孙起查一下 hermes 的版本" },
+      { id: "a-1", role: "assistant" as const, content: "已请孙起查 Hermes Agent 的版本。", turnId: "turn-1" },
+      { id: "a-2", role: "assistant" as const, content: "", turnId: "turn-1", traces: ["ran which -a hermes"] }
+    ];
+    const html = renderToString(
+      <I18nProvider language="zh-CN">
+        <AgentThreadMessages
+          chatScopeKey="chat-assist-pending-open"
+          messages={messages}
+          pendingAssist={<p data-pending-assist="">请求孙起协助</p>}
+        />
+      </I18nProvider>
+    );
+    // 过程默认展开：等回音的请求不能被折叠藏起来。
+    expect(html).toContain("data-pending-assist");
+  });
+
   it("shows a per-answer control for inspecting injected memories", () => {
     const html = renderToString(
       <I18nProvider language="zh-CN">
