@@ -144,7 +144,7 @@ export function CollabAssistRequestCard(props: {
             <span className={styles.spin} />
             <span className={styles.byline}>
               <AgentLogo agent={request.agent} name={agentName} />
-              {t("collab.assist.footerRunning", { name: executor, agent: agentName, attempt: String(request.attempt) })}{grantNote}
+              {t("collab.assist.footerRunning", { name: executor, agent: agentName })}{grantNote}
             </span>
             {/* 执行中也能自己停下：同位置同样式，不另弹确认。 */}
             <span className={styles.grow} />
