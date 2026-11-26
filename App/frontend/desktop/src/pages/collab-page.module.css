@@ -1116,14 +1116,48 @@
   line-height: 1.6;
 }
 
-/* 协助记录弹窗的正文：内容比项目设置短，底部多留一截，卡片才不显得头重脚轻。 */
-:global(.modal-body).assistRecordsBody {
-  padding: 0 24px 22px;
-  gap: 0;
+/* 协助记录弹窗：记录会攒到几十条，弹窗自己收住高度，标题与工具条固定，只让列表滚动。 */
+:global(.modal).createModal.settingsModal.assistRecordsModal {
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100dvh - 96px);
 }
 
-.assistRecordsLead {
-  margin: 0 0 12px;
+:global(.modal-body).assistRecordsBody {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  padding: 0 24px 22px;
+  gap: 0;
+  overflow: hidden;
+}
+
+/* 工具条贴着标题栏，不沿用看板上与列表之间的那段间距 */
+.assistRecordsToolbar {
+  flex: none;
+  margin-top: 0;
+}
+
+.assistRecordsScroll {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* 行尾「…」菜单向下展开：菜单开着时底部让出一截，最后几行也点得到 */
+.assistRecordsScrollMenu {
+  padding-bottom: 40px;
+}
+
+.assistRecordsList {
+  margin-top: 14px;
+}
+
+.assistRecordsEmpty {
+  margin: 14px 0 0;
   color: var(--collab-muted);
   font-size: 12.5px;
   line-height: 1.65;
@@ -3310,14 +3344,9 @@
 }
 
 /*
- * 成员协助在看板上的一行：图标代替头像，标题前一个「协助」标签，行尾写清谁请谁、由哪个 Agent 执行、现在的状态。
+ * 协助在看板上的一行：标题前一个「协助」标签，行尾写清谁请谁、由哪个 Agent 执行、现在的状态。
  * 只用现有的薄荷绿主题变量。
  */
-.assistIcon {
-  background: color-mix(in srgb, var(--color-accent-mint, #5cbfae) 14%, var(--color-background-paper, #fff));
-  color: var(--color-accent-deep, #2f8f7f);
-}
-
 .assistTag {
   display: inline-block;
   margin-right: 7px;

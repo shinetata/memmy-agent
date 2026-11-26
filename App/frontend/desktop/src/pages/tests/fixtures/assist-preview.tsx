@@ -16,7 +16,7 @@ import { CollabAssistConversation } from "../../collab-assist-conversation.js";
 import { AssistMessageCard, parseAssistEnvelope } from "../../collab-assist-message.js";
 import { CollabAssistTaskChip, CollabAssistTaskDock } from "../../collab-assist-task.js";
 import { CollabAssistProjectSettings } from "../../collab-assist-settings.js";
-import { AssistBoardRow, ProjectBoardSettingsDialog } from "../../collab-page.js";
+import { AssistRecordsDialog, ProjectBoardSettingsDialog } from "../../collab-page.js";
 import { ApiClientsContext } from "../../../app/providers.js";
 import { Button } from "../../../components/button.js";
 import { Select } from "../../../components/Select.js";
@@ -772,24 +772,20 @@ function Preview() {
   }
 
   if (view === "board") {
-    // 看板上不再有「协助」tab：协助的记录在项目设置里，这里展示那份列表（等你确认、还在跑、已完成）。
+    // 看板上不再有「协助」tab：协助的记录在项目设置里，这里直接展示那份弹窗（等你确认、还在跑、已完成）。
     const running = thread({ threadId: "th-running", status: "running", lastActiveAt: "2026-11-04T14:44:00Z" }, [
       request({ threadId: "th-running", title: "确认 409 那次请求的完整返回", reason: "孙起本机复现不了分享弹窗的 409", status: "running", agent: "claude_code", scope: "once", mine: true })
     ]);
     return (
-      <div className={board.page} style={{ height: "100vh" }}>
-        <div className={board.scroller}>
-          <div className={board.wrap}>
-            <p className={board.assistRecordsLead}>记录你参与过的协助过程</p>
-            <ul className={`${board.list} ${board.stream} ${board.flatStream}`}>
-              <AssistBoardRow thread={THREADS[1]!} selecting={false} onOpen={() => undefined} />
-              <AssistBoardRow thread={running} selecting={false} onOpen={() => undefined} />
-              <AssistBoardRow thread={THREADS[0]!} selecting={false} onOpen={() => undefined} />
-            </ul>
-            <button type="button" className={board.assistFooterToggle}>另有 2 条没有执行的请求（未允许、已撤回或已过期）</button>
-          </div>
-        </div>
-      </div>
+      <AssistRecordsDialog
+        open
+        threads={[THREADS[1]!, running, THREADS[0]!]}
+        limit={{ maxThreads: 100, prunedAt: null }}
+        onOpenThread={() => undefined}
+        onDelete={() => undefined}
+        onDeleteMany={async () => undefined}
+        onClose={() => undefined}
+      />
     );
   }
 

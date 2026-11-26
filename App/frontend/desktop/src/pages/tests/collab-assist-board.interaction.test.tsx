@@ -268,14 +268,14 @@ describe("assists on the project board", () => {
     expect(records()).toHaveLength(1);
   });
 
-  it("shows only the one-line description when there is no assist yet", async () => {
+  it("shows a short empty state when there is no assist yet", async () => {
     await renderBoard([]);
     await openRecords();
 
-    // 没有记录时不另起一段空态：弹窗里只剩那行说明，卡片也不会被撑高。
+    // 没有记录时不再另起一段说明，只给一句不带标点的空态。
     expect(records()).toHaveLength(0);
-    expect(document.body.textContent).toContain("记录你参与过的协助过程");
-    expect(document.body.textContent).not.toContain("还没有协助");
+    expect(document.body.textContent).toContain("暂无协助记录");
+    expect(document.body.textContent).not.toContain("记录你参与过的协助过程");
   });
 
   it("deletes a finished assist from the row menu, which offers nothing else", async () => {
@@ -301,6 +301,58 @@ describe("assists on the project board", () => {
     expect(mocks.hideAssistThread).toHaveBeenCalledWith("p-1", done.threadId);
     expect(document.body.textContent).toContain("你们都已移除，这次协助的记录已删除");
     expect(records()).toHaveLength(1);
+  });
+
+  it("searches the records by title and members", async () => {
+    const version = thread(request("d1", "done"), { title: "查版本" });
+    const folder = thread(request("d2", "done"), { title: "看安装目录" });
+    await renderBoard([version, folder]);
+    await openRecords();
+
+    const input = document.querySelector<HTMLInputElement>("input[aria-label='搜索协助标题、背景或成员']");
+    if (!input) throw new Error("协助记录里没有搜索框");
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "安装");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    act(() => {
+      input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    });
+    await flush();
+
+    const titles = records().map((row) => row.textContent ?? "");
+    expect(titles).toHaveLength(1);
+    expect(titles[0]).toContain("看安装目录");
+  });
+
+  it("removes several finished assists at once and leaves running ones alone", async () => {
+    const first = thread(request("d1", "done"), { title: "查版本" });
+    const second = thread(request("d2", "done"), { title: "看安装目录" });
+    const running = thread(request("x1", "running", { agent: "memmy" }), { title: "还在跑" });
+    await renderBoard([first, second, running]);
+    mocks.hideAssistThread.mockResolvedValue({ threadId: first.threadId, removed: "hidden" });
+    await openRecords();
+
+    clickText("多选");
+    await flush();
+    // 还没结束的那一行没有勾选框，也不计入全选。
+    const runningRow = records().find((row) => row.textContent?.includes("还在跑"))!;
+    expect(runningRow.querySelector("input[type='checkbox']")).toBeNull();
+    clickText("全选");
+    await flush();
+    expect(document.body.textContent).toContain("已选 2 个");
+
+    mocks.assistThreads.mockResolvedValue({ threads: [running], open: 1, retentionDays: 30, maxThreads: 100, prunedAt: null });
+    clickTextIn("[role='dialog']", "删除");
+    await flush();
+    expect(document.body.textContent).toContain("选中的 2 个协助将从你的列表中移除，对方仍能看到；你们都移除后，记录会被删除。");
+    clickTextIn("[role='dialog']", "删除");
+    await flush();
+
+    expect(mocks.hideAssistThread).toHaveBeenCalledWith("p-1", first.threadId);
+    expect(mocks.hideAssistThread).toHaveBeenCalledWith("p-1", second.threadId);
+    expect(mocks.hideAssistThread).toHaveBeenCalledTimes(2);
+    expect(document.body.textContent).toContain("已移除 2 个协助");
   });
 
   it("opens a thread from the records and removes it only from my own list", async () => {

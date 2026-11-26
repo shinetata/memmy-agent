@@ -1613,6 +1613,25 @@ const CollabBoard = memo(function CollabBoard(props: {
     }
   }
 
+  /** 选中多条已结束的协助一起从自己的列表中移除；对方仍看得到，双方都移除后由云端删除记录。 */
+  async function deleteAssists(threads: readonly AssistThread[]) {
+    if (!collab || !sharedId || !threads.length) return;
+    let failed = 0;
+    for (const thread of threads) {
+      try {
+        await collab.hideAssistThread(sharedId, thread.threadId);
+        if (assistDetailId === thread.threadId) setAssistDetailId(null);
+      } catch {
+        failed += 1;
+      }
+    }
+    const removed = threads.length - failed;
+    showToast(failed
+      ? t("collab.assist.bulkDeletePartial", { removed: String(removed), failed: String(failed) })
+      : t("collab.assist.bulkDeleted", { count: String(removed) }));
+    await refreshAssists();
+  }
+
   /** 选择模式只在本人任务上生效：他人的任务只能看，删除也由云端限定为本人。 */
   function toggleSelected(sessionId: string) {
     setSelected((current) => {
@@ -2213,6 +2232,7 @@ const CollabBoard = memo(function CollabBoard(props: {
           openAssist(thread);
         }}
         onDelete={(thread) => setDeletingAssist(thread)}
+        onDeleteMany={deleteAssists}
         onClose={() => setAssistRecordsOpen(false)}
       />
       <ConfirmDialog
@@ -2307,9 +2327,6 @@ export function AssistBoardRow(props: {
           onChange={() => props.onToggle?.()}
         />
       ) : null}
-      <span className={`${styles.avatar} ${styles.assistIcon}`} aria-hidden="true">
-        <LifeBuoy size={15} />
-      </span>
       <div className={styles.rowText}>
         <span className={styles.rowTitle}>
           <span className={styles.assistTag}>{t("collab.assist.tag")}</span>
@@ -2369,6 +2386,9 @@ export function AssistBoardRow(props: {
  * 看板不再单开一个「协助」tab——发起在成员段头上，等你处理的请求提示在任务列表上方，
  * 这里是查看历史的地方。排序沿用原来的口径：等你处理的最急，已结束的最靠后；
  * 没有执行过的请求（未允许、已撤回、已过期）默认收起，不占视线。
+ *
+ * 记录可能攒到几十条，所以工具条与看板同一套：左边搜索，右边多选；选择态里可以全选、批量删除。
+ * 标题与工具条固定，只让列表滚动。
  */
 export function AssistRecordsDialog(props: {
   open: boolean;
@@ -2376,68 +2396,242 @@ export function AssistRecordsDialog(props: {
   limit: { maxThreads: number | null; prunedAt: string | null };
   onOpenThread: (thread: AssistThread) => void;
   onDelete: (thread: AssistThread) => void;
+  /** 一次移除多起已经结束的协助：由调用方逐条处理并提示结果。 */
+  onDeleteMany?: (threads: readonly AssistThread[]) => Promise<void>;
   onClose: () => void;
 }) {
   const { t } = useTranslation();
   const [showUnrun, setShowUnrun] = useState(false);
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
+  const [searchDraft, setSearchDraft] = useState("");
+  const [query, setQuery] = useState("");
+  const [selecting, setSelecting] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [confirmBulkDelete, setConfirmBulkDelete] = useState(false);
+  const [bulkDeleting, setBulkDeleting] = useState(false);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+
+  // 关掉就清空：下次打开是一条完整的历史，不带上次的搜索词与勾选。
+  useEffect(() => {
+    if (props.open) return;
+    setShowUnrun(false);
+    setSearchDraft("");
+    setQuery("");
+    setSelecting(false);
+    setSelected(new Set());
+    setConfirmBulkDelete(false);
+  }, [props.open]);
+
+  // 换搜索词或进出选择模式后，旧的勾选不再有效。
+  useEffect(() => {
+    setSelected(new Set());
+  }, [query, selecting]);
+
+  // 进入选择态后行尾菜单没有意义，也避免它与勾选叠在一起。
+  useEffect(() => {
+    if (selecting) setOpenMenuId(null);
+  }, [selecting]);
+
+  // 行尾菜单向下展开：贴着列表底部的那一行打开时先把菜单滚进视线，不要只露出半个。
+  useEffect(() => {
+    if (!openMenuId) return undefined;
+    const frame = requestAnimationFrame(() => {
+      scrollRef.current?.querySelector("[role='menu']")?.scrollIntoView({ block: "nearest" });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [openMenuId]);
+
   const recent = (thread: AssistThread) => thread.lastActiveAt ?? thread.createdAt ?? "";
   const rank = (thread: AssistThread) => (assistWaitsForMe(thread) ? 0 : assistIsOpen(thread.status) ? 1 : 2);
-  const active = props.threads.filter((thread) => !assistNeverRan(thread));
-  const unrun = props.threads.filter(assistNeverRan);
+  // 与看板的搜索同一口径：空格分隔的多个词同时命中标题、背景、双方名字或执行的 Agent 才算匹配。
+  const keywords = query.toLowerCase().split(/\s+/u).filter(Boolean);
+  const matches = (thread: AssistThread) => {
+    if (!keywords.length) return true;
+    const haystack = [
+      thread.title,
+      thread.requests[0]?.reason ?? "",
+      thread.requester.name,
+      thread.executor.name,
+      thread.agent ?? ""
+    ].join(" ").toLowerCase();
+    return keywords.every((keyword) => haystack.includes(keyword));
+  };
+  const visible = props.threads.filter(matches);
+  const active = visible.filter((thread) => !assistNeverRan(thread));
+  const unrun = visible.filter(assistNeverRan);
+  // 搜索时没有执行的请求也一起列出来：搜的就是那一条，不该还要先展开。
   const rows = [
     ...[...active].sort((left, right) => rank(left) - rank(right) || recent(right).localeCompare(recent(left))),
-    ...(showUnrun ? unrun : [])
+    ...(showUnrun || query ? unrun : [])
   ];
+  // 还没结束的协助不能删：先撤回或停止，所以多选与删除只认已经结束的行。
+  const selectableIds = rows.filter((thread) => !assistIsOpen(thread.status)).map((thread) => thread.threadId);
+  const allSelected = selectableIds.length > 0 && selectableIds.every((id) => selected.has(id));
+  const chosen = rows.filter((thread) => selected.has(thread.threadId));
+  const emptyText = props.threads.length === 0
+    ? t("collab.assist.recordsEmpty")
+    : query && rows.length === 0 ? t("collab.assist.searchEmpty", { query }) : "";
+
+  function toggleAll() {
+    setSelected(allSelected ? new Set() : new Set(selectableIds));
+  }
+
+  async function deleteSelected() {
+    if (!props.onDeleteMany || !chosen.length) return;
+    setConfirmBulkDelete(false);
+    setBulkDeleting(true);
+    try {
+      await props.onDeleteMany(chosen);
+    } finally {
+      setBulkDeleting(false);
+      setSelected(new Set());
+      setSelecting(false);
+    }
+  }
 
   return (
-    <Modal
-      open={props.open}
-      title={t("collab.assist.recordsTitle")}
-      onClose={props.onClose}
-      closeLabel={t("common.close")}
-      closeContent={<X size={16} aria-hidden="true" />}
-      className={`${styles.createModal} ${styles.simpleCreateModal} ${styles.settingsModal}`}
-      backdropClassName={styles.backdrop}
-      // 与项目设置同一份底部留白会显得头重脚轻：这弹窗内容更短，底部要自己多留一截。
-      bodyClassName={styles.assistRecordsBody}
-    >
-      <p className={styles.assistRecordsLead}>{t("collab.assist.recordsLead")}</p>
-      {rows.length ? (
-        <ul className={`${styles.list} ${styles.stream} ${styles.flatStream}`} data-collab-assist-records="">
-          {rows.map((thread) => (
-            <AssistBoardRow
-              key={`assist-${thread.threadId}`}
-              thread={thread}
-              selecting={false}
-              onOpen={() => props.onOpenThread(thread)}
-              menuOpen={openMenuId === thread.threadId}
-              onMenu={(open) => setOpenMenuId(open ? thread.threadId : null)}
-              onDelete={() => props.onDelete(thread)}
-            />
-          ))}
-        </ul>
-      ) : null}
-      {unrun.length ? (
-        <button
-          type="button"
-          className={styles.assistFooterToggle}
-          aria-expanded={showUnrun}
-          onClick={() => setShowUnrun((value) => !value)}
-        >
-          {showUnrun
-            ? t("collab.assist.unrunHide")
-            : t("collab.assist.unrunShow", { count: String(unrun.length) })}
-        </button>
-      ) : null}
-      {props.limit.prunedAt ? (
-        <p className={styles.assistFooterNote}>
-          {props.limit.maxThreads
-            ? t("collab.assist.pruned", { max: String(props.limit.maxThreads) })
-            : t("collab.assist.prunedShort")}
-        </p>
-      ) : null}
-    </Modal>
+    <>
+      <Modal
+        open={props.open}
+        title={t("collab.assist.recordsTitle")}
+        onClose={props.onClose}
+        closeLabel={t("common.close")}
+        closeContent={<X size={16} aria-hidden="true" />}
+        className={`${styles.createModal} ${styles.simpleCreateModal} ${styles.settingsModal} ${styles.assistRecordsModal}`}
+        backdropClassName={styles.backdrop}
+        bodyClassName={styles.assistRecordsBody}
+      >
+        {props.threads.length ? (
+          <div className={`${styles.toolbar} ${styles.assistRecordsToolbar}`}>
+            {/* 搜索属于浏览，选择态收起来；已经带着查询时保留，否则列表被筛住却看不到原因 */}
+            {selecting && !query ? null : (
+              <label className={styles.searchBox}>
+                <Search size={14} aria-hidden="true" className={styles.searchIcon} />
+                <input
+                  value={searchDraft}
+                  placeholder={t("collab.assist.searchPlaceholder")}
+                  aria-label={t("collab.assist.searchPlaceholder")}
+                  onChange={(event) => {
+                    const next = event.target.value;
+                    setSearchDraft(next);
+                    // 清空立刻恢复全部；边打边搜要等一个停顿，回车或点「搜索」才确认。
+                    if (!next.trim()) setQuery("");
+                  }}
+                  onKeyDown={(event) => {
+                    // 回车确认输入法候选词时不要发起搜索，否则搜的是半成品拼音。
+                    if (event.key === "Enter" && !isComposingKeyboardEvent(event)) setQuery(searchDraft.trim());
+                    if (event.key === "Escape") {
+                      setSearchDraft("");
+                      setQuery("");
+                    }
+                  }}
+                />
+                {searchDraft && searchDraft !== query ? (
+                  <button type="button" className={styles.searchGo} onClick={() => setQuery(searchDraft.trim())}>
+                    {t("collab.sessions.searchGo")}
+                  </button>
+                ) : null}
+              </label>
+            )}
+            <span className={styles.grow} />
+            {selecting ? (
+              <span className={styles.selectActions}>
+                <span className={styles.selectCount}>
+                  {t("collab.sessions.selectedCount", { count: String(selected.size) })}
+                </span>
+                <Button size="sm" variant="ghost" disabled={!selectableIds.length || bulkDeleting} onClick={toggleAll}>
+                  {t(allSelected ? "collab.sessions.deselectAll" : "collab.sessions.selectAll")}
+                </Button>
+                <Button size="sm" variant="ghost" disabled={bulkDeleting} onClick={() => setSelecting(false)}>
+                  {t("collab.cancel")}
+                </Button>
+                {/* 破坏性操作保留警示色，但用文字按钮，不在工具条里压一块红底 */}
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className={styles.dangerGhost}
+                  disabled={!selected.size || bulkDeleting}
+                  onClick={() => setConfirmBulkDelete(true)}
+                >
+                  <Trash2 size={14} aria-hidden="true" />
+                  {bulkDeleting ? t("collab.sessions.deleting") : t("collab.session.delete")}
+                </Button>
+              </span>
+            ) : selectableIds.length ? (
+              <Button
+                size="sm"
+                variant="ghost"
+                className={styles.iconAction}
+                aria-label={t("collab.sessions.select")}
+                title={t("collab.sessions.select")}
+                onClick={() => setSelecting(true)}
+              >
+                <ListChecks size={14} aria-hidden="true" />
+                <span className={styles.actionLabel}>{t("collab.sessions.select")}</span>
+              </Button>
+            ) : null}
+          </div>
+        ) : null}
+        <div ref={scrollRef} className={`${styles.assistRecordsScroll} ${openMenuId ? styles.assistRecordsScrollMenu : ""}`}>
+          {rows.length ? (
+            <ul className={`${styles.list} ${styles.stream} ${styles.flatStream} ${styles.assistRecordsList}`} data-collab-assist-records="">
+              {rows.map((thread) => (
+                <AssistBoardRow
+                  key={`assist-${thread.threadId}`}
+                  thread={thread}
+                  selecting={selecting}
+                  selected={selected.has(thread.threadId)}
+                  onToggle={() => {
+                    setSelected((current) => {
+                      const next = new Set(current);
+                      if (next.has(thread.threadId)) next.delete(thread.threadId);
+                      else next.add(thread.threadId);
+                      return next;
+                    });
+                  }}
+                  onOpen={() => props.onOpenThread(thread)}
+                  menuOpen={openMenuId === thread.threadId}
+                  onMenu={(open) => setOpenMenuId(open ? thread.threadId : null)}
+                  onDelete={() => props.onDelete(thread)}
+                />
+              ))}
+            </ul>
+          ) : emptyText ? (
+            <p className={styles.assistRecordsEmpty}>{emptyText}</p>
+          ) : null}
+          {unrun.length ? (
+            <button
+              type="button"
+              className={styles.assistFooterToggle}
+              aria-expanded={showUnrun}
+              onClick={() => setShowUnrun((value) => !value)}
+            >
+              {showUnrun
+                ? t("collab.assist.unrunHide")
+                : t("collab.assist.unrunShow", { count: String(unrun.length) })}
+            </button>
+          ) : null}
+          {props.limit.prunedAt ? (
+            <p className={styles.assistFooterNote}>
+              {props.limit.maxThreads
+                ? t("collab.assist.pruned", { max: String(props.limit.maxThreads) })
+                : t("collab.assist.prunedShort")}
+            </p>
+          ) : null}
+        </div>
+      </Modal>
+      <ConfirmDialog
+        open={confirmBulkDelete}
+        title={t("collab.assist.bulkDeleteTitle")}
+        message={t("collab.assist.bulkDeleteMessage", { count: String(chosen.length) })}
+        cancelLabel={t("collab.cancel")}
+        confirmLabel={t("collab.session.delete")}
+        confirmVariant="danger"
+        icon={null}
+        onCancel={() => setConfirmBulkDelete(false)}
+        onConfirm={() => void deleteSelected()}
+      />
+    </>
   );
 }
 
