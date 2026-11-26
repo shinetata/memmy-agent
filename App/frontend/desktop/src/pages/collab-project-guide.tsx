@@ -28,7 +28,8 @@ const guideScenes = {
   assist: {
     feature: "assist",
     related: ["assistHistory", "receiveAssist"],
-    example: { title: "collab.guide.example.member", action: "collab.assist.askButton" }
+    example: { title: "collab.guide.example.member", action: "collab.assist.askButton" },
+    external: ["askAssist"]
   }
 } as const;
 

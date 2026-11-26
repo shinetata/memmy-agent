@@ -208,6 +208,13 @@ describe("the project board with no tasks", () => {
     expect(contexts[1]?.textContent).toContain("通过链接读取任务");
     expect(contexts[1]?.textContent).toContain("把链接粘贴到对话里");
 
+    const assistTab = [...guide.querySelectorAll<HTMLButtonElement>("button[aria-pressed]")]
+      .find((button) => button.textContent === "成员协助")!;
+    act(() => assistTab.click());
+    const agentAssist = guide.querySelector('section[aria-labelledby$="-agent"]');
+    expect(agentAssist?.querySelector("h3")?.textContent).toBe("在已接入的 Agent 中");
+    expect(agentAssist?.textContent).toContain(`请 Memmy 的『${sharedProject.name}』项目里的【成员名】`);
+
     act(() => guide.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
     expect(document.querySelector('[role="dialog"]')).toBeNull();
     expect(trigger.getAttribute("aria-expanded")).toBe("false");
@@ -249,6 +256,8 @@ describe("the project board with no tasks", () => {
 
     selectTopic("Teammate help");
     expect(guide.textContent).toContain("Review assist history");
+    expect(guide.textContent).toContain("Request help from a conversation");
+    expect(guide.textContent).toContain(`Ask [member] in the Memmy project ‘${sharedProject.name}’`);
 
     act(() => guide.querySelector<HTMLButtonElement>('button[aria-label="Close"]')!.click());
     expect(document.querySelector('[role="dialog"]')).toBeNull();
