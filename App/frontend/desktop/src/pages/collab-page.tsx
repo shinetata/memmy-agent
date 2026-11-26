@@ -1291,6 +1291,18 @@ const CollabBoard = memo(function CollabBoard(props: {
     return ranked.sort((left, right) => (order.get(left.key) ?? 0) - (order.get(right.key) ?? 0));
   }, [boardMembers, project?.id, query, sessions, sharedId]);
 
+  /**
+   * 一条任务都没有时，看板要不要铺成员分段：项目里还有别人就铺——这一屏回答的是「这里都有谁、能找谁协助」，
+   * 工具条上已经有新建与关联两个入口，正文不必再讲一遍。
+   * 名单读回来之前先按云端给的成员数判断，读回来之后以名单为准（成员数可能是上一轮读到的）。
+   */
+  const boardHasOthers = useMemo(
+    () => (boardMembers.length
+      ? boardMembers.some((member) => !member.mine)
+      : (shared?.memberCount ?? 0) > 1),
+    [boardMembers, shared]
+  );
+
   // Only this project's own tasks: nothing leaves the computer until sharing is on and sessions are chosen.
   const localTasks = useMemo(() => {
     if (!projectId) return [];
@@ -1926,6 +1938,17 @@ const CollabBoard = memo(function CollabBoard(props: {
                             <span>{filterEmpty.body}</span>
                           </div>
                         </div>
+                      ) : boardRows.length === 0 && boardHasOthers ? (
+                        /* 一条任务都没有、项目里还有别人：这一屏该回答的是「这里都有谁、能找谁协助」，
+                         * 铺成员分段就够了。工具条上已经有「新建任务」「关联任务」，不在正文里再讲一遍。
+                         * 成员名单还没读回来时先当加载中，避免先闪一下空态文案再换成成员行。 */
+                        boardMembers.length === 0 ? (
+                          <p className={styles.loading} data-demo-guide="board-list">{t("collab.loading")}</p>
+                        ) : (
+                          <div className={styles.memberBoard} data-demo-guide="board-list">
+                            {memberGroups.map(renderMemberGroup)}
+                          </div>
+                        )
                       ) : boardRows.length === 0 ? (
                         /* 空项目只留一句说明：操作就嵌在这句话里，不摆图标、不加按钮。
                          * 本机项目没有可关联的东西，只讲新建任务；共享给成员的项目两种都讲。 */

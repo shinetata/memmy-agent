@@ -18,6 +18,7 @@ const mocks = vi.hoisted(() => ({
   listAddedAgents: vi.fn().mockResolvedValue([]),
   knowledge: vi.fn(),
   listSessions: vi.fn(),
+  listMembers: vi.fn(),
   readSessionDetail: vi.fn(),
   readReference: vi.fn(),
   removeSession: vi.fn(),
@@ -96,6 +97,15 @@ describe("the project board with no tasks", () => {
     // 共享项目会去读它的任务列表：空列表表示这个项目还没有任务。
     mocks.listSessions.mockResolvedValue({ project: sharedProject, sessions: [], total: 0 });
     mocks.getSyncProgress.mockResolvedValue({ running: false, total: 0, completed: 0, failed: 0 });
+    // 成员名单：本人加一位还没共享任务的成员。0 任务时看板靠它铺出成员分段。
+    mocks.listMembers.mockResolvedValue({
+      canManage: true,
+      requests: [],
+      members: [
+        { userId: "u-me", name: "孙起", mine: true },
+        { userId: "u-2", name: "小饭团", mine: false }
+      ]
+    });
     mocks.syncSessions.mockResolvedValue({ uploaded: 0, removed: 0, failed: 0 });
     container = document.createElement("div");
     document.body.append(container);
@@ -132,16 +142,36 @@ describe("the project board with no tasks", () => {
     expect(container.querySelector('button[aria-label="协作项目使用指南"]')).toBeNull();
   });
 
-  it("offers both a new task and linking sessions on a shared project", async () => {
+  it("lays out the members instead of the sentence on a shared project without tasks", async () => {
     localProjects = [localProject];
     mocks.listProjects.mockResolvedValue({ projects: [sharedProject] });
     await render("zh-CN");
 
     const text = container.textContent ?? "";
+    // 还有别人时这一屏回答的是「这里都有谁、能找谁」：只留成员分段，不再重讲工具条上的两个动作。
+    expect(text).not.toContain("项目中还没有任务，可以");
+    const groups = [...container.querySelectorAll("[data-collab-member-group]")];
+    expect(groups.map((group) => group.getAttribute("data-collab-member-group"))).toEqual(["me", "member:小饭团"]);
+    expect(groups[0]?.querySelector("[data-collab-member-name]")?.textContent).toBe("孙起");
+    for (const group of groups) {
+      expect(group.querySelector("[data-collab-member-count]")?.textContent).toBe("暂无任务");
+    }
+  });
+
+  it("keeps the sentence when nobody else has joined yet", async () => {
+    localProjects = [localProject];
+    mocks.listProjects.mockResolvedValue({ projects: [{ ...sharedProject, memberCount: 1 }] });
+    mocks.listSessions.mockResolvedValue({ project: { ...sharedProject, memberCount: 1 }, sessions: [], total: 0 });
+    mocks.listMembers.mockResolvedValue({
+      canManage: true,
+      requests: [],
+      members: [{ userId: "u-me", name: "孙起", mine: true }]
+    });
+    await render("zh-CN");
+
+    const text = container.textContent ?? "";
     expect(text).toContain("项目中还没有任务，可以");
-    expect(text).toContain("新建任务");
-    expect(text).toContain("或");
-    expect(text).toContain("关联任务");
+    expect(container.querySelector("[data-collab-member-group]")).toBeNull();
   });
 
   it("opens the shared project guide only on click and restores focus when closed", async () => {
