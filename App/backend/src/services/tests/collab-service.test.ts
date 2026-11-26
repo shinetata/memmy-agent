@@ -10,6 +10,7 @@ import {
   pageOf,
   parseSessionReference,
   sessionKey,
+  shareTextFor,
   type CollabServiceOptions,
   type LocalAgentSession
 } from "../collab-service.js";
@@ -110,6 +111,18 @@ describe("collab service", () => {
     expect(parseSessionReference("../../etc/passwd")).toBeNull();
   });
 
+  it("quotes the task name so a pasted title does not read as an instruction", () => {
+    // 任务标题是成员当时的第一句话，常是指令句。分享文案写成「共享任务「…」」，
+    // 另一头的 Agent 才看得出这是任务的名字，不会照它在本机再执行一遍。
+    const link = `https://memmy.example/api/s/${cloudSession.id}`;
+    expect(shareTextFor("查询本机 codex 版本", link)).toBe(`【Memmy】共享任务「查询本机 codex 版本」 ${link}`);
+    // 标题里的「」和换行不能把外面那层引号截断。
+    expect(shareTextFor("重复分享返回「409」\n怎么办", "l")).toBe("【Memmy】共享任务「重复分享返回『409』 怎么办」 l");
+    expect(shareTextFor("   ", "l")).toBe("【Memmy】共享任务 l");
+    // 新文案仍然直接交给 read 就能解析出任务 ID。
+    expect(parseSessionReference(shareTextFor("查询本机 codex 版本", link))).toBe(cloudSession.id);
+  });
+
   it("adds the link and share text to listed sessions", async () => {
     const { fetcher, calls } = fakeFetch({
       "GET /api/collab/projects/p-1/sessions": () => ({ code: 0, data: { project: { id: "p-1", name: "Memmy 开发" }, sessions: [cloudSession] } })
@@ -118,7 +131,7 @@ describe("collab service", () => {
     expect(calls[0]?.headers.Authorization).toBe("Bearer uuid-b");
     expect(result.sessions[0]).toMatchObject({
       link: `https://cloud.test.invalid/api/s/${cloudSession.id}`,
-      shareText: `【Memmy】重复分享返回 409 https://cloud.test.invalid/api/s/${cloudSession.id}`
+      shareText: `【Memmy】共享任务「重复分享返回 409」 https://cloud.test.invalid/api/s/${cloudSession.id}`
     });
   });
 
@@ -2041,7 +2054,7 @@ function projectSession(
     turnCount: 1,
     lastActiveAt: `2026-10-22T0${index % 10}:00:00.000Z`,
     link: `https://cloud.test.invalid/api/s/${id}`,
-    shareText: `【Memmy】会话 ${index} https://cloud.test.invalid/api/s/${id}`
+    shareText: `【Memmy】共享任务「会话 ${index}」 https://cloud.test.invalid/api/s/${id}`
   };
 }
 

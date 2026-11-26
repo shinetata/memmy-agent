@@ -250,7 +250,7 @@ export interface CollabProjectSession {
   trimmed: boolean;
   /** The link a member pastes into another agent. */
   link: string;
-  /** What「复制链接」puts on the clipboard. */
+  /** What「复制链接」puts on the clipboard: `【Memmy】共享任务「<任务名>」 <链接>`. */
   shareText: string;
   /**
    * 本人在这台电脑上用 Memmy 建的这条任务的对话 id（= 会话文件名里的 chatId），其他成员的任务、
@@ -824,6 +824,25 @@ export function parseSessionReference(reference: string): string | null {
     return trimmed;
   }
   return SESSION_LINK_PATTERN.exec(trimmed)?.[1] ?? null;
+}
+
+/**
+ * 分享文案里的任务名。任务标题就是成员当时的第一句话，常是指令句（「查询本机 codex 版本」）；
+ * 分享文案把它写成「共享任务「…」」，读的人和其他 Agent 才看得出这是这条任务的名字，不是要它执行的一件事。
+ * 标题里的「」换成『』、换行与连续空白压成一个空格，否则会把外面那层引号截断。
+ */
+export function shareTaskName(title: string): string {
+  return (title ?? "")
+    .replace(/\s+/gu, " ")
+    .trim()
+    .replace(/「/gu, "『")
+    .replace(/」/gu, "』");
+}
+
+/** 复制链接时放在剪贴板上的那一句：任务名在前、链接在后，名字套在「」里，与用户自己补的要求分开。 */
+export function shareTextFor(title: string, link: string): string {
+  const name = shareTaskName(title);
+  return name ? `【Memmy】共享任务「${name}」 ${link}` : `【Memmy】共享任务 ${link}`;
 }
 
 /** Extracts the code from a pasted invite link, the copied invite text, or a bare code. */
@@ -1642,7 +1661,7 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
       lastActiveAt: nullableText(session.lastActiveAt),
       trimmed: session.trimmed === true,
       link,
-      shareText: `【Memmy】${title} ${link}`
+      shareText: shareTextFor(title, link)
     };
   }
 
