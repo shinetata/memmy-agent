@@ -1401,15 +1401,18 @@ const CollabBoard = memo(function CollabBoard(props: {
           if (session.mine) toggleSelected(session.id);
         }}
       >
+        {/* 多选：勾选框落在行左侧的留白里，标题不动（见 .rowCheckSlot） */}
         {selecting && session.mine ? (
-          <input
-            type="checkbox"
-            className={styles.rowCheck}
-            checked={selected.has(session.id)}
-            aria-label={session.title}
-            onClick={(event) => event.stopPropagation()}
-            onChange={() => toggleSelected(session.id)}
-          />
+          <span className={styles.rowCheckSlot}>
+            <input
+              type="checkbox"
+              className={styles.rowCheck}
+              checked={selected.has(session.id)}
+              aria-label={session.title}
+              onClick={(event) => event.stopPropagation()}
+              onChange={() => toggleSelected(session.id)}
+            />
+          </span>
         ) : null}
         <div className={styles.rowText}>
           <span className={styles.rowTitle} data-collab-row-title="">{session.title}</span>
@@ -2351,14 +2354,16 @@ export function AssistBoardRow(props: {
       }}
     >
       {props.selecting && deletable ? (
-        <input
-          type="checkbox"
-          className={styles.rowCheck}
-          checked={Boolean(props.selected)}
-          aria-label={thread.title}
-          onClick={(event) => event.stopPropagation()}
-          onChange={() => props.onToggle?.()}
-        />
+        <span className={styles.rowCheckSlot}>
+          <input
+            type="checkbox"
+            className={styles.rowCheck}
+            checked={Boolean(props.selected)}
+            aria-label={thread.title}
+            onClick={(event) => event.stopPropagation()}
+            onChange={() => props.onToggle?.()}
+          />
+        </span>
       ) : null}
       <div className={styles.rowText}>
         <span className={styles.rowTitle}>

@@ -451,6 +451,8 @@ describe("collab task list", () => {
     const checks = Array.from(container.querySelectorAll<HTMLInputElement>('input[type="checkbox"]'));
     // 只有本人的两条可选，他人的任务没有勾选框。
     expect(checks).toHaveLength(2);
+    // 勾选框在外层槽位里：它浮在行左侧的留白中，标题不跟着让位（见 .rowCheckSlot）。
+    expect(checks[0]!.parentElement?.tagName).toBe("SPAN");
     await act(async () => checks[0]!.click());
     expect(document.body.textContent).toContain("已选 1 个");
     expect(button("全选")).toBeTruthy();

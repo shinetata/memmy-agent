@@ -439,6 +439,8 @@
   gap: 16px;
   padding: 15px 20px;
   animation: collabRowIn 220ms ease-out;
+  /* 勾选、取消勾选时底色跟着走，不硬切 */
+  transition: background-color 160ms ease;
 }
 
 .row + .row {
@@ -453,13 +455,73 @@
   border-radius: 0 0 13px 13px;
 }
 
-/* 多选：行内勾选框与选中态 */
+/*
+ * 多选：勾选框浮在行左侧已有的留白里（见 .memberGroup 的 54px 内边距），标题一个像素都不动。
+ * 进入多选时它从左侧滑进来并渐显，退出时随整行一起消失，不做退出动画。
+ */
+.rowCheckSlot {
+  display: grid;
+  place-items: center;
+  animation: collabCheckIn 200ms cubic-bezier(0.2, 0.75, 0.3, 1) both;
+}
+
+/* 只动位移与缩放：居中由 top 计算，不用 transform，关掉动画时位置也不变 */
+@keyframes collabCheckIn {
+  from {
+    opacity: 0;
+    transform: translateX(-7px) scale(0.82);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
+}
+
+/*
+ * 勾选框按知识库文件列表那一套画：16px 圆角方块，未选中是细灰边，勾选后填薄荷色配白勾。
+ * 原生控件换不掉这套外观，所以清空 appearance 自己画；勾选状态跟着底色与勾一起过渡。
+ */
 .rowCheck {
-  width: 15px;
-  height: 15px;
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
   margin: 0;
-  accent-color: var(--collab-accent-deep);
+  padding: 0;
+  border: 1.5px solid color-mix(in srgb, var(--collab-ink) 22%, #fff);
+  border-radius: 4px;
+  background: #fff center / 11px 11px no-repeat;
   cursor: pointer;
+  transition: background-color 140ms ease, border-color 140ms ease;
+}
+
+.rowCheck:hover {
+  border-color: var(--collab-accent-deep);
+}
+
+/* --collab-accent 在这个主题里是 #c8f0e0 那种很浅的填充色，白勾压上去几乎看不见，勾选态改用可读的那支薄荷 */
+.rowCheck:checked {
+  border-color: var(--color-action-sky, #5cbfae);
+  background-color: var(--color-action-sky, #5cbfae);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2.2 6.2 4.8 8.8 9.8 3.2' fill='none' stroke='%23fff' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+
+.rowCheck:focus-visible {
+  outline: 1.5px solid var(--collab-accent-deep);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .row,
+  .rowCheck {
+    transition: none;
+  }
+
+  .rowCheckSlot,
+  .assistRecordsList .rowCheckSlot,
+  .selectActions {
+    animation: none;
+  }
 }
 
 .rowSelected {
@@ -494,6 +556,17 @@
   align-items: center;
   gap: 8px;
   white-space: nowrap;
+  /* 工具条从「多选」换成「已选 N 个」，整组淡入，不硬切 */
+  animation: collabFadeIn 160ms ease-out both;
+}
+
+@keyframes collabFadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 
 .row:only-child {
@@ -754,9 +827,30 @@
   padding-left: 54px;
 }
 
-/* 选择模式下勾选框从最左开始，标题跟着右移是正常的 */
-.memberGroup .stream .row.rowSelecting {
-  padding-left: 14px;
+/*
+ * 选择模式只把勾选框放进这 54px 里的左侧 14px 处：与段头头像、列表左缘对齐。
+ * 行内边距不变，所以进入多选、勾选、取消时标题不为勾选框让位，整段不会抖一下。
+ */
+.memberGroup .stream .row .rowCheckSlot {
+  position: absolute;
+  /* 勾选框 16px 高：减掉自己的一半就是垂直居中，不靠 transform（动画关掉时位置也要对） */
+  top: calc(50% - 8px);
+  left: 14px;
+}
+
+/* 协助记录弹窗里的行没有这段留白：勾选框参与排布，跟在标题前面 */
+.assistRecordsList .rowCheckSlot {
+  flex: none;
+  animation: collabCheckFade 180ms ease-out both;
+}
+
+@keyframes collabCheckFade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 
 /* 「展开其余 N 个」：就地展开，不翻页、不跳转 */
