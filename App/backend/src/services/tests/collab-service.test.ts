@@ -1222,10 +1222,10 @@ describe("collab service", () => {
     expect(await svc.getSyncProgress("p-1")).toMatchObject({ completed: 4, failed: 1 });
   });
 
-  it("leaves a session that only survives in an archive out of the upload", async () => {
+  it("uploades a session that only survives in an archive, reading it through the batch", async () => {
     const local: LocalAgentSession[] = [
       localSession("codex", "live", "/repo", "2026-10-22T01:00:00.000Z"),
-      // Codex 把旧会话压成了存档：整组关联会顺带算上它，但它读不出正文。
+      // Codex 把旧会话压成了存档：整组关联会顺带算上它，正文由后端解压读出。
       { ...localSession("codex", "archived", "/repo", "2026-10-21T01:00:00.000Z"), archived: true }
     ];
     const { fetcher, calls } = fakeFetch({
@@ -1248,8 +1248,8 @@ describe("collab service", () => {
     await waitForUploads(svc, "p-1");
 
     const uploaded = calls.filter((call) => call.method === "PUT").map((call) => (call.body as { sessions: Array<{ sourceSessionId: string }> }).sessions[0]!.sourceSessionId);
-    expect(uploaded).toEqual(["live"]);
-    // 也不算成失败：它在列表里已经标明是存档，不需要每次同步都重试一遍。
+    expect(uploaded.sort()).toEqual(["archived", "live"]);
+    // 解压成功就不算失败，也不该每次同步都重试一遍。
     expect(await svc.getSyncProgress("p-1")).toMatchObject({ failed: 0 });
   });
 

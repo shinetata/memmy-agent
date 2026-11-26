@@ -82,11 +82,12 @@ describe("codex index listing", () => {
 
     const sessions = await listCodexIndexSessions(adapter, 100);
 
-    // 存档仍然能列出来（标题、时间都在索引里），但读正文时要知道它是存档而不是「不存在」。
+    // 存档仍然能列出来（标题、时间都在索引里），读正文时要知道它是存档而不是「不存在」，并带上索引记的目录。
     expect(sessions?.map((session) => session.conversationId)).toEqual(["compressed"]);
     await expect(codexSessionFileFor(adapter, "compressed")).resolves.toEqual({
       path: join(root, "sessions", "2026", "11", "24", "rollout-old.jsonl.zst"),
-      archived: true
+      archived: true,
+      workspacePath: "/repo"
     });
     await expect(codexSessionFileFor(adapter, "gone")).resolves.toBeNull();
   });

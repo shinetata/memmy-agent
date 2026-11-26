@@ -64,8 +64,8 @@ describe("associate other agents' tasks", () => {
     expect(document.querySelector("nav[aria-label='Agent']")?.textContent).toContain("WorkBuddy");
   });
 
-  it("lists a task that only survives in an archive but refuses to associate it", async () => {
-    // Codex 把旧会话压成 .jsonl.zst 之后读不出正文：这一条要能看到，但不能勾。
+  it("lists a task that only survives in an archive and lets it be associated", async () => {
+    // Codex 把旧会话压成 .jsonl.zst：列表照旧显示它，勾选与普通任务一样（后端在读取时解压）。
     const archived = [
       ...sessions,
       { ...sessions[0]!, conversationId: "old", title: "旧会话（存档）", archived: true }
@@ -78,12 +78,13 @@ describe("associate other agents' tasks", () => {
     await act(async () => root.render(<I18nProvider language="zh-CN"><AssociateSessionsModal open collab={client} project={project} onClose={onClose} onLinked={onLinked} /></I18nProvider>));
     await expand();
 
-    // 看得到、也标着「压缩存档」，但复选框是禁用的，所以它永远进不了选择。
+    // 不再出现「压缩存档」这类拦截文案，时间与其它行一样正常显示。
     expect(document.body.textContent).toContain("旧会话（存档）");
-    expect(document.body.textContent).toContain("压缩存档");
+    expect(document.body.textContent).not.toContain("压缩存档");
     const checkbox = taskCheckbox("旧会话（存档）");
-    expect(checkbox.disabled).toBe(true);
-    expect(checkbox.checked).toBe(false);
+    expect(checkbox.disabled).toBe(false);
+    await act(async () => checkbox.click());
+    expect(checkbox.checked).toBe(true);
   });
 
   it("saves an individual exclusion without confirmation and retains the whole-group indication", async () => {

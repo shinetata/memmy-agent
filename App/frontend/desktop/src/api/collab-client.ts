@@ -104,7 +104,7 @@ const LocalAgentSessionSchema = z.object({
   group: LocalSessionGroupSchema.nullable(),
   updatedAt: z.string(),
   turnCount: z.number(),
-  /** 正文只在 Agent 的压缩存档里：列得出来，不能关联。旧后端没有这个字段。 */
+  /** 会话只留下了 Agent 的压缩存档；读取时会解压，解不开才在上传时报错。旧后端没有这个字段。 */
   archived: z.boolean().optional()
 });
 

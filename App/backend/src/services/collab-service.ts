@@ -1113,8 +1113,7 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
       ? isTaskShared(stored, session.conversationId)
       : covered.has(sessionKey(session)));
     return inScope
-      // 只存在压缩存档里的会话读不出正文：整组关联会顺带把它算进来，但它不该被上传，也不该计成失败。
-      .filter((session) => session.archived !== true)
+      // 存档里的会话也在内：上传前会按需解压读出正文（见 local-session-reader 的存档读取）。
       .sort((left, right) => (Date.parse(right.updatedAt) || 0) - (Date.parse(left.updatedAt) || 0))
       .slice(0, SESSIONS_PER_MEMBER)
       .filter((session) => {

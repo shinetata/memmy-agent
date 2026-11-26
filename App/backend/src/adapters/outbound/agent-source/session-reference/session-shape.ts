@@ -6,7 +6,7 @@
  * time for the same conversation, otherwise a session would read one way in the list and another after it is
  * uploaded. The rules therefore live here, once, and both paths finish a session through {@link finishSession}.</p>
  */
-import type { SourceAdapter } from "@memmy/agent-source-readers/adapters/types";
+import type { ConversationMessage, SourceAdapter } from "@memmy/agent-source-readers/adapters/types";
 import type { LocalSession, LocalSessionTurn } from "./local-session-reader.js";
 import { directoryName } from "./session-group.js";
 import type { SessionGrouper } from "./session-group.js";
@@ -20,6 +20,54 @@ export interface SessionBuilder {
   turns: LocalSessionTurn[];
   /** The title the agent generated; the last one seen wins, since an agent may retitle as the work changes. */
   nativeTitle: string;
+}
+
+/**
+ * 把一条消息记进它所属会话的 builder。
+ *
+ * <p>三条读路径共用这一份规则：完整扫描、只读文件两端的元数据读取、以及解压旧存档。同一份会话无论从哪条路径
+ * 读出来，问、答、工具步骤都应该一样。</p>
+ */
+export function appendMessage(builder: SessionBuilder, message: ConversationMessage): void {
+  builder.workspacePath ??= message.workspacePath;
+  if (message.createdAt > builder.updatedAt) {
+    builder.updatedAt = message.createdAt;
+  }
+  const nativeTitle = message.sessionTitle?.trim();
+  if (nativeTitle) {
+    builder.nativeTitle = nativeTitle;
+  }
+  if (message.role === "system") {
+    return;
+  }
+  if (message.role === "user") {
+    // 宿主与 Agent 自己写进用户消息的东西不算一问：打断标记、工作区说明、技能正文。
+    if (isInternalUserMessage(message.content)) return;
+    builder.turns.push({ question: stripInjectedContext(message.content), reply: "", steps: [], startedAt: message.createdAt });
+    return;
+  }
+  let turn = builder.turns.at(-1);
+  if (!turn) {
+    turn = { question: "", reply: "", steps: [], startedAt: message.createdAt };
+    builder.turns.push(turn);
+  }
+  if (message.role === "assistant") {
+    const text = message.content.trim();
+    if (text) {
+      turn.reply = turn.reply ? `${turn.reply}\n\n${text}` : text;
+    }
+    return;
+  }
+  turn.steps.push(toolName(message));
+}
+
+/** 工具步骤只存工具名：步骤内容没有增量价值，却让共享副本膨胀数倍。 */
+function toolName(message: ConversationMessage): string {
+  const fromMeta = message.rawMeta?.toolName;
+  if (typeof fromMeta === "string" && fromMeta.trim()) {
+    return fromMeta.trim();
+  }
+  return /^Tool:\s*(\S+)/u.exec(message.content)?.[1] ?? "tool";
 }
 
 /**

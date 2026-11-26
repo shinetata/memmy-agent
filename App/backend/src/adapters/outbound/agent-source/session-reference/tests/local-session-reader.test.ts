@@ -1,4 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { zstdCompressSync } from "node:zlib";
 import { createSourceRegistry } from "@memmy/agent-source-readers/adapters/source-registry";
 import type { ConversationMessage, SourceAdapter } from "@memmy/agent-source-readers/adapters/types";
 import { cleanQuestion, createLocalSessionReader, isInternalUserMessage } from "../local-session-reader.js";
@@ -185,7 +189,7 @@ describe("local session reader", () => {
       .rejects.toThrow(/At most 50/u);
   });
 
-  it("tells an archived session apart from one that is gone, without walking the store", async () => {
+  it("tells an archived session apart from one that is gone when the archive cannot be decompressed", async () => {
     const scanned: number[] = [];
     const adapter: SourceAdapter = {
       descriptor: { sourceId: "codex", displayName: "Codex", builtin: true, dataPath: "/fake/codex" },
@@ -205,15 +209,54 @@ describe("local session reader", () => {
       }
     });
 
-    // 存档：明确说清是压缩存档读不出内容，而不是「本机已找不到该任务」。
+    // 存档解不开（文件已不在）：说清是压缩存档读不出内容，而不是「本机已找不到该任务」。
     await expect(reader.read({ sourceId: "codex", conversationId: "c-old" })).rejects.toMatchObject({
       code: "toolkit_unsupported"
     });
-    // 批量读取把存档单列，其余照常读；存档不必进扫描，扫描也读不到它。
+    // 批量读取把解不开的存档单列，其余照常读；存档不必进扫描，扫描也读不到它。
     const batch = await reader.readMany({ sourceId: "codex", conversationIds: ["c-old", "c-live"] });
     expect(batch.archived).toEqual(["c-old"]);
     expect(batch.sessions.map((session) => session.conversationId)).toEqual(["c-live"]);
     expect(scanned).toEqual([100]);
+  });
+
+  it("decompresses an archived session and reads it like a plain one", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "memmy-archive-test-"));
+    try {
+      const conversationId = "c-archived";
+      const archivePath = join(directory, `rollout-2026-10-01T08-00-00-${conversationId}.jsonl.zst`);
+      await writeFile(archivePath, zstdCompressSync(Buffer.from(codexRollout(conversationId), "utf8")));
+      const adapter: SourceAdapter = {
+        descriptor: { sourceId: "codex", displayName: "Codex", builtin: true, dataPath: directory },
+        detect: async () => true,
+        // 扫描只认明文：存档里的任务永远进不了扫描结果，只能由解压路径读出来。
+        scan: async function* () {}
+      };
+      const reader = createLocalSessionReader({
+        registry: createSourceRegistry([adapter]),
+        snapshotTtlMs: 0,
+        locateSessionFile: async (sourceId, id) => sourceId === "codex" && id === conversationId
+          ? { path: archivePath, archived: true, workspacePath: "/repo" }
+          : null
+      });
+
+      const session = await reader.read({ sourceId: "codex", conversationId });
+      expect(session.title).toBe("存档里的问题");
+      expect(session.workspacePath).toBe("/repo");
+      expect(session.turns).toEqual([{
+        question: "存档里的问题",
+        reply: "存档里的回答",
+        steps: [],
+        startedAt: "2026-10-01T08:00:01.000Z"
+      }]);
+
+      // 批量读取同样能把它读出来，不再单列成「读不出内容」。
+      const batch = await reader.readMany({ sourceId: "codex", conversationIds: [conversationId] });
+      expect(batch.archived).toEqual([]);
+      expect(batch.sessions.map((item) => item.conversationId)).toEqual([conversationId]);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 
   it("strips host-injected blocks and automation ids from titles", () => {
@@ -325,4 +368,24 @@ function message(
     rawMeta,
     ...(sessionTitle ? { sessionTitle } : {})
   };
+}
+
+/** 一份最小的 Codex rollout：归档测试只需要一问一答和一个回合的完成标记。 */
+function codexRollout(conversationId: string): string {
+  const rows = [
+    { type: "session_meta", timestamp: "2026-10-01T08:00:00.000Z", payload: { id: conversationId, cwd: "/repo" } },
+    { type: "turn_context", timestamp: "2026-10-01T08:00:00.000Z", payload: { turn_id: "t-1", cwd: "/repo" } },
+    {
+      type: "response_item",
+      timestamp: "2026-10-01T08:00:01.000Z",
+      payload: { type: "message", role: "user", content: [{ type: "input_text", text: "存档里的问题" }] }
+    },
+    {
+      type: "response_item",
+      timestamp: "2026-10-01T08:00:03.000Z",
+      payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: "存档里的回答" }] }
+    },
+    { type: "event_msg", timestamp: "2026-10-01T08:00:04.000Z", payload: { type: "task_complete", turn_id: "t-1" } }
+  ];
+  return `${rows.map((row) => JSON.stringify(row)).join("\n")}\n`;
 }

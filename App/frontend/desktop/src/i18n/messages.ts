@@ -1210,9 +1210,6 @@ export const zhCNMessages = {
   "collab.pick.ungrouped.workbuddy": "临时任务",
   "collab.pick.wholeGroup": "整组关联，包含此后新增的任务",
   "collab.pick.excluded": "已排除",
-  // 正文只在 Agent 的压缩存档里（Codex 的 .jsonl.zst）：任务列出来，但关联过去也读不出内容。
-  "collab.pick.archived": "压缩存档",
-  "collab.pick.archivedHint": "这个任务已经被 Agent 压缩成存档，读不出它的内容，因此不能关联。在它自己那里重新打开之后，新产生的任务可以正常关联。",
   "collab.pick.loading": "正在读取本机任务…",
   "collab.pick.empty": "没有找到任务",
   // 新手引导里这张弹窗只做展示：不给勾选、不给保存。
@@ -4592,8 +4589,6 @@ export const enUSMessages: Record<keyof typeof zhCNMessages, string> = {
   "collab.pick.ungrouped.workbuddy": "One-off tasks",
   "collab.pick.wholeGroup": "Whole group linked, including sessions added later",
   "collab.pick.excluded": "Excluded",
-  "collab.pick.archived": "Archived",
-  "collab.pick.archivedHint": "This task has been compressed into an archive by its agent, so its content cannot be read and it cannot be associated. Tasks created after reopening it there can be associated.",
   "collab.pick.loading": "Reading sessions on this computer…",
   "collab.pick.empty": "No sessions found",
   "collab.pick.demoLocked": "Authorize to read the sessions on this computer.",

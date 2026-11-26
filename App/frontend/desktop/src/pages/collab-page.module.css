@@ -2242,26 +2242,6 @@
   padding-left: 41px;
 }
 
-/*
- * 正文只在 Agent 压缩存档里的任务：列出来让人知道它存在，但不能关联。
- * 不用删除线——那表示「被排除」，而这条不是被排除，是读不出内容。
- */
-.pickRowArchived {
-  cursor: default;
-}
-
-.pickRowArchived:hover {
-  background: transparent;
-}
-
-.pickTitleArchived {
-  color: var(--collab-ter);
-}
-
-.pickRowArchived input:disabled {
-  cursor: default;
-}
-
 .pickTitle {
   flex: 1;
   min-width: 0;

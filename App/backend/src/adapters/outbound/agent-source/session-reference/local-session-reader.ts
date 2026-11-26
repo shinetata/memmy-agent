@@ -5,11 +5,12 @@
  */
 import { statSync } from "node:fs";
 import type { SourceRegistry } from "@memmy/agent-source-readers/adapters/source-registry";
-import type { ConversationMessage, SourceAdapter } from "@memmy/agent-source-readers/adapters/types";
+import type { SourceAdapter } from "@memmy/agent-source-readers/adapters/types";
 import { rankLocalSessions } from "./local-session-rank.js";
+import { canReadArchive, readArchivedSession } from "./archived-rollout.js";
 import { readRecentSessionsFromMetadata } from "./session-metadata/index.js";
 import { createSessionGrouper, type LocalSessionGroup, type SessionGrouper } from "./session-group.js";
-import { finishSession, isInternalUserMessage, stripInjectedContext, type SessionBuilder } from "./session-shape.js";
+import { appendMessage, finishSession, type SessionBuilder } from "./session-shape.js";
 import { createStoreDigest, type StoreDigest } from "./store-digest.js";
 
 export type { LocalSessionGroup } from "./session-group.js";
@@ -60,7 +61,7 @@ export interface LocalSession {
   group: LocalSessionGroup | null;
   updatedAt: string;
   turns: LocalSessionTurn[];
-  /** 正文只存在压缩存档里：列表看得到，读不出内容，因此不能关联。 */
+  /** 会话只留下了压缩存档：列表照常列出，读正文时解压（解不开才报读不出内容）。 */
   archived?: boolean;
 }
 
@@ -75,7 +76,7 @@ export interface LocalSessionCandidate {
   group: LocalSessionGroup | null;
   updatedAt: string;
   turnCount: number;
-  /** 正文只存在压缩存档里：列得出来，但不能关联。 */
+  /** 会话只留下了压缩存档：照样列出、照样可关联，读取时由后端解压。 */
   archived?: boolean;
 }
 
@@ -116,7 +117,7 @@ export interface LocalSessionReader {
 export interface LocalSessionBatch {
   sessions: LocalSession[];
   missing: string[];
-  /** 会话被 Agent 压成了存档（Codex 的 `.jsonl.zst`）：列表里看得到，正文暂时读不出来。 */
+  /** 会话被 Agent 压成了存档（Codex 的 `.jsonl.zst`）却解不开：列表里看得到，这次读不出正文。 */
   archived: string[];
 }
 
@@ -131,13 +132,19 @@ export class LocalSessionReadError extends Error {
   }
 }
 
-/** 压缩存档读不出正文时给用户的话：说清是什么、为什么、还能做什么。 */
-export const ARCHIVED_SESSION_TEXT = "这个任务已经被 Codex 压缩成存档，暂时读不出它的内容。在 Codex 里重新打开它之后，新产生的任务可以正常关联。";
+/**
+ * 存档解不开时给用户的话：说清是什么、为什么、还能做什么。
+ *
+ * <p>正常情况下存档会被解压读出（见 {@link readArchivedSession}），只有解压或解析失败才提示这一句。</p>
+ */
+export const ARCHIVED_SESSION_TEXT = "这个任务只留下了压缩存档，这次没能解开它的内容。在 Codex 里重新打开它之后可以正常关联。";
 
-/** 一个会话的文件：路径，以及它是不是压缩存档（只有存档时读不出正文）。 */
+/** 一个会话的文件：路径，它是不是压缩存档（只有存档时读不出正文），以及索引记的目录。 */
 export interface LocatedSessionFile {
   path: string;
   archived: boolean;
+  /** 索引记的工作目录；解压读取时用它把任务放回原来的分组，否则只能落在「未记录目录」。 */
+  workspacePath?: string | null;
 }
 
 /**
@@ -192,8 +199,8 @@ export interface CreateLocalSessionReaderDeps {
   /**
    * 某个会话的会话文件，索引已知时由它给出，并说明它是不是压缩存档。
    *
-   * <p>索引（Codex 的索引库、Cursor 的库）本来就知道文件在哪，因此不必为一条会话扫一遍整份历史。压缩存档
-   * （`.jsonl.zst`）读不出正文，用它区分「读不了」与「不存在」两种失败。</p>
+   * <p>索引（Codex 的索引库、Cursor 的库）本来就知道文件在哪，因此不必为一条会话扫一遍整份历史。只剩压缩存档
+   * （`.jsonl.zst`）的会话要按这个位置解压，它也让「读不了」与「不存在」两种失败分得开。</p>
    */
   locateSessionFile?: (sourceId: string, conversationId: string) => Promise<LocatedSessionFile | null>;
 }
@@ -345,9 +352,11 @@ export function createLocalSessionReader(deps: CreateLocalSessionReaderDeps): Lo
       if (!adapter) {
         throw new LocalSessionReadError("not_found", `Unknown agent source: ${input.sourceId}`);
       }
-      // 先看索引怎么说：压缩存档读不出正文，这跟「这个任务已经没了」是两回事，要分开告诉用户。
+      // 先看索引怎么说：会话只留了压缩存档时，扫描永远读不到它，要把它解压出来单独读。
       const located = await locateOne(adapter, input.conversationId);
       if (located && stillArchived(located)) {
+        const archived = await readArchive(adapter, input.conversationId, located);
+        if (archived) return archived;
         throw new LocalSessionReadError("toolkit_unsupported", ARCHIVED_SESSION_TEXT);
       }
       const [session] = (await readSessions(adapter, [input.conversationId], sessionsPerSource)).sessions;
@@ -366,18 +375,39 @@ export function createLocalSessionReader(deps: CreateLocalSessionReaderDeps): Lo
       if (wanted.length > MAX_READ_MANY) {
         throw new LocalSessionReadError("invalid_argument", `At most ${MAX_READ_MANY} sessions per read`);
       }
-      // 索引说它是压缩存档的那些不必进扫描：扫描永远读不到它们，只会白扫一遍整份存储。
+      // 索引说是压缩存档的那些不必进扫描（扫描永远读不到它们），按需逐个解压；解不开的才单列成读不出内容。
       const archived: string[] = [];
       const readable: string[] = [];
+      const decompressed: LocalSession[] = [];
       for (const conversationId of wanted) {
         const located = await locateOne(adapter, conversationId);
-        if (located && stillArchived(located)) archived.push(conversationId);
-        else readable.push(conversationId);
+        if (!located || !stillArchived(located)) {
+          readable.push(conversationId);
+          continue;
+        }
+        const session = await readArchive(adapter, conversationId, located);
+        if (session) decompressed.push(session);
+        else archived.push(conversationId);
       }
       const outcome = await readSessions(adapter, readable, sessionsPerSource);
-      return { sessions: outcome.sessions, missing: outcome.missing, archived };
+      return { sessions: [...outcome.sessions, ...decompressed], missing: outcome.missing, archived };
     }
   };
+
+  /** 解压一份存档并读出正文；解不开时给 null，由调用方按「读不出内容」告知用户。 */
+  async function readArchive(
+    adapter: SourceAdapter,
+    conversationId: string,
+    located: LocatedSessionFile
+  ): Promise<LocalSession | null> {
+    if (!canReadArchive(adapter.descriptor.sourceId)) return null;
+    try {
+      // 索引记着目录时按它归组：压缩文件里没有扫描路径那样现成的目录信息。
+      return await readArchivedSession(adapter, createSessionGrouper(adapter), conversationId, located.path, located.workspacePath ?? null);
+    } catch {
+      return null;
+    }
+  }
 }
 
 /** How one listing reads the stores: through the metadata path, or the full scan it replaces. */
@@ -485,39 +515,6 @@ async function readSessions(
   }
 }
 
-function appendMessage(builder: SessionBuilder, message: ConversationMessage): void {
-  builder.workspacePath ??= message.workspacePath;
-  if (message.createdAt > builder.updatedAt) {
-    builder.updatedAt = message.createdAt;
-  }
-  const nativeTitle = message.sessionTitle?.trim();
-  if (nativeTitle) {
-    builder.nativeTitle = nativeTitle;
-  }
-  if (message.role === "system") {
-    return;
-  }
-  if (message.role === "user") {
-    // 宿主与 Agent 自己写进用户消息的东西不算一问：打断标记、工作区说明、技能正文。
-    if (isInternalUserMessage(message.content)) return;
-    builder.turns.push({ question: stripInjectedContext(message.content), reply: "", steps: [], startedAt: message.createdAt });
-    return;
-  }
-  let turn = builder.turns.at(-1);
-  if (!turn) {
-    turn = { question: "", reply: "", steps: [], startedAt: message.createdAt };
-    builder.turns.push(turn);
-  }
-  if (message.role === "assistant") {
-    const text = message.content.trim();
-    if (text) {
-      turn.reply = turn.reply ? `${turn.reply}\n\n${text}` : text;
-    }
-    return;
-  }
-  turn.steps.push(toolName(message));
-}
-
 function toCandidate(session: LocalSession): LocalSessionCandidate {
   return {
     sourceId: session.sourceId,
@@ -533,10 +530,3 @@ function toCandidate(session: LocalSession): LocalSessionCandidate {
   };
 }
 
-function toolName(message: ConversationMessage): string {
-  const fromMeta = message.rawMeta?.toolName;
-  if (typeof fromMeta === "string" && fromMeta.trim()) {
-    return fromMeta.trim();
-  }
-  return /^Tool:\s*(\S+)/u.exec(message.content)?.[1] ?? "tool";
-}

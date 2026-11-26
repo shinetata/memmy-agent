@@ -3877,29 +3877,27 @@ export function AssociateSessionsModal(props: {
   }
 
   function sessionRow(session: LocalAgentSession, nested: boolean) {
-    // 正文只在 Agent 的压缩存档里：列出来让人知道这个任务存在，但不能勾——关联过去也读不出内容。
-    const archived = session.archived === true;
-    const checked = !archived && isSessionChecked(links, session);
-    const excluded = !archived && !checked && Boolean(session.group && findGroupLink(links, session.sourceId, session.group.id));
+    // 存档里的任务与明文的任务一样可关联：后端在需要正文时才解压它。
+    const checked = isSessionChecked(links, session);
+    const excluded = !checked && Boolean(session.group && findGroupLink(links, session.sourceId, session.group.id));
     const summary = readableSummary(session.lastQuestion);
     return (
       <label
         key={localSessionKey(session)}
-        className={`${styles.pickRow} ${nested ? styles.pickRowNested : ""} ${archived ? styles.pickRowArchived : ""}`}
-        title={archived ? t("collab.pick.archivedHint") : summary || session.title}
+        className={`${styles.pickRow} ${nested ? styles.pickRowNested : ""}`}
+        title={summary || session.title}
       >
         <input
           type="checkbox"
           checked={checked}
-          disabled={archived}
           onChange={() => setLinks((current) => toggleSessionLink(current, session))}
         />
         {/* 已关联 Agent 的标题来自它自己的索引，索引没跟上时退回最近一句提问，不显示空行 */}
-        <span className={`${styles.pickTitle} ${archived ? styles.pickTitleArchived : excluded ? styles.pickTitleExcluded : ""}`} title={summary || session.title}>
+        <span className={`${styles.pickTitle} ${excluded ? styles.pickTitleExcluded : ""}`} title={summary || session.title}>
           {session.title || summary || t("appFrame.search.untitled")}
         </span>
         <span className={styles.meta}>
-          {archived ? t("collab.pick.archived") : excluded ? t("collab.pick.excluded") : formatSessionTime(session.updatedAt)}
+          {excluded ? t("collab.pick.excluded") : formatSessionTime(session.updatedAt)}
         </span>
       </label>
     );

@@ -160,7 +160,7 @@ export async function listCodexIndexSessions(adapter: SourceAdapter, limit: numb
         nativeTitle: named || typed
       };
       const session = finishSession(adapter, grouper, row.id, builder);
-      // 只有压缩存档的会话列出来，但标成不能关联：正文在存档里读不出来。
+      // 只有压缩存档的会话也列出来并标成存档：读正文时会按这个位置解压它。
       if (session) sessions.push(file.archived ? { ...session, archived: true } : session);
     }
     return sessions;
@@ -174,8 +174,8 @@ export async function listCodexIndexSessions(adapter: SourceAdapter, limit: numb
 /**
  * 某个会话的会话文件，以及它是不是压缩存档。
  *
- * <p>索引记的是 `.jsonl`，而 Codex 写完之后把它压成 `.jsonl.zst` 并删掉原文件。压缩的读不出正文，所以这里
- * 把「有文件、但只有存档」单独报出来，调用方才能告诉用户原因，而不是当成任务不存在。</p>
+ * <p>索引记的是 `.jsonl`，而 Codex 写完之后把它压成 `.jsonl.zst` 并删掉原文件。所以这里把「有文件、但只有
+ * 存档」单独报出来：调用方据此知道要解压哪一份，也知道解不开时该说「读不出内容」而不是「任务不存在」。</p>
  */
 export async function codexSessionFileFor(adapter: SourceAdapter, conversationId: string): Promise<LocatedSessionFile | null> {
   if (!conversationId.trim()) return null;
@@ -185,10 +185,13 @@ export async function codexSessionFileFor(adapter: SourceAdapter, conversationId
   if (!index) return null;
   try {
     if (!index.columns.has("rollout_path")) return null;
-    const row = index.database.prepare("SELECT rollout_path FROM threads WHERE id = ? LIMIT 1").get(conversationId) as
-      | { rollout_path?: unknown }
+    const hasCwd = index.columns.has("cwd");
+    const row = index.database.prepare(`SELECT rollout_path${hasCwd ? ", cwd" : ""} FROM threads WHERE id = ? LIMIT 1`).get(conversationId) as
+      | { rollout_path?: unknown; cwd?: unknown }
       | undefined;
-    return existingSessionFile(codexHome, sessionsRoot, text(row?.rollout_path));
+    const located = existingSessionFile(codexHome, sessionsRoot, text(row?.rollout_path));
+    // 目录只在解压读取时用得上：明文路径本来就带着 `session_meta` 里的 cwd。
+    return located && hasCwd ? { ...located, workspacePath: text(row?.cwd) } : located;
   } catch {
     return null;
   } finally {
