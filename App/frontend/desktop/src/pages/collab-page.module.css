@@ -860,11 +860,17 @@
  * 段头昵称也在 +48（8 内边距 + 30 头像 + 10 间距），这里用同样的 48 对齐，不加水平内边距把文字推开。
  * 悬停只改文字颜色——容器没了，底色反馈也不该再出现。
  */
+.groupFooter {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin: 2px 0 0 40px;
+}
+
 .groupMore {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  margin: 2px 0 0 40px;
   padding: 6px 0;
   border: 0;
   background: none;
@@ -875,11 +881,26 @@
   transition: color 120ms ease;
 }
 
-.groupMore:hover {
+.groupCollapse {
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 0;
+  border: 0;
+  background: none;
+  color: var(--collab-muted);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+  transition: color 120ms ease;
+}
+
+.groupMore:hover,
+.groupCollapse:hover {
   color: var(--collab-ink);
 }
 
-.groupMore:focus-visible {
+.groupMore:focus-visible,
+.groupCollapse:focus-visible {
   outline: 1.5px solid color-mix(in srgb, var(--collab-accent-deep) 55%, transparent);
   outline-offset: 2px;
 }
@@ -1765,6 +1786,37 @@
 }
 
 /*
+ * 与创建项目弹窗同一套间距：标题、正文、页脚的左右都是 24，页脚只留 20px 的底边。
+ * 正文底部压到 4px，页脚上方 16px，两者相加才是看到的 20px——只改页脚不会让标题与列表、
+ * 列表与按钮之间差出两档。
+ */
+:global(.modal).pickModal :global(.modal-header) {
+  padding: 22px 24px 16px;
+}
+
+:global(.modal-body).pickBodyWrap {
+  padding: 0 24px 4px;
+}
+
+:global(.modal-footer).pickFooter {
+  align-items: center;
+  gap: 12px;
+  padding: 16px 24px 20px;
+}
+
+/*
+ * 页脚按钮与创建项目弹窗同一套尺寸：默认的 `.button` 字重 750、ghost 又没有框，
+ * 在这一行里比正文重得多。统一成 36px 高、14px、400 字重，与弹窗里的字是一套。
+ */
+:global(.button).pickFooterButton {
+  min-height: 36px;
+  padding: 0 16px;
+  border-radius: var(--radius-btn, 8px);
+  font-size: 14px;
+  font-weight: 400;
+}
+
+/*
  * 新手引导里的展示模式：弹窗给左侧的说明卡让位。
  *
  * 卡片宽 340、间距加上边距约占 360：窗口放宽一点时弹窗保持 600，窗口收窄时二者一起收，
@@ -1900,8 +1952,12 @@
 /* 选中的会话超过云端额度时的提示：用次级文字色，不当成警告刷屏 */
 .pickLimit {
   color: var(--collab-ter, #8a9a96);
-  font-size: 12.5px;
+  font-size: 13px;
   line-height: 1.5;
+  /* 一行说完：文案短，弹窗变窄时宁可截断也不挤成两行，把按钮顶下去。 */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* 云端不可用的提示：项目在本机，不影响本地看板的使用 */

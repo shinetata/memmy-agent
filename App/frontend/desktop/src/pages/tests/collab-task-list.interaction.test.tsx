@@ -248,24 +248,39 @@ describe("collab task list", () => {
     expect(groupHead("林晓").textContent).toContain("2 个任务");
   });
 
-  it("shows five rows per member and expands the rest in place", async () => {
-    const many = Array.from({ length: 8 }, (_, index) => ({
+  it("shows five rows per member and reveals ten more per click", async () => {
+    const many = Array.from({ length: 20 }, (_, index) => ({
       ...SESSIONS[0]!,
       id: `mine-${index}`,
       title: `我的任务 ${index + 1}`,
-      lastActiveAt: daysBack(0, 9 + index, 0)
+      lastActiveAt: daysBack(0, 9 + (index % 10), index)
     }));
     mocks.listSessions.mockResolvedValue({ project: CLOUD_PROJECT, sessions: many, total: many.length });
     await renderBoard();
 
     expect(container.querySelectorAll("li")).toHaveLength(5);
-    expect(document.body.textContent).toContain("展开其余 3 个");
+    expect(document.body.textContent).toContain("展开其余 15 个");
+    // 没展开时不摆收起：现大就看得到全部吗，不需要一颗按钮。
+    expect([...document.querySelectorAll("button")].filter((node) => node.textContent?.trim() === "收起")).toHaveLength(0);
 
-    const more = [...document.querySelectorAll<HTMLButtonElement>("button")]
+    const more = (): HTMLButtonElement => [...document.querySelectorAll<HTMLButtonElement>("button")]
       .find((node) => node.textContent?.trim().startsWith("展开其余"))!;
-    await act(async () => more.click());
-    expect(container.querySelectorAll("li")).toHaveLength(8);
-    expect(document.body.textContent).toContain("收起");
+    await act(async () => more().click());
+    // 一次只多十条：五条变十五条，剩下的按条数重算。
+    expect(container.querySelectorAll("li")).toHaveLength(15);
+    expect(document.body.textContent).toContain("展开其余 5 个");
+
+    await act(async () => more().click());
+    expect(container.querySelectorAll("li")).toHaveLength(20);
+    // 展到底就没有可展开的了，右边的收起还在。
+    expect(document.body.textContent).not.toContain("展开其余");
+
+    const collapse = [...document.querySelectorAll<HTMLButtonElement>("button")]
+      .find((node) => node.textContent?.trim() === "收起")!;
+    await act(async () => collapse.click());
+    // 收起就是回到只看最近五条。
+    expect(container.querySelectorAll("li")).toHaveLength(5);
+    expect(document.body.textContent).toContain("展开其余 15 个");
   });
 
   it("collapses a whole section to its head and back", async () => {

@@ -132,15 +132,28 @@ const ProjectsResponseSchema = z.object({
   decisions: z.array(DecisionSchema).optional(),
   /** 每个账号可创建的在线项目数上限；旧后端不返回，桌面端就不提前提示额度。 */
   maxOwnedProjects: z.number().optional(),
+  /**
+   * 每名成员在一个项目内可共享的会话数；与 `maxOwnedProjects` 一样由云端一处下发，旧后端不返回。
+   */
+  sessionsPerMember: z.number().optional(),
   /** 云端判断「这个人可以体验一次新手引导」；旧后端不返回，桌面端按不能体验处理。 */
   demoEligible: z.boolean().optional()
 });
 const CreateProjectResponseSchema = z.object({ project: ProjectSchema, localDirectory: z.string().optional() });
+/**
+ * 会话额度的缺省值，与云端 `CollabLimits.DEFAULT_MAX_SESSIONS_PER_MEMBER` 一致。
+ * 只用于旧后端不返回额度时的兜底；实际值由云端随列表下发，页面不要再写一个数字。
+ */
+export const DEFAULT_SESSIONS_PER_MEMBER = 100;
 const ProjectSessionsResponseSchema = z.object({
   project: ProjectSchema,
   sessions: z.array(ProjectSessionSchema),
   /** Every session matching the query, which may be more than this page. */
-  total: z.number().optional()
+  total: z.number().optional(),
+  /**
+   * 可运营调整的额度，随列表一起下发。旧后端不返回时按缺省值处理，不能因此读不出整个列表。
+   */
+  limits: z.object({ sessionsPerMember: z.number().optional() }).optional()
 });
 /**
  * 一轮的工具步骤只有工具名。开发期间有一版把步骤存成对象（工具名 + 入参与输出摘要），测试环境里还留着
@@ -325,6 +338,11 @@ export interface CollabSessionPage {
   project: CollabProject;
   sessions: CollabProjectSession[];
   total: number;
+  /**
+   * 每名成员在一个项目内可共享的会话数，由云端随列表下发（`collab.limits.sessions-per-member`）。
+   * 旧后端不返回时用 {@link DEFAULT_SESSIONS_PER_MEMBER}，不要在页面里另写一个数字。
+   */
+  sessionsPerMember: number;
 }
 export type CollabSyncProgress = z.infer<typeof SyncProgressSchema>;
 /** A Memmy session of this project's local folder, and whether the project includes it. */
@@ -974,8 +992,13 @@ export function createHttpCollabClient(config: RuntimeConfig): CollabClient {
         path: `/api/collab/projects/${encodeURIComponent(projectId)}/sessions${suffix ? `?${suffix}` : ""}`,
         schema: ProjectSessionsResponseSchema
       });
+      const { limits, ...page } = result;
       // A backend that predates paging sends every session and no total; treat that as one full page.
-      return { ...result, total: result.total ?? result.sessions.length };
+      return {
+        ...page,
+        total: result.total ?? result.sessions.length,
+        sessionsPerMember: limits?.sessionsPerMember ?? DEFAULT_SESSIONS_PER_MEMBER
+      };
     },
 
     async readSessionDetail(sessionId) {

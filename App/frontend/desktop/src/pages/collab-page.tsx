@@ -3,6 +3,7 @@ import { memo, useCallback, useDeferredValue, useEffect, useId, useLayoutEffect,
 import { createPortal } from "react-dom";
 import {
   createHttpCollabClient,
+  DEFAULT_SESSIONS_PER_MEMBER,
   type AddedAgent,
   type AssistThread,
   type CollabAgentAccessView,
@@ -95,10 +96,12 @@ export { memberColor };
 /** 一次性提示（如共享范围已保存）停留时长：文案短，留够看清的时间。 */
 const TOAST_MS = 3_000;
 /**
- * 每位成员这一段先显示几条。一个人在一个项目内最多保留 20 个任务（`SESSIONS_PER_MEMBER_LIMIT`），
- * 五条是四分之一：最多展开三次就到底；六个人各五条也仍在三屏之内，打开就能看清谁在做什么。
+ * 每位成员这一段先显示几条。一个人在一个项目内最多保留云端下发的任务数（缺省 100），
+ * 五条只是一个开头：先看清谁在做什么，需要时再展开整段。
  */
 const MEMBER_GROUP_ROWS = 5;
+/** 点一次「展开其余 N 个」再多显示几条。十条一段：展开两三次就能看完常见的一段，一屏也不至于跳得太远。 */
+const MEMBER_GROUP_STEP = 10;
 /**
  * 阅读面板首屏同步渲染的轮次数；之后的轮次先占位，滚到附近再展开。
  * 与聊天页的即时渲染条数同一考虑：面板高度内的那几轮必须马上有内容。
@@ -121,11 +124,6 @@ const PROGRESS_POLL_MS = 1_200;
 const BOARD_POLL_MS = 5_000;
 const MAX_PROJECT_NAME_CHARS = 20;
 const MAX_LOCAL_SESSIONS = 500;
-/**
- * 云端每名成员在每个项目内保留的任务数（`CollabLimits.MAX_SESSIONS_PER_MEMBER`），
- * 新建的 Memmy 任务与关联的 Agent 任务共用。超出后按最近交互自动替换。
- */
-const SESSIONS_PER_MEMBER_LIMIT = 20;
 const EMPTY_LINKS: CollabLinks = { groups: [], sessions: [] };
 /** 还没有设定指令时的空值，看板与弹窗共用。 */
 const EMPTY_PROJECT_INSTRUCTIONS: ProjectInstructions = {
@@ -568,10 +566,15 @@ const CollabBoard = memo(function CollabBoard(props: {
   const demoInvitePending = useSyncExternalStore(subscribeDemoGuideInvite, demoGuideInvitePending, demoGuideInvitePending);
   const [page, setPage] = useState<CollabSessionPage | null>(null);
   /**
-   * 每段是否已展到全部；默认只显示 `MEMBER_GROUP_ROWS` 条。
+   * 每名成员在一个项目内可共享的任务数，由云端随列表下发（`collab.limits.sessions-per-member`，缺省 100）。
+   * 页面不写死数字：Nacos 调整额度后，勾选提示与上传截断立即跟着变；旧后端不返回时用缺省值。
+   */
+  const sessionsPerMember = page?.sessionsPerMember ?? DEFAULT_SESSIONS_PER_MEMBER;
+  /**
+   * 每段在默认 {@link MEMBER_GROUP_ROWS} 条之上又多显示了几条，按次加 {@link MEMBER_GROUP_STEP} 条。
    * `collapsedGroups` 是整段收起，只留段头。两者都按段键记，换项目时清空。
    */
-  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+  const [revealedRows, setRevealedRows] = useState<Map<string, number>>(new Map());
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
   /**
    * 段落的先后：本人永远第一，其余按首次出现时的顺序。
@@ -1474,15 +1477,17 @@ const CollabBoard = memo(function CollabBoard(props: {
   }
 
   /**
-   * 一个成员一段：段头写名字与数量，可整段收起，滚动时吸顶；
-   * 段内默认 `MEMBER_GROUP_ROWS` 条，多出来的就地展开。
+   * 一个成员一段：段头写名字与数量，可整段收起，滚动时吸顶。
+   * 段内默认 `MEMBER_GROUP_ROWS` 条，点一次再多十；右侧的「收起」回到只看最近五条。
    * 搜索时不看折叠状态：命中被折叠住，搜索就等于没结果。
    */
   function renderMemberGroup(group: MemberGroup) {
     const collapsed = !query && collapsedGroups.has(group.key);
-    const expanded = query ? true : expandedGroups.has(group.key);
-    const shown = expanded ? group.sessions : group.sessions.slice(0, MEMBER_GROUP_ROWS);
+    // 多显示了几条；搜索时整段摊开，不受这里的克制。
+    const extra = query ? Number.MAX_SAFE_INTEGER : (revealedRows.get(group.key) ?? 0);
+    const shown = group.sessions.slice(0, MEMBER_GROUP_ROWS + extra);
     const rest = group.sessions.length - shown.length;
+    const expanded = !query && extra > 0;
     const name = group.name || t("collab.session.you");
     // 邀请进来还没共享任务的人照样占一段：段头写「暂无任务」，不用「0 个任务」那种计较的说法。
     const noTasks = group.sessions.length === 0;
@@ -1575,17 +1580,29 @@ const CollabBoard = memo(function CollabBoard(props: {
         {collapsed || noTasks ? null : (
           <>
             <ul className={`${styles.list} ${styles.stream}`}>{shown.map(renderSessionRow)}</ul>
-            {rest > 0 || (expanded && group.sessions.length > MEMBER_GROUP_ROWS) ? (
-              <button
-                type="button"
-                className={styles.groupMore}
-                aria-expanded={expanded}
-                onClick={() => toggleGroupExpanded(group.key)}
-              >
-                {rest > 0
-                  ? t("collab.sessions.groupMore", { count: String(rest) })
-                  : t("collab.sessions.groupLess")}
-              </button>
+            {rest > 0 || expanded ? (
+              <div className={styles.groupFooter}>
+                {/* 左边是「还能展开多少」：按一次多十条，剩几条就写几条；展到底就只剩右边的收起。 */}
+                {rest > 0 ? (
+                  <button
+                    type="button"
+                    className={styles.groupMore}
+                    onClick={() => revealMoreRows(group.key)}
+                  >
+                    {t("collab.sessions.groupMore", { count: String(rest) })}
+                  </button>
+                ) : null}
+                {/* 展开过才给收起：收起就是回到只看最近五条。 */}
+                {expanded ? (
+                  <button
+                    type="button"
+                    className={styles.groupCollapse}
+                    onClick={() => collapseRows(group.key)}
+                  >
+                    {t("collab.sessions.groupLess")}
+                  </button>
+                ) : null}
+              </div>
             ) : null}
           </>
         )}
@@ -1683,12 +1700,21 @@ const CollabBoard = memo(function CollabBoard(props: {
     setSelected(new Set());
   }, [query, selecting]);
 
-  /** 展开某一段的其余任务；再点收起。 */
-  function toggleGroupExpanded(key: string) {
-    setExpandedGroups((current) => {
-      const next = new Set(current);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
+  /** 再展开一段的其余任务：按一次多十条，展到底就不再加了。 */
+  function revealMoreRows(key: string) {
+    setRevealedRows((current) => {
+      const next = new Map(current);
+      next.set(key, (next.get(key) ?? 0) + MEMBER_GROUP_STEP);
+      return next;
+    });
+  }
+
+  /** 段内收起：回到只看最近五条，与刚打开项目时一样。 */
+  function collapseRows(key: string) {
+    setRevealedRows((current) => {
+      if (!current.has(key)) return current;
+      const next = new Map(current);
+      next.delete(key);
       return next;
     });
   }
@@ -1943,8 +1969,8 @@ const CollabBoard = memo(function CollabBoard(props: {
 
                       {/* 同步进度是关于任务的，成员提示也在这一页上 */}
                       {progress?.running ? (() => {
-                        // 云端每人每项目只留最近 20 个，进度也按这个额度显示，不报会超出上限的条数。
-                        const cappedTotal = Math.min(progress.total, SESSIONS_PER_MEMBER_LIMIT);
+                        // 进度按云端额度显示，不报会超出上限的条数。
+                        const cappedTotal = Math.min(progress.total, sessionsPerMember);
                         const cappedDone = Math.min(progress.completed, cappedTotal);
                         // 超出额度的那几条还在上传：进度已满，用缓慢呼吸说明后台仍在处理。
                         const pending = progress.total > cappedTotal && progress.completed >= cappedTotal;
@@ -2191,6 +2217,7 @@ const CollabBoard = memo(function CollabBoard(props: {
           open={pickOpen}
           collab={collab}
           project={shared}
+          sessionsPerMember={sessionsPerMember}
           // 未授权时只给授权说明：弹窗自己不会去列本机其他 Agent 的任务。
           accessGranted={agentAccess?.granted ?? true}
           accessAgents={agentAccess?.agents}
@@ -2205,9 +2232,9 @@ const CollabBoard = memo(function CollabBoard(props: {
             if (result.started) {
               setProgress({ running: true, total: result.started, completed: 0, failed: 0 });
               setPollKey((key) => key + 1);
-              // 超出云端额度时不报真实条数：最终只会保留最近的 20 个，报数量会让人以为都留下了。
-              showToast(result.started > SESSIONS_PER_MEMBER_LIMIT
-                ? t("collab.pick.queuedCapped", { limit: String(SESSIONS_PER_MEMBER_LIMIT) })
+              // 超出云端额度时不报真实条数：最终只会保留最近的若干条，报数量会让人以为都留下了。
+              showToast(result.started > sessionsPerMember
+                ? t("collab.pick.queuedCapped", { limit: String(sessionsPerMember) })
                 : t("collab.pick.queued", { count: String(result.started) }));
             } else {
               showToast(t("collab.pick.done"));
@@ -3684,6 +3711,8 @@ export function AssociateSessionsModal(props: {
   open: boolean;
   collab: CollabClient;
   project: CollabProject;
+  /** 每名成员可共享的任务数，由云端下发；未传时用缺省值，测试与旧调用方不必逐个传。 */
+  sessionsPerMember?: number;
   onClose: () => void;
   onLinked: (result: CollabSyncResult) => void | Promise<void>;
   /** 「在其他 Agent 中使用协作项目」是否已授权；未授权时弹窗只给授权说明，不读本机记录。 */
@@ -3718,6 +3747,8 @@ export function AssociateSessionsModal(props: {
   /** 已添加的 Agent：只用于添加弹窗里的清单，用户添加的 Agent 不进左侧列表。 */
   const [addedAgents, setAddedAgents] = useState<AddedAgent[]>([]);
   const { collab, open, project } = props;
+  /** 勾选超过这个数就提示并只保留最近交互的那几条；缺省值与云端一致。 */
+  const sessionsPerMember = props.sessionsPerMember ?? DEFAULT_SESSIONS_PER_MEMBER;
   /** 「在其他 Agent 中使用协作项目」是否已授权：未传按已授权处理，只有涉及授权的页面会传它。 */
   const accessGranted = props.accessGranted ?? true;
   /** 展示模式：只扫不选，互动全部收起。 */
@@ -3839,7 +3870,7 @@ export function AssociateSessionsModal(props: {
   );
   // 每次渲染都把两份勾选树串成 JSON 再排序很浪费：两者都不变时沿用上一次的结果。
   const changed = useMemo(() => !linksEqual(links, saved), [links, saved]);
-  /** 当前勾选会关联的任务数，用于在提交前提示云端只保留最近 20 个。 */
+  /** 当前勾选会关联的任务数，用于在提交前提示云端只保留最近 {sessionsPerMember} 个。 */
   const selectedCount = useMemo(
     () => (sessions ?? []).filter((session) => isSessionChecked(links, session)).length,
     [sessions, links]
@@ -3969,24 +4000,29 @@ export function AssociateSessionsModal(props: {
       // 展示模式把弹窗收窄一点：说明卡才贴得到它左边，不压住刚扫出来的会话列表。
       className={demoGuide ? `${styles.pickModal} ${styles.pickModalDemo}` : styles.pickModal}
       backdropClassName={demoGuide ? `${styles.backdrop} ${styles.backdropYield}` : styles.backdrop}
+      bodyClassName={styles.pickBodyWrap}
+      footerClassName={styles.pickFooter}
       demoGuideAnchor={demoGuide ? "associate-pick" : undefined}
       // 展示模式没有底部：不给按钮，也不留任何说明文字，状态由左边的引导卡片说。
       footer={demoGuide ? undefined : (
         <>
-          {error ? <span className={styles.error} role="alert">{error}</span> : selectedCount > SESSIONS_PER_MEMBER_LIMIT ? (
+          {error ? <span className={styles.error} role="alert">{error}</span> : selectedCount > sessionsPerMember ? (
             <span className={styles.pickLimit} role="status">
-              {t("collab.pick.limitHint", { limit: String(SESSIONS_PER_MEMBER_LIMIT) })}
+              {t("collab.pick.limitHint", { limit: String(sessionsPerMember) })}
             </span>
           ) : <span />}
           <span className={styles.footerButtons}>
-            <Button variant="ghost" disabled={busy} onClick={props.onClose}>{t("collab.cancel")}</Button>
+            {/* 取消带框线：与创建项目弹窗的同一个位置同一个样子，不与正文混在一起。 */}
+            <Button variant="secondary" className={styles.pickFooterButton} disabled={busy} onClick={props.onClose}>
+              {t("collab.cancel")}
+            </Button>
             {/* 未授权时没有可保存的选择：这一支的按钮是「授权并继续」，点完正文换成任务列表。 */}
             {accessGranted ? (
-              <Button variant="primary" disabled={!changed || busy} onClick={requestSave}>
+              <Button variant="primary" className={styles.pickFooterButton} disabled={!changed || busy} onClick={requestSave}>
                 {busy ? t("collab.pick.saving") : t("collab.pick.save")}
               </Button>
             ) : (
-              <Button variant="primary" disabled={granting} onClick={() => void grantAccess()}>
+              <Button variant="primary" className={styles.pickFooterButton} disabled={granting} onClick={() => void grantAccess()}>
                 {granting ? t("collab.access.installing") : t("collab.pick.gateGrant")}
               </Button>
             )}
