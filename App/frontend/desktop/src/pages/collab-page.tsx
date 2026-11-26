@@ -1,4 +1,4 @@
-import { ArrowUpRight, BookOpen, ChevronDown, ChevronRight, Folder, Layers, LifeBuoy, Link2, Loader2, ListChecks, MoreHorizontal, PanelRight, PanelRightClose, Plug, Plus, RefreshCw, Search, Settings, Trash2, UserPlus, Users, X } from "lucide-react";
+import { ArrowUpRight, BookOpen, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Folder, Layers, LifeBuoy, Link2, Loader2, ListChecks, MoreHorizontal, PanelRight, PanelRightClose, Plug, Plus, Search, Settings, Trash2, UserPlus, Users, X } from "lucide-react";
 import { memo, useCallback, useDeferredValue, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import {
@@ -639,7 +639,6 @@ const CollabBoard = memo(function CollabBoard(props: {
   const [progress, setProgress] = useState<CollabSyncProgress | null>(null);
   /** Bumped when an association is queued, so polling starts without waiting for a filter or page change. */
   const [pollKey, setPollKey] = useState(0);
-  const [refreshing, setRefreshing] = useState(false);
   /** Projects whose tasks were already uploaded for this opening, so filters do not re-upload them. */
   const syncedProjectRef = useRef<Set<string>>(new Set());
   const [toast, setToast] = useState<string | null>(null);
@@ -1095,16 +1094,6 @@ const CollabBoard = memo(function CollabBoard(props: {
     }
   }, [collab, sharedId]);
 
-  const refreshBoard = useCallback(async () => {
-    if (!sharedId || refreshing) return;
-    setRefreshing(true);
-    try {
-      await refreshSessions(sharedId);
-    } finally {
-      setRefreshing(false);
-    }
-  }, [refreshSessions, refreshing, sharedId]);
-
   // 协助与任务一样随看板轮询：窗口在后台时跳过，切回来立刻补一次。
   useEffect(() => {
     setAssistThreads(NO_ASSIST_THREADS);
@@ -1290,6 +1279,22 @@ const CollabBoard = memo(function CollabBoard(props: {
     }
     return ranked.sort((left, right) => (order.get(left.key) ?? 0) - (order.get(right.key) ?? 0));
   }, [boardMembers, project?.id, query, sessions, sharedId]);
+
+  /** 看板上是否有任何一段带着任务：一段都没有时工具条不必摆收起入口。 */
+  const groupsWithTasks = useMemo(() => memberGroups.some((group) => group.sessions.length > 0), [memberGroups]);
+  /**
+   * 工具条上的「折叠全部／展开全部」：还能收起的段（有任务、当前展开着）。
+   * 搜索时不看折叠状态（见 renderMemberGroup），所以带着搜索词就没有可收起的段。
+   */
+  const openGroupKeys = useMemo(
+    () => (query
+      ? []
+      : memberGroups.filter((group) => group.sessions.length > 0 && !collapsedGroups.has(group.key)).map((group) => group.key)),
+    [collapsedGroups, memberGroups, query]
+  );
+  /** 有任务的段全部收着：这时同一颗按钮换成「展开全部」，不然它按下去没有任何效果。 */
+  const allGroupsCollapsed = groupsWithTasks && openGroupKeys.length === 0;
+  const groupToggleLabel = allGroupsCollapsed ? t("collab.sessions.expandAll") : t("collab.sessions.collapseAll");
 
   /**
    * 一条任务都没有时，看板要不要铺成员分段：项目里还有别人就铺——这一屏回答的是「这里都有谁、能找谁协助」，
@@ -1696,6 +1701,24 @@ const CollabBoard = memo(function CollabBoard(props: {
   }
 
   /**
+   * 工具条上的一键收起：还在展开的段全部收起；已经全收着时再按一次放回来。
+   * 只动有任务的段，没任务的段本来就没东西可收。
+   */
+  function toggleAllGroupsCollapsed() {
+    setCollapsedGroups((current) => {
+      const next = new Set(current);
+      if (openGroupKeys.length) {
+        for (const key of openGroupKeys) next.add(key);
+        return next;
+      }
+      for (const group of memberGroups) {
+        if (group.sessions.length) next.delete(group.key);
+      }
+      return next;
+    });
+  }
+
+  /**
    * 看板只有一张表：任务。tab 行随「协助」一起撤掉，只剩一项的 tab 没有意义。
    */
 
@@ -1859,31 +1882,41 @@ const CollabBoard = memo(function CollabBoard(props: {
                           </span>
                         ) : (
                           <>
-                            <Button
-                              size="sm"
-                              variant="ghost"
-                              className={styles.iconAction}
-                              aria-label={t("collab.sessions.refresh")}
-                              title={t("collab.sessions.refresh")}
-                              disabled={refreshing}
-                              onClick={() => void refreshBoard()}
-                            >
-                              <RefreshCw size={14} aria-hidden="true" />
-                              <span className={styles.actionLabel}>{t("collab.sessions.refresh")}</span>
-                            </Button>
-                            {/* 多选只对能删的生效：本人的任务；一条都没有时不显示入口 */}
-                            {selectableIds.length ? (
-                              <Button
-                                size="sm"
-                                variant="ghost"
-                                className={styles.iconAction}
-                                aria-label={t("collab.sessions.select")}
-                                title={t("collab.sessions.select")}
-                                onClick={() => setSelecting(true)}
-                              >
-                                <ListChecks size={14} aria-hidden="true" />
-                                <span className={styles.actionLabel}>{t("collab.sessions.select")}</span>
-                              </Button>
+                            {/* 两枚文字动作挨在一起排：ghost 没有底色，按钮自己的内边距就是看得见的空白（见 .toolbarUtilities） */}
+                            {(!query && groupsWithTasks) || selectableIds.length ? (
+                              <span className={styles.toolbarUtilities}>
+                                {/* 一键收起或放回全部成员会话：任务多的时候先看段头，不用逐段去收 */}
+                                {query || !groupsWithTasks ? null : (
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    className={`${styles.iconAction} ${styles.toolbarUtility}`}
+                                    aria-label={groupToggleLabel}
+                                    title={groupToggleLabel}
+                                    data-collab-groups-toggle=""
+                                    onClick={toggleAllGroupsCollapsed}
+                                  >
+                                    {allGroupsCollapsed
+                                      ? <ChevronsUpDown size={14} aria-hidden="true" />
+                                      : <ChevronsDownUp size={14} aria-hidden="true" />}
+                                    <span className={styles.actionLabel}>{groupToggleLabel}</span>
+                                  </Button>
+                                )}
+                                {/* 多选只对能删的生效：本人的任务；一条都没有时不显示入口 */}
+                                {selectableIds.length ? (
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    className={`${styles.iconAction} ${styles.toolbarUtility}`}
+                                    aria-label={t("collab.sessions.select")}
+                                    title={t("collab.sessions.select")}
+                                    onClick={() => setSelecting(true)}
+                                  >
+                                    <ListChecks size={14} aria-hidden="true" />
+                                    <span className={styles.actionLabel}>{t("collab.sessions.select")}</span>
+                                  </Button>
+                                ) : null}
+                              </span>
                             ) : null}
                             <Button
                               size="sm"

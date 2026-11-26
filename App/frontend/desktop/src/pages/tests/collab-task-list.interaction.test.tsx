@@ -282,6 +282,35 @@ describe("collab task list", () => {
     expect(titlesIn("陈墨")).toHaveLength(1);
   });
 
+  it("collapses every open section at once and brings them all back", async () => {
+    await renderBoard();
+    const toggle = (): HTMLButtonElement => document.querySelector<HTMLButtonElement>("[data-collab-groups-toggle]")!;
+    expect(toggle().getAttribute("aria-label")).toBe("全部折叠");
+    expect(container.querySelectorAll("li")).toHaveLength(3);
+
+    await act(async () => toggle().click());
+    // 两段都收成段头：列表里一条任务都不剩，段头还在。
+    expect(container.querySelectorAll("li")).toHaveLength(0);
+    expect(groupHead("林晓").getAttribute("aria-expanded")).toBe("false");
+    expect(groupHead("陈墨").getAttribute("aria-expanded")).toBe("false");
+    // 全收着时同一颗按钮换成「全部展开」，按下去把每段放回来。
+    expect(toggle().getAttribute("aria-label")).toBe("全部展开");
+
+    await act(async () => toggle().click());
+    expect(container.querySelectorAll("li")).toHaveLength(3);
+    expect(toggle().getAttribute("aria-label")).toBe("全部折叠");
+  });
+
+  it("hides the collapse-all action while searching, because search ignores the collapse state", async () => {
+    await renderBoard();
+    expect(document.querySelector("[data-collab-groups-toggle]")).not.toBeNull();
+
+    mocks.listSessions.mockResolvedValue({ project: CLOUD_PROJECT, sessions: [SESSIONS[0]!], total: 1 });
+    await typeSearch("视觉");
+    await flush();
+    expect(document.querySelector("[data-collab-groups-toggle]")).toBeNull();
+  });
+
   it("keeps a section for a member who has joined but has no tasks yet", async () => {
     // 云端列出了三位成员，只有两人有任务：没有任务的许知也要占一段，否则看板看不出项目里有她。
     mocks.listMembers.mockResolvedValue({

@@ -65,22 +65,23 @@
 
 /*
  * 头部操作（邀请 / 收起配置 / 项目设置）：按钮自己要够大才点得中。
- * 逐个按钮给 40px 高的热区，图标按钮做成 40×40 的正方形。
- * 视觉上按钮之间留 4px 间距，热区再把这条缝铺满：鼠标从「邀请」移到设置时不会落进缝里丢掉悬停。
+ * 逐个按钮给 40px 高的热区，图标按钮做成 34×40 的竖条：40 宽的方块会在图标两侧各留 12px 空白，
+ * 与旁边「邀请」的字之间就空出近 30px，比工具条上按钮之间宽出一截。收窄到 34 之后两侧各 9px。
+ * 视觉上按钮之间只留 2px，热区再把这条缝铺满：鼠标从「邀请」移到设置时不会落进缝里丢掉悬停。
  * ghost 的默认悬停底色几乎看不出来，这里换成薄荷浅底 + 强调色文字，扫过就能看出是可点的。
  */
 .boardActions {
   display: inline-flex;
   flex: none;
   align-items: center;
-  gap: 4px;
+  gap: 2px;
 }
 
 :global(.button).boardAction {
   position: relative;
   min-height: 40px;
   gap: 7px;
-  padding: 0 12px;
+  padding: 0 10px;
   color: var(--collab-ink-2);
   font-size: 13px;
   font-weight: 650;
@@ -88,22 +89,22 @@
 
 :global(.button).boardIconAction {
   position: relative;
-  width: 40px;
-  min-width: 40px;
+  width: 34px;
+  min-width: 34px;
   padding: 0;
   color: var(--collab-muted);
 }
 
 /*
- * 把两枚按钮之间那 4px 缝隙也变成热区：外扩的基准是**内边距盒**，不是看得见的外边，
- * 中间还隔着 1px 透明边框，所以横向写 -3px 才等于「越过边框再往外 2px」，两枚按钮各盖住缝的一半，
- * 正好接上、不留空也不越过对方的薄荷块。（写 -2px 会漏掉中间 2px，那 2px 悬停和点击都没有反应。）
+ * 把两枚按钮之间那 2px 缝隙也变成热区：外扩的基准是**内边距盒**，不是看得见的外边，
+ * 中间还隔着 1px 透明边框，所以横向写 -1px 才等于「越过边框往外 0px」，两枚按钮各盖住缝的一半，
+ * 正好接上、不留空也不越过对方的薄荷块。（写 -2px 会互相盖住，缝里那一条点到的就不是左边那枚了。）
  * 纵向那一 1px 同理：写 -1px 把上下透明边框也包进来，否则缝里最上面最下面各剩 1px 点不到。
  */
 :global(.button).boardAction::before {
   content: "";
   position: absolute;
-  inset: -1px -3px;
+  inset: -1px -1px;
   /* 只当热区：不画东西；命中时目标仍是按钮本身，所以悬停样式和点击行为都不变。 */
   background: transparent;
 }
@@ -1238,6 +1239,22 @@
 
 .iconAction {
   gap: 4px;
+}
+
+/*
+ * 工具条上的两枚文字动作（全部折叠、多选）放在一起：ghost 按钮没有底色，按钮自己的左右内边距会变成看得见的空白。
+ * 两枚之间若按按钮盒来排，字与图标中间要空 30px，比右边两枚薄荷块之间的 8px 远出一截。
+ * 所以这里把内边距收到 4px、彼此不留间隔：字与图标之间 10px（含两侧各 1px 透明边框），读起来与右边那一对一样紧。
+ */
+.toolbarUtilities {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 0;
+}
+
+:global(.button).toolbarUtility {
+  padding: 7px 4px;
 }
 
 .searchGo {
@@ -3348,7 +3365,7 @@
     min-width: min(120px, 100%);
   }
 
-  /* 刷新、多选让出文字，筛选、搜索和关联任务留着。 */
+  /* 折叠与多选让出文字，筛选、搜索和关联任务留着。 */
   .actionLabel {
     display: none;
   }
