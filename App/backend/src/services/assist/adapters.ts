@@ -57,13 +57,17 @@ export const ASSIST_ADAPTERS: readonly AssistAdapter[] = [
   {
     sourceId: "codex",
     name: "Codex",
-    package: "@agentclientprotocol/codex-acp@^2.7.0",
+    package: "@agentclientprotocol/codex-acp@^2.12.0",
     packageName: "@agentclientprotocol/codex-acp",
     bin: "codex-acp",
     entry: "dist/index.js",
-    // 适配器自己的代码只有几 MB；`@openai/codex`（引擎，Windows 包解开 515 MB）由本机已装的
-    // Codex 提供，执行时用 CODEX_PATH 指回去，不再下载。
-    packages: [{ name: "@agentclientprotocol/codex-acp", version: "2.7.0" }],
+    // 适配器自己的代码只有几 MB；`@openai/codex`（引擎，Windows 包解开 450～523 MB）由本机已有的
+    // 那一份提供，执行时用 CODEX_PATH 指回去，不再下载。本机这一份可以是 CLI，
+    // 也可以是 ChatGPT 桌面版自带的引擎（见 ./executables 的 desktopBundledEngine）。
+    //
+    // 版本对齐 2.12.0：它声明的引擎依赖是 `@openai/codex@^0.171.0`，与桌面版实测到的
+    // 0.171.0 app-server 协议同一条线；2.7.0 是按 0.166 写的，握手能过但后续方法可能对不上。
+    packages: [{ name: "@agentclientprotocol/codex-acp", version: "2.12.0" }],
     enginePackages: ["@openai/codex"]
   },
   {
@@ -270,7 +274,10 @@ async function runInstall(
       await installPackages({
         root: directory,
         packages: adapter.packages,
-        skip: adapter.enginePackages,
+        // 引擎只在「本机确实有一份」时才跳过：没装 Codex CLI、只用 ChatGPT 桌面版的用户，
+        // 靠桌面版里那份引擎已经能跑（见 ./executables 的 desktopBundledEngine）；
+        // 两处都没有的人不能就此后退到「这台电脑没有 npm」，改成把引擎也装上。
+        skip: enginePackagesPresent(adapter, env),
         signal: AbortSignal.timeout(INSTALL_TIMEOUT_MS),
         ...(options.fetch ? { fetch: options.fetch } : {}),
         ...(options.registry ? { registry: options.registry } : {}),
@@ -351,6 +358,25 @@ function runNpmInstall(adapter: AssistAdapter, directory: string, env: NodeJS.Pr
     });
   });
 }
+
+/**
+ * 这些引擎包里，本机已经有几份。
+ *
+ * <p>适配器不打包引擎（解开动辄几百 MB），默认用本机那一份。但「本机那一份」不只有命令行：
+ * Codex 的引擎还可能在 ChatGPT 桌面版里（见 ./executables 的 desktopBundledEngine）。
+ * 两处都没有时不能跳过：跳过等于要求用户自己去装 CLI，而多数人不会。</p>
+ */
+function enginePackagesPresent(adapter: AssistAdapter, env: NodeJS.ProcessEnv): string[] {
+  if (!adapter.enginePackages.length) return [];
+  const command = ENGINE_PACKAGE_COMMANDS[adapter.sourceId];
+  if (!command) return [...adapter.enginePackages];
+  return findExecutable(command, env) ? [...adapter.enginePackages] : [];
+}
+
+/** 引擎包对应的命令名：找得到这一份就不用下载引擎。 */
+const ENGINE_PACKAGE_COMMANDS: Readonly<Record<string, string>> = Object.freeze({
+  codex: "codex"
+});
 
 function lastLine(value: string): string {
   const lines = value.trim().split("\n");

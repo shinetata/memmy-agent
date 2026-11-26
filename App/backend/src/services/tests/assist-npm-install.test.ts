@@ -3,7 +3,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { afterEach, describe, expect, it } from "vitest";
-import { compareVersions, extractPackage, pickVersion, readTarEntries, satisfiesRange } from "../assist/npm-install.js";
+import {
+  compareVersions,
+  extractPackage,
+  packageMatchesPlatform,
+  pickVersion,
+  readTarEntries,
+  resolveInstallPlan,
+  satisfiesRange
+} from "../assist/npm-install.js";
 
 const roots: string[] = [];
 afterEach(() => {
@@ -90,5 +98,87 @@ describe("解开 npm 包", () => {
     const archive = Buffer.concat([tarEntry("package/../../evil.txt", "x")]);
     extractPackage(archive, join(root, "node_modules", "x"));
     expect(() => readFileSync(join(root, "evil.txt"), "utf8")).toThrow();
+  });
+});
+
+describe("平台相关的可选依赖", () => {
+  /** 一份能冒充 npm registry 的 fetch：按 URL 尾巴返回预设元数据。 */
+  function fakeRegistry(metadata: Record<string, unknown>): typeof fetch {
+    return (async (input: string | URL | Request) => {
+      const url = String(input);
+      // `/包名` 取版本表，`/包名/版本` 取单个版本的元数据。
+      const body = metadata[url];
+      if (body === undefined) return new Response("not found", { status: 404 });
+      return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+    }) as unknown as typeof fetch;
+  }
+
+  function version(tarball: string, extra: Record<string, unknown> = {}): Record<string, unknown> {
+    return { dist: { tarball, integrity: null }, dependencies: {}, ...extra };
+  }
+
+  it("installs the platform package that matches the machine and skips the others", async () => {
+    const registry = "https://registry.test";
+    const fetchImpl = fakeRegistry({
+      [`${registry}/@openai%2fcodex-acp/2.12.0`]: version("https://t/codex-acp.tgz", {
+        optionalDependencies: { "@openai/codex-win32-arm64": "0.171.0", "@openai/codex-win32-x64": "0.171.0" }
+      }),
+      [`${registry}/@openai%2fcodex-win32-arm64/0.171.0`]: version("https://t/arm64.tgz", { os: ["win32"], cpu: ["arm64"] }),
+      [`${registry}/@openai%2fcodex-win32-x64/0.171.0`]: version("https://t/x64.tgz", { os: ["win32"], cpu: ["x64"] })
+    });
+
+    const plan = await resolveInstallPlan({
+      packages: [{ name: "@openai/codex-acp", version: "2.12.0" }],
+      registry,
+      fetch: fetchImpl,
+      platform: "win32",
+      arch: "arm64"
+    });
+
+    expect(plan.map((item) => item.name)).toEqual(["@openai/codex-acp", "@openai/codex-win32-arm64"]);
+  });
+
+  it("never installs a musl build, whose os/cpu look the same as the glibc one", () => {
+    // 这两个包声明的 os/cpu 完全相同，只靠名字区分。
+    expect(packageMatchesPlatform("@anthropic-ai/claude-agent-sdk-linux-x64-musl", { os: ["linux"], cpu: ["x64"] }, "linux", "x64"))
+      .toBe(false);
+    expect(packageMatchesPlatform("@anthropic-ai/claude-agent-sdk-linux-x64", { os: ["linux"], cpu: ["x64"] }, "linux", "x64"))
+      .toBe(true);
+  });
+
+  it("rejects a package whose declared system does not match", async () => {
+    const registry = "https://registry.test";
+    const fetchImpl = fakeRegistry({
+      [`${registry}/native-tool/1.0.0`]: version("https://t/native.tgz", { os: ["linux"], cpu: ["x64"] })
+    });
+
+    // 顶层明确要的包对不上要报出来，不能装作装好了。
+    await expect(resolveInstallPlan({
+      packages: [{ name: "native-tool", version: "1.0.0" }],
+      registry,
+      fetch: fetchImpl,
+      platform: "win32",
+      arch: "x64"
+    })).rejects.toThrow(/不支持 win32-x64/u);
+  });
+
+  it("gives up on a missing platform package instead of failing the whole install", async () => {
+    const registry = "https://registry.test";
+    const fetchImpl = fakeRegistry({
+      [`${registry}/adapter/1.0.0`]: version("https://t/adapter.tgz", {
+        optionalDependencies: { "adapter-darwin-arm64": "1.0.0" }
+      }),
+      [`${registry}/adapter-darwin-arm64/1.0.0`]: version("https://t/mac.tgz", { os: ["darwin"], cpu: ["arm64"] })
+    });
+
+    // Windows 上那份 darwin 平台包对不上，跳过即可；适配器本身仍要装上。
+    const plan = await resolveInstallPlan({
+      packages: [{ name: "adapter", version: "1.0.0" }],
+      registry,
+      fetch: fetchImpl,
+      platform: "win32",
+      arch: "x64"
+    });
+    expect(plan.map((item) => item.name)).toEqual(["adapter"]);
   });
 });

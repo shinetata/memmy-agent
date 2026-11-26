@@ -38,6 +38,10 @@ export interface InstallPackagesOptions {
   /** 测试可注入；默认用全局 fetch。 */
   fetch?: typeof fetch;
   signal?: AbortSignal;
+  /** 按哪个平台挑可选依赖的平台包，默认当前进程；测试里用来验证 win32 / arm64 的选择。 */
+  platform?: NodeJS.Platform;
+  /** 按哪个架构挑可选依赖的平台包，默认当前进程。 */
+  arch?: string;
 }
 
 export interface InstallPackagesResult {
@@ -51,6 +55,11 @@ interface VersionMetadata {
   tarball: string;
   integrity: string | null;
   dependencies: Record<string, string>;
+  /** 平台相关的可选依赖：引擎本体、原生绑定这类按 os/cpu 分开发的包。 */
+  optionalDependencies: Record<string, string>;
+  /** npm 的平台约束：不在这个列表里的系统不装。 */
+  os: readonly string[];
+  cpu: readonly string[];
 }
 
 function registryBase(registry: string): string {
@@ -150,14 +159,56 @@ async function readVersion(
     ...(signal ? { signal } : {})
   });
   if (!response.ok) throw new Error(`${name}@${version} 取不到元数据（HTTP ${response.status}）`);
-  const data = await response.json() as { dist?: { tarball?: unknown; integrity?: unknown }; dependencies?: unknown };
+  const data = await response.json() as {
+    dist?: { tarball?: unknown; integrity?: unknown };
+    dependencies?: unknown;
+    optionalDependencies?: unknown;
+    os?: unknown;
+    cpu?: unknown;
+  };
   const tarball = typeof data.dist?.tarball === "string" ? data.dist.tarball : "";
   if (!tarball) throw new Error(`${name}@${version} 没有下载地址`);
   return {
     tarball,
     integrity: typeof data.dist?.integrity === "string" ? data.dist.integrity : null,
-    dependencies: isRecord(data.dependencies) ? data.dependencies as Record<string, string> : {}
+    dependencies: isRecord(data.dependencies) ? data.dependencies as Record<string, string> : {},
+    optionalDependencies: isRecord(data.optionalDependencies)
+      ? data.optionalDependencies as Record<string, string>
+      : {},
+    os: stringList(data.os),
+    cpu: stringList(data.cpu)
   };
+}
+
+/** 元数据里的 os / cpu 字段：可能缺失、也可能是字符串。 */
+function stringList(value: unknown): readonly string[] {
+  if (typeof value === "string") return [value];
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+}
+
+/**
+ * 这个包能不能装在这台电脑上：看它自己声明的 {@code os} / {@code cpu}。
+ *
+ * <p>与 npm 的规则一致：两个字段只在存在时生效，`!xxx` 表示「不是这个」。
+ * 另有一条例外：名字里带 `musl` 的平台包一律跳过——它们是给 musl 系 Linux 的预编译件，
+ * 而它声明的 os/cpu 与 glibc 那份完全相同，不靠名字区分就会装错一份。</p>
+ */
+export function packageMatchesPlatform(
+  name: string,
+  meta: Pick<VersionMetadata, "os" | "cpu">,
+  platform: NodeJS.Platform = process.platform,
+  arch: string = process.arch
+): boolean {
+  if (/musl/iu.test(name)) return false;
+  return matchesConstraint(meta.os, platform) && matchesConstraint(meta.cpu, arch);
+}
+
+function matchesConstraint(values: readonly string[], actual: string): boolean {
+  if (!values.length) return true;
+  const positives = values.filter((value) => !value.startsWith("!"));
+  const negatives = values.filter((value) => value.startsWith("!")).map((value) => value.slice(1));
+  if (negatives.includes(actual)) return false;
+  return positives.length === 0 || positives.includes(actual);
 }
 
 /**
@@ -172,9 +223,15 @@ export async function resolveInstallPlan(options: {
   registry?: string;
   fetch?: typeof fetch;
   signal?: AbortSignal;
+  /** 按哪个平台选可选依赖，默认当前进程；测试里用来验证 win32 / arm64 的选择。 */
+  platform?: NodeJS.Platform;
+  /** 按哪个架构选可选依赖，默认当前进程。 */
+  arch?: string;
 }): Promise<PackageRequest[]> {
   const registry = options.registry ?? DEFAULT_REGISTRY;
   const fetchImpl = options.fetch ?? globalThis.fetch;
+  const platform = options.platform ?? process.platform;
+  const arch = options.arch ?? process.arch;
   const skip = new Set(options.skip ?? []);
   const resolved = new Map<string, string>();
   const queue: PackageRequest[] = [...options.packages];
@@ -192,9 +249,23 @@ export async function resolveInstallPlan(options: {
     }
     const previous = resolved.get(request.name);
     if (previous && compareVersions(previous, version) >= 0) continue;
-    resolved.set(request.name, version);
     const meta = await readVersion(registry, request.name, version, fetchImpl, options.signal);
+    // 声明的系统或架构对不上就不装（例如 linux 平台包在 Windows 上）：这不算失败，跳过即可。
+    // 但顶层明确要的包对不上要报出来，否则调用方会以为装好了。
+    if (!packageMatchesPlatform(request.name, meta, platform, arch)) {
+      if (options.packages.some((item) => item.name === request.name)) {
+        throw new Error(`${request.name} 不支持 ${platform}-${arch}`);
+      }
+      continue;
+    }
+    resolved.set(request.name, version);
     for (const [name, range] of Object.entries(meta.dependencies)) {
+      if (skip.has(name) || name.startsWith("@types/")) continue;
+      queue.push({ name, version: range });
+    }
+    // 可选依赖不能整组丢掉：引擎本体与原生绑定都靠它按平台发（`@openai/codex-win32-arm64`）。
+    // 按 os / cpu 逐项筛，对不上的在下一轮处理时被跳过，不会把别的平台的二进制装进来。
+    for (const [name, range] of Object.entries(meta.optionalDependencies)) {
       if (skip.has(name) || name.startsWith("@types/")) continue;
       queue.push({ name, version: range });
     }
@@ -332,7 +403,9 @@ export async function installPackages(options: InstallPackagesOptions): Promise<
     ...(options.skip ? { skip: options.skip } : {}),
     registry,
     fetch: fetchImpl,
-    ...(options.signal ? { signal: options.signal } : {})
+    ...(options.signal ? { signal: options.signal } : {}),
+    ...(options.platform === undefined ? {} : { platform: options.platform }),
+    ...(options.arch === undefined ? {} : { arch: options.arch })
   });
   const installed: PackageRequest[] = [];
   const skipped = [...(options.skip ?? [])];
