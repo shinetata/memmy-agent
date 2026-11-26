@@ -25,13 +25,14 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 
-import { ASSIST_COMMAND_ENV, findExecutable, shellLaunch } from "./executables.js";
+import { ASSIST_COMMAND_ENV, findExecutable, pathForPlatform, shellLaunch, splitCommandLine } from "./executables.js";
 
 /** 与内置来源的标识一致，协作项目的执行方就按它记录。 */
 export const DEEPSEEK_HARNESS_SOURCE_ID = "deepseek_harness";
 
-/** 桌面版包内的 dsh 入口：相对 {@code Contents/Resources/app.asar}。 */
-const DESKTOP_DSH_BIN = join("dsh", "node_modules", "@deepseek-ai", "dsh", "lib", "bin.js");
+/** 桌面版包内的 dsh 入口：相对 asar（macOS 是 {@code Contents/Resources/app.asar}，Windows 是 {@code resources\app.asar}）。
+ * 两个平台实测都存在这份入口。 */
+const DESKTOP_DSH_BIN_SEGMENTS = ["dsh", "node_modules", "@deepseek-ai", "dsh", "lib", "bin.js"] as const;
 
 /** 读版本不能让界面卡住：命令行慢或卡死时按「读不到版本」处理。 */
 const VERSION_TIMEOUT_MS = 5_000;
@@ -42,8 +43,13 @@ export interface DeepSeekHarnessOptions {
   home?: string;
   /** dsh 的主目录。默认 {@code DSH_HOME}，再退回 {@code ~/.dsh}。 */
   dshHome?: string;
-  /** 桌面版的位置，按顺序找。默认 {@code /Applications} 与 {@code ~/Applications}，测试可注入。 */
+  /** 桌面版的位置，按顺序找。默认 macOS 的 {@code /Applications} 与 {@code ~/Applications}，
+   * Windows 的 {@code %LOCALAPPDATA%\Programs} 与 {@code %ProgramFiles%}；测试可注入。 */
   appDirs?: readonly string[];
+  /** 按哪个平台找桌面版，默认当前进程；测试里用来验证 Windows 的目录布局。 */
+  platform?: NodeJS.Platform;
+  /** 只在测试里替换「文件在不在」的判断（Windows 的 `C:\…` 在 macOS 上打不开）。 */
+  exists?: (path: string) => boolean;
 }
 
 export type DeepSeekHarnessResolution =
@@ -61,13 +67,37 @@ export type DeepSeekHarnessResolution =
 /**
  * 桌面版的默认位置。
  *
- * <p>只认 macOS 的 `.app` 包：Windows 桌面版的可执行文件位置与资源布局都没有核实过（不是 `.app`
- * 结构，包内 dsh 的路径也不同），不猜。Windows 上返回空数组，{@link resolveDeepSeekHarness} 会直接
- * 去找命令行 `dsh`，都没找到时失败原因说的是「没有找到桌面版，也没有找到 dsh 命令行」。</p>
+ * <p>macOS 是 {@code .app} 包；Windows 是用户级安装器装出来的普通目录，默认在
+ * {@code %LOCALAPPDATA%\Programs\DeepSeek Harness}（已实测核实），机器级安装才会落在
+ * {@code %ProgramFiles%}，作为兜底一并列出。两个平台的包内层级不同，由 {@link desktopLayout} 给出。</p>
  */
-export function defaultHarnessAppDirs(platform: NodeJS.Platform = process.platform): string[] {
-  if (platform === "win32") return [];
-  return ["/Applications/DeepSeek Harness.app", join(homedir(), "Applications", "DeepSeek Harness.app")];
+export function defaultHarnessAppDirs(
+  platform: NodeJS.Platform = process.platform,
+  env: NodeJS.ProcessEnv = process.env
+): string[] {
+  const path = pathForPlatform(platform);
+  if (platform === "win32") {
+    const local = env.LOCALAPPDATA?.trim() || path.join(homedir(), "AppData", "Local");
+    const directories = [path.join(local, "Programs", "DeepSeek Harness")];
+    const programFiles = env.ProgramFiles?.trim();
+    if (programFiles) directories.push(path.join(programFiles, "DeepSeek Harness"));
+    return directories;
+  }
+  return ["/Applications/DeepSeek Harness.app", path.join(homedir(), "Applications", "DeepSeek Harness.app")];
+}
+
+/** 一个桌面版目录里「应用本身」与「asar」的位置：两个平台的包内层级不一样。 */
+function desktopLayout(
+  bundle: string,
+  platform: NodeJS.Platform
+): { executable: string; asar: string } {
+  const path = pathForPlatform(platform);
+  return platform === "win32"
+    ? { executable: path.join(bundle, "DeepSeek Harness.exe"), asar: path.join(bundle, "resources", "app.asar") }
+    : {
+        executable: path.join(bundle, "Contents", "MacOS", "DeepSeek Harness"),
+        asar: path.join(bundle, "Contents", "Resources", "app.asar")
+      };
 }
 
 /**
@@ -80,7 +110,7 @@ export function resolveDeepSeekHarness(options: DeepSeekHarnessOptions = {}): De
   const env = options.env ?? process.env;
   const override = env[ASSIST_COMMAND_ENV(DEEPSEEK_HARNESS_SOURCE_ID)]?.trim();
   if (override) {
-    const [command, ...args] = override.split(/\s+/u);
+    const [command, ...args] = splitCommandLine(override);
     if (!command) return { ok: false, reason: "启动命令是空的" };
     return { ok: true, via: "override", command, args, env: {} };
   }
@@ -114,14 +144,20 @@ export function deepSeekHarnessLaunch(options: DeepSeekHarnessOptions = {}): Dee
 function findDesktopHarness(
   options: DeepSeekHarnessOptions
 ): { command: string; args: string[]; env: Record<string, string> } | null {
-  for (const appDir of options.appDirs ?? defaultHarnessAppDirs()) {
+  const platform = options.platform ?? process.platform;
+  const env = options.env ?? process.env;
+  const exists = options.exists ?? existsSync;
+  for (const appDir of options.appDirs ?? defaultHarnessAppDirs(platform, env)) {
     const bundle = appDir.replace(/[\\/]+$/u, "");
-    const executable = join(bundle, "Contents", "MacOS", "DeepSeek Harness");
-    const asar = join(bundle, "Contents", "Resources", "app.asar");
+    const { executable, asar } = desktopLayout(bundle, platform);
     // 普通 Node 在 asar 里 existsSync 一定是 false，所以只判断「应用在」与「asar 在」这两件事；
     // 包内路径随版本稳定，作为参数交给桌面版自己的 Node 就能读。
-    if (!existsSync(executable) || !existsSync(asar)) continue;
-    return { command: executable, args: [join(asar, DESKTOP_DSH_BIN)], env: { ELECTRON_RUN_AS_NODE: "1" } };
+    if (!exists(executable) || !exists(asar)) continue;
+    return {
+      command: executable,
+      args: [pathForPlatform(platform).join(asar, ...DESKTOP_DSH_BIN_SEGMENTS)],
+      env: { ELECTRON_RUN_AS_NODE: "1" }
+    };
   }
   return null;
 }

@@ -10,7 +10,8 @@ import {
   assistRecipe,
   assistRunnable,
   defaultQwenWorkAppDirs,
-  qwenWorkEngine
+  qwenWorkEngine,
+  qwenWorkEngineCandidates
 } from "../assist/recipes.js";
 
 const roots: string[] = [];
@@ -127,11 +128,26 @@ describe("assistRunnable", () => {
     } as NodeJS.ProcessEnv)).toBe(false);
   });
 
-  it("does not guess where QwenWork lives on Windows", () => {
-    // Windows 上的安装位置与包内层级都没核实过：宁可给空列表让它退回 PATH 上找 qoderclicn，
-    // 也不要指一个错的目录（失败原因会说不清楚）。
-    expect(defaultQwenWorkAppDirs("win32")).toEqual([]);
-    expect(defaultQwenWorkAppDirs("darwin")).toContain("/Applications/QwenWorkCN.app");
+  it("looks for QwenWork under the user's Programs folder on Windows", () => {
+    // 用户级安装器把它装在 %LOCALAPPDATA%\Programs\QwenWorkCN，应用本体在版本子目录里；
+    // 引擎靠 qwenWorkEngine 再往下枚举一层版本目录（见该函数的用例）。
+    expect(defaultQwenWorkAppDirs("win32", {
+      LOCALAPPDATA: "C:\\Users\\alice\\AppData\\Local"
+    } as NodeJS.ProcessEnv)).toEqual(["C:\\Users\\alice\\AppData\\Local\\Programs\\QwenWorkCN"]);
+    expect(defaultQwenWorkAppDirs("darwin", {})).toContain("/Applications/QwenWorkCN.app");
+  });
+
+  it("spells the Windows engine path the way QwenWork lays it out", () => {
+    // 版本目录名随升级变化，所以候选里既有根目录本身、也有各版本子目录。
+    const root = "C:\\Users\\alice\\AppData\\Local\\Programs\\QwenWorkCN";
+    expect(qwenWorkEngineCandidates(root, [])).toEqual([
+      `${root}\\resources\\bin\\qoderclicn.exe`
+    ]);
+    expect(qwenWorkEngineCandidates(root, ["2.0.2", "1.3.2"])).toEqual([
+      `${root}\\resources\\bin\\qoderclicn.exe`,
+      `${root}\\2.0.2\\resources\\bin\\qoderclicn.exe`,
+      `${root}\\1.3.2\\resources\\bin\\qoderclicn.exe`
+    ]);
   });
 
   it("never lists an agent Memmy has no recipe for", () => {

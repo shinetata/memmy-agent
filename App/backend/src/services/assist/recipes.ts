@@ -8,13 +8,15 @@
  * <p>这些程序的入口有一半来自桌面端自带的引擎或隐藏参数，对方升级后可能变化；因此每个配方都可以用
  * 环境变量覆盖（见 {@link ASSIST_COMMAND_ENV}），出问题时不必改代码。</p>
  */
+import { readdirSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, type posix } from "node:path";
 
 import { adapterFor, bundledAdapterPath, installedAdapterPath } from "./adapters.js";
 import type { DeepSeekHarnessOptions } from "./deepseek-harness.js";
 import { DEEPSEEK_HARNESS_SOURCE_ID, resolveDeepSeekHarness } from "./deepseek-harness.js";
-import { ASSIST_COMMAND_ENV, findExecutable } from "./executables.js";
+import { ASSIST_COMMAND_ENV, findExecutable, pathForPlatform, splitCommandLine } from "./executables.js";
 
 // 命令查找与覆盖用的环境变量拆到 ./executables：deepseek-harness 也要用，放在这里会形成环依赖。
 export { ASSIST_COMMAND_ENV, findExecutable } from "./executables.js";
@@ -126,8 +128,9 @@ export function assistRecipe(sourceId: string, env: NodeJS.ProcessEnv = process.
   if (!base) return null;
   const override = env[ASSIST_COMMAND_ENV(sourceId)]?.trim();
   if (override) {
-    const [command, ...args] = override.split(/\s+/u);
-    return { ...base, resolved: command!, args };
+    // 带空格的路径必须包在引号里（Windows 的默认安装位置就带空格），否则会在空格处被拆开。
+    const [command, ...args] = splitCommandLine(override);
+    if (command) return { ...base, resolved: command, args };
   }
   return { ...base, resolved: base.command };
 }
@@ -178,33 +181,94 @@ export interface AssistRunnableOptions extends Pick<DeepSeekHarnessOptions, "app
 /**
  * QwenWork 桌面端应用包的默认位置。
  *
- * <p>目前只知道 macOS 的结构（`.app` 包）。Windows 上的安装位置与包内层级未经核实，不猜：
- * 返回空数组，`qwenWorkEngine` 会退回 PATH 上找 `qoderclicn`，都找不到时失败原因说的是
- * 「没有找到它的引擎，确认 QwenWork 装在这台电脑上」——比指一个错的目录更清楚。</p>
+ * <p>macOS 是 {@code .app} 包；Windows 是用户级安装器装出来的普通目录
+ * {@code %LOCALAPPDATA%\Programs\QwenWorkCN}，应用本体在版本子目录里
+ * （形如 {@code QwenWorkCN\2.0.2\QwenWorkCN.exe}），所以这一层只是「根」，
+ * 真正找引擎时会再枚举一层版本目录（见 {@link qwenWorkEngine}）。</p>
  */
-export function defaultQwenWorkAppDirs(platform: NodeJS.Platform = process.platform): string[] {
-  if (platform === "win32") return [];
+export function defaultQwenWorkAppDirs(
+  platform: NodeJS.Platform = process.platform,
+  env: NodeJS.ProcessEnv = process.env
+): string[] {
+  if (platform === "win32") {
+    const path = pathForPlatform("win32");
+    const local = env.LOCALAPPDATA?.trim() || path.join(homedir(), "AppData", "Local");
+    return [path.join(local, "Programs", "QwenWorkCN")];
+  }
   return ["/Applications/QwenWorkCN.app", join(homedir(), "Applications", "QwenWorkCN.app")];
 }
 
-/** 引擎在应用包里的位置：{@code Contents/Resources/bin/qoderclicn}。 */
-const QWENWORK_ENGINE = join("Contents", "Resources", "bin", "qoderclicn");
+/** 引擎在 macOS 应用包里的位置：{@code Contents/Resources/bin/qoderclicn}。 */
+const QWENWORK_ENGINE_MACOS = join("Contents", "Resources", "bin", "qoderclicn");
+
+/** 引擎在 Windows 应用目录里的位置：{@code resources\bin\qoderclicn.exe}。 */
+const QWENWORK_ENGINE_WINDOWS = ["resources", "bin", "qoderclicn.exe"];
+
+/** Windows 应用根目录下最多往下看几层版本目录：正常只有一层，留点余量不写死。 */
+const QWENWORK_WINDOWS_MAX_DEPTH = 2;
 
 /**
  * QwenWork 的引擎：这个程序既不在 PATH 上，也不在常见命令目录里，只在应用包里。
  * 找不到时返回 null，由调用方把「没装」变成给双方看的失败原因。
+ *
+ * <p>Windows 上要多走一步：应用本体在版本子目录里（升级后目录名会变），
+ * 所以从根目录往下枚举一层，找带 {@code resources\bin\qoderclicn.exe} 的那一层。
+ * 不按版本号排序猜路径，是为了升级后不用改代码。</p>
  */
 export function qwenWorkEngine(
   env: NodeJS.ProcessEnv = process.env,
-  appDirs: readonly string[] = defaultQwenWorkAppDirs()
+  appDirs: readonly string[] = defaultQwenWorkAppDirs(),
+  options: Pick<AssistRunnableOptions, "platform" | "exists"> = {}
 ): string | null {
-  const onPath = findExecutable("qoderclicn", env);
+  const platform = options.platform ?? process.platform;
+  const exists = options.exists ?? existsSync;
+  const onPath = findExecutable("qoderclicn", env, {
+    ...(options.platform === undefined ? {} : { platform: options.platform }),
+    ...(options.exists === undefined ? {} : { exists: options.exists })
+  });
   if (onPath) return onPath;
+  const path = pathForPlatform(platform);
   for (const appDir of appDirs) {
-    const engine = join(appDir.replace(/[\\/]+$/u, ""), QWENWORK_ENGINE);
-    if (findExecutable(engine, env)) return engine;
+    const root = appDir.replace(/[\\/]+$/u, "");
+    if (platform !== "win32") {
+      const engine = path.join(root, QWENWORK_ENGINE_MACOS);
+      if (findExecutable(engine, env)) return engine;
+      continue;
+    }
+    // Windows：根目录本身与它下面的版本子目录都看一遍。
+    const candidates = qwenWorkEngineCandidates(root, findQwenWorkVersionDirectories(root, exists));
+    for (const engine of candidates) {
+      if (exists(engine)) return engine;
+    }
   }
   return null;
+}
+
+/** 应用根目录下的版本子目录名；读不到（目录不存在、权限不足）时给空列表，不猜。 */
+function findQwenWorkVersionDirectories(root: string, exists: (path: string) => boolean): string[] {
+  if (!exists(root)) return [];
+  try {
+    return readdirSync(root, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name)
+      .slice(0, QWENWORK_WINDOWS_MAX_DEPTH * 16);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Windows 上一个 QwenWork 应用根目录里要试的引擎路径：先根目录本身，再各版本子目录。
+ *
+ * <p>单独抽出来是为了能测：真实目录枚举在 macOS 上读不到 `C:\…`，而这条拼法正是最容易写错的地方。</p>
+ */
+export function qwenWorkEngineCandidates(root: string, versionDirectories: readonly string[] = []): string[] {
+  const path = pathForPlatform("win32");
+  const base = root.replace(/[\\/]+$/u, "");
+  return [
+    path.join(base, ...QWENWORK_ENGINE_WINDOWS),
+    ...versionDirectories.map((version) => path.join(base, version, ...QWENWORK_ENGINE_WINDOWS))
+  ];
 }
 
 /**
@@ -234,7 +298,12 @@ export function assistRunnable(
   if (env[ASSIST_COMMAND_ENV(sourceId)]?.trim()) return findExecutable(recipe.resolved, env, lookupOptions(options)) !== null;
   // DeepSeek Harness 的入口不止 PATH 上一个命令：桌面版自带的引擎能跑就够（见 ./deepseek-harness）。
   if (sourceId === DEEPSEEK_HARNESS_SOURCE_ID) return resolveDeepSeekHarness({ ...options, env }).ok;
-  if (sourceId === "qwenwork") return qwenWorkEngine(env, options.qwenWorkAppDirs) !== null;
+  if (sourceId === "qwenwork") {
+    // 平台与存在性判断要传下去：否则 qwenWorkEngine 会读 process.platform，Windows 的路径在测试里永远验不到。
+    const appDirs = options.qwenWorkAppDirs
+      ?? defaultQwenWorkAppDirs(options.platform ?? process.platform, env);
+    return qwenWorkEngine(env, appDirs, options) !== null;
+  }
   const body = BODY_COMMANDS[sourceId];
   if (body) return findExecutable(body, env, lookupOptions(options)) !== null;
   const adapter = adapterFor(sourceId);

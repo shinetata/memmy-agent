@@ -7,7 +7,9 @@ import {
   findExecutable,
   joinPathList,
   lookupDirs,
+  resetDesktopEngineCache,
   shellLaunch,
+  splitCommandLine,
   splitPathList
 } from "../assist/executables.js";
 
@@ -123,6 +125,25 @@ describe("findExecutable", () => {
     })).toBe("C:\\tools\\opencode.cmd");
   });
 
+  it("prefers the .cmd over the extensionless sh shim npm writes beside it", () => {
+    // npm 的 bin-links 在 Windows 上给每个命令同时写三份：无后缀的 sh 脚本、`.cmd`、`.ps1`。
+    // 无后缀那份是给 posix shell 的，spawn 会 ENOENT；先试它就会选中一个「存在但跑不了」的文件。
+    const exists = existsIn(["C:\\tools\\opencode", "C:\\tools\\opencode.cmd"]);
+    expect(findExecutable("opencode", { PATH: "C:\\tools", PATHEXT: ".COM;.EXE;.BAT;.CMD" } as NodeJS.ProcessEnv, {
+      platform: "win32",
+      exists
+    })).toBe("C:\\tools\\opencode.cmd");
+  });
+
+  it("still falls back to an extensionless file when no suffixed one exists", () => {
+    // 确实是 PE 可执行文件时仍要能认出来：无后缀候选只是排到最后，不是被删掉。
+    const exists = existsIn(["C:\\tools\\native-tool"]);
+    expect(findExecutable("native-tool", { PATH: "C:\\tools", PATHEXT: ".EXE" } as NodeJS.ProcessEnv, {
+      platform: "win32",
+      exists
+    })).toBe("C:\\tools\\native-tool");
+  });
+
   it("also looks in the Windows usual places", () => {
     const env = {
       PATH: "",
@@ -199,6 +220,17 @@ describe("shellLaunch", () => {
     expect(spec.windowsVerbatimArguments).toBe(true);
   });
 
+  it("switches an extensionless command to the .cmd beside it", () => {
+    // 拿到无后缀路径时不包装就 spawn，Windows 上会 ENOENT；同名 `.cmd` 在就改走它。
+    const spec = shellLaunch("C:\\tools\\opencode", ["acp"], {
+      platform: "win32",
+      env: { ComSpec: "C:\\Windows\\system32\\cmd.exe" } as NodeJS.ProcessEnv,
+      exists: (path) => path === "C:\\tools\\opencode.cmd"
+    });
+    expect(spec.command).toBe("C:\\Windows\\system32\\cmd.exe");
+    expect(spec.args[3]).toContain("opencode.cmd");
+  });
+
   it("hands a bare command to cmd.exe when the caller asks for it", () => {
     // npm 装的命令行程序在 PATH 上只有不带后缀的名字，靠 cmd 自己的 PATHEXT 解析。
     const spec = shellLaunch("npm", ["install"], { platform: "win32", always: true, env: {} as NodeJS.ProcessEnv });
@@ -208,5 +240,180 @@ describe("shellLaunch", () => {
 
   it("does not wrap a bare command on Windows unless asked", () => {
     expect(shellLaunch("agent", [], { platform: "win32" })).toEqual({ command: "agent", args: [] });
+  });
+});
+
+describe("desktop app engines on Windows", () => {
+  /**
+   * 已安装包仓库的查询：真实安装上是一次 `reg query <仓库> /f <包名前缀> /k`，
+   * 再对每个包 `reg query <仓库>\<包名> /v PackageRootFolder`。
+   */
+  const REPOSITORY = "HKCU\\Software\\Classes\\Local Settings\\Software\\Microsoft\\Windows\\CurrentVersion\\AppModel\\Repository\\Packages";
+  const HIVE = "HKEY_CURRENT_USER\\Software\\Classes\\Local Settings\\Software\\Microsoft\\Windows\\CurrentVersion\\AppModel\\Repository\\Packages";
+
+  function registryReader(packages: readonly string[], roots: Record<string, string>) {
+    const queries: string[] = [];
+    const readRegistry = (args: readonly string[]): string | null => {
+      queries.push(args.join(" "));
+      if (args[0] === "query" && args[1] === REPOSITORY && args[2] === "/f") {
+        const matched = packages.filter((name) => name.startsWith(args[3]!));
+        return matched.length ? matched.map((name) => `${HIVE}\\${name}`).join("\r\n") : null;
+      }
+      if (args[0] === "query" && args[2] === "/v" && args[3] === "PackageRootFolder") {
+        const root = roots[args[1]!.slice(REPOSITORY.length + 1)];
+        return root ? `    PackageRootFolder    REG_SZ    ${root}\r\n` : null;
+      }
+      return null;
+    };
+    return { readRegistry, queries };
+  }
+
+  /** 只有列出来的路径算存在：真实 Windows 路径在 macOS 上打不开，必须注入。 */
+  function onlyThese(paths: readonly string[]) {
+    const present = new Set(paths.map((path) => path.toLowerCase()));
+    return (candidate: string) => present.has(candidate.toLowerCase());
+  }
+
+  const WINDOWS_ENV = {
+    ProgramFiles: "C:\\Program Files",
+    LOCALAPPDATA: "C:\\Users\\someone\\AppData\\Local",
+    USERPROFILE: "C:\\Users\\someone",
+    PATH: "C:\\Windows\\System32",
+    PATHEXT: ".COM;.EXE;.BAT;.CMD"
+  } as NodeJS.ProcessEnv;
+
+  afterEach(() => {
+    resetDesktopEngineCache();
+  });
+
+  it("finds the engine inside the ChatGPT desktop package", () => {
+    // 官网下载与 Store 渠道是同一个 MSIX 包；目录不能枚举，但精确路径可执行。
+    const name = "OpenAI.Codex_26.1120.6357.0_arm64__2p2nqsd0c76g0";
+    const root = `C:\\Program Files\\WindowsApps\\${name}`;
+    const engine = `${root}\\app\\resources\\codex.exe`;
+    const { readRegistry } = registryReader([name], { [name]: root });
+
+    expect(findExecutable("codex", WINDOWS_ENV, {
+      platform: "win32",
+      exists: onlyThese([engine]),
+      readRegistry
+    })).toBe(engine);
+  });
+
+  it("skips a package that has no engine and keeps looking", () => {
+    // 同一台机器上还有 CodexPrimaryRuntime 这种不含引擎的运行时包，且它版本更高。
+    const runtime = "OpenAI.CodexPrimaryRuntime.v26-1123-915-0_26.1123.915.0_arm64__3k8sg7r9htsxt";
+    const app = "OpenAI.Codex_26.1120.6357.0_arm64__2p2nqsd0c76g0";
+    const runtimeRoot = `C:\\Program Files\\WindowsApps\\${runtime}`;
+    const appRoot = `C:\\Program Files\\WindowsApps\\${app}`;
+    const engine = `${appRoot}\\app\\resources\\codex.exe`;
+    const { readRegistry } = registryReader([runtime, app], { [runtime]: runtimeRoot, [app]: appRoot });
+
+    expect(findExecutable("codex", WINDOWS_ENV, {
+      platform: "win32",
+      exists: onlyThese([engine]),
+      readRegistry
+    })).toBe(engine);
+  });
+
+  it("prefers the newest package when an old version is still installed", () => {
+    const older = "OpenAI.Codex_26.1000.1.0_arm64__aaaaaaaaaaaaaaaa";
+    const newer = "OpenAI.Codex_26.2000.1.0_arm64__bbbbbbbbbbbbbbbb";
+    const roots = {
+      [older]: `C:\\Program Files\\WindowsApps\\${older}`,
+      [newer]: `C:\\Program Files\\WindowsApps\\${newer}`
+    };
+    const { readRegistry } = registryReader([older, newer], roots);
+
+    expect(findExecutable("codex", WINDOWS_ENV, {
+      platform: "win32",
+      exists: onlyThese([
+        `${roots[older]}\\app\\resources\\codex.exe`,
+        `${roots[newer]}\\app\\resources\\codex.exe`
+      ]),
+      readRegistry
+    })).toBe(`${roots[newer]}\\app\\resources\\codex.exe`);
+  });
+
+  it("uses the registry-recorded location when the package is not on the system drive", () => {
+    const name = "OpenAI.Codex_26.1120.6357.0_x64__2p2nqsd0c76g0";
+    const root = `D:\\WindowsApps\\${name}`;
+    const engine = `${root}\\app\\resources\\codex.exe`;
+    const { readRegistry } = registryReader([name], { [name]: root });
+
+    expect(findExecutable("codex", WINDOWS_ENV, {
+      platform: "win32",
+      exists: onlyThese([engine]),
+      readRegistry
+    })).toBe(engine);
+  });
+
+  it("does not touch the registry on other platforms", () => {
+    let queried = false;
+    const readRegistry = () => {
+      queried = true;
+      return null;
+    };
+    expect(findExecutable("codex", { PATH: "/usr/bin" } as NodeJS.ProcessEnv, {
+      platform: "darwin",
+      exists: () => false,
+      readRegistry
+    })).toBeNull();
+    expect(queried).toBe(false);
+  });
+
+  it("queries the registry once while the answer stands", () => {
+    const name = "OpenAI.Codex_26.1120.6357.0_arm64__2p2nqsd0c76g0";
+    const root = `C:\\Program Files\\WindowsApps\\${name}`;
+    const engine = `${root}\\app\\resources\\codex.exe`;
+    const { readRegistry, queries } = registryReader([name], { [name]: root });
+    const options = { platform: "win32" as const, exists: onlyThese([engine]), readRegistry };
+
+    expect(findExecutable("codex", WINDOWS_ENV, options)).toBe(engine);
+    const afterFirst = queries.length;
+    expect(findExecutable("codex", WINDOWS_ENV, options)).toBe(engine);
+    // 第二次直接命中缓存：协助面板每次刷新都会问一遍能不能用，不该每次起一个 reg.exe。
+    expect(queries.length).toBe(afterFirst);
+  });
+
+  it("looks again once the cached engine is gone", () => {
+    // App 自动更新后包目录换了名字，旧路径不见了：不能一直返回那个已经不存在的路径。
+    const oldName = "OpenAI.Codex_26.1120.6357.0_arm64__2p2nqsd0c76g0";
+    const newName = "OpenAI.Codex_26.3000.1.0_arm64__cccccccccccccccc";
+    const oldEngine = `C:\\Program Files\\WindowsApps\\${oldName}\\app\\resources\\codex.exe`;
+    const newEngine = `C:\\Program Files\\WindowsApps\\${newName}\\app\\resources\\codex.exe`;
+
+    const first = registryReader([oldName], { [oldName]: `C:\\Program Files\\WindowsApps\\${oldName}` });
+    expect(findExecutable("codex", WINDOWS_ENV, {
+      platform: "win32",
+      exists: onlyThese([oldEngine]),
+      readRegistry: first.readRegistry
+    })).toBe(oldEngine);
+
+    const second = registryReader([newName], { [newName]: `C:\\Program Files\\WindowsApps\\${newName}` });
+    expect(findExecutable("codex", WINDOWS_ENV, {
+      platform: "win32",
+      exists: onlyThese([newEngine]),
+      readRegistry: second.readRegistry
+    })).toBe(newEngine);
+  });
+});
+
+describe("splitCommandLine", () => {
+  it("keeps a quoted Windows path in one piece", () => {
+    // 覆盖值的用法就是这样：Windows 默认安装路径自带空格，按空白切会把命令切成 `C:\Program`。
+    expect(splitCommandLine('"C:\\Program Files\\WindowsApps\\OpenAI.Codex\\codex.exe" app-server'))
+      .toEqual(["C:\\Program Files\\WindowsApps\\OpenAI.Codex\\codex.exe", "app-server"]);
+  });
+
+  it("accepts single quotes and drops them", () => {
+    expect(splitCommandLine("'/opt/my agents/codex' --profile acp"))
+      .toEqual(["/opt/my agents/codex", "--profile", "acp"]);
+  });
+
+  it("splits plain values exactly like splitting on whitespace", () => {
+    expect(splitCommandLine("  codex   app-server  ")).toEqual(["codex", "app-server"]);
+    expect(splitCommandLine("codex")).toEqual(["codex"]);
+    expect(splitCommandLine("   ")).toEqual([]);
   });
 });

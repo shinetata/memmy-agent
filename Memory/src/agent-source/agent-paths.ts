@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join, normalize, posix, resolve, win32 } from "node:path";
 
@@ -101,13 +102,35 @@ export function resolveOpenclawConfigPath(
   );
 }
 
-export function resolveHermesHomeDirectory(options: ResolveAgentPathOptions = {}): string {
+/**
+ * Hermes 的主目录。
+ *
+ * <p>官方 Windows 安装器用 {@code %LOCALAPPDATA%\hermes}（{@code install.ps1} 的
+ * {@code $HermesHome} 默认值，命令发布在它下面的 {@code bin}）；macOS / Linux 是 {@code ~/.hermes}。
+ * 按 {@code ~/.hermes} 去找，标准装的 Windows 机器上永远是空的，于是「本机有没有 Hermes」被误判成没有。</p>
+ *
+ * <p>但 Windows 上不能只认新位置：升级前 Memmy 自己把 Hermes 的 skill 与 hook 装进了
+ * {@code ~/.hermes}，那批用户的组件还留在那里。所以先看新位置在不在，不在而旧位置在就沿用旧位置，
+ * 免得已装的组件突然「失联」、被当成没装而重装一份。两个都不存在时仍指新位置作为提示。
+ * {@code HERMES_HOME} 依旧最优先。</p>
+ */
+export function resolveHermesHomeDirectory(
+  options: ResolveAgentPathOptions & { exists?: (path: string) => boolean } = {}
+): string {
   const runtime = createAgentPathRuntime(options);
-  return resolveConfiguredDirectory(
-    runtime.environment.HERMES_HOME,
-    runtime.pathApi.join(runtime.homeDirectory, ".hermes"),
-    runtime
+  const configured = runtime.environment.HERMES_HOME;
+  if (configured?.trim()) return resolveConfiguredDirectory(configured, configured, runtime);
+  const legacy = runtime.pathApi.join(runtime.homeDirectory, ".hermes");
+  if ((options.platform ?? process.platform) !== "win32") return legacy;
+  const current = runtime.pathApi.join(
+    runtime.environment.LOCALAPPDATA?.trim() ||
+      runtime.pathApi.join(runtime.homeDirectory, "AppData", "Local"),
+    "hermes"
   );
+  const exists = options.exists ?? existsSync;
+  // 新位置不在、旧位置在：这是升级前装过 Hermes 组件的机器，沿用旧位置。
+  if (!exists(current) && exists(legacy)) return legacy;
+  return current;
 }
 
 export function resolveDeepseekHarnessHomeDirectory(options: ResolveAgentPathOptions = {}): string {

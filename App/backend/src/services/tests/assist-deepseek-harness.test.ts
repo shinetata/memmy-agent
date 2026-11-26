@@ -82,6 +82,29 @@ describe("resolveDeepSeekHarness", () => {
     expect(resolution.env).toEqual({ ELECTRON_RUN_AS_NODE: "1" });
   });
 
+  it("runs the Windows desktop app through its own exe and bundled asar", () => {
+    const bundle = "C:\\Users\\alice\\AppData\\Local\\Programs\\DeepSeek Harness";
+    const resolution = resolveDeepSeekHarness({
+      env: {},
+      appDirs: [bundle],
+      dshHome: "C:\\Users\\alice\\.dsh",
+      platform: "win32",
+      // Windows 的路径在 macOS 上打不开：只替换存在性判断。
+      exists: () => true
+    });
+
+    expect(resolution.ok).toBe(true);
+    if (!resolution.ok) return;
+    expect(resolution.via).toBe("desktop");
+    // Windows 的桌面版不是 .app：应用本体在目录楺下，asar 在 resources 下。
+    expect(resolution.command).toBe(`${bundle}\\DeepSeek Harness.exe`);
+    // Windows ARM64 实测 0.2.2-rc.5：asar 里这份 bin.js 同样存在，作为参数交给桌面版自己的 Node。
+    expect(resolution.args).toEqual([
+      `${bundle}\\resources\\app.asar\\dsh\\node_modules\\@deepseek-ai\\dsh\\lib\\bin.js`
+    ]);
+    expect(resolution.env).toEqual({ ELECTRON_RUN_AS_NODE: "1" });
+  });
+
   it("does not use a command line dsh that has no acp profile", () => {
     const root = tempRoot();
     const bin = fakeDsh(root, "0.1.0-rc.6");
@@ -211,11 +234,19 @@ describe("deepSeekHarnessLaunch", () => {
 });
 
 describe("defaultHarnessAppDirs", () => {
-  it("does not guess where the desktop app lives on Windows", () => {
-    // Windows 的桌面版不是 `.app` 结构、包内 dsh 的路径也未核实：给空列表，让上层退回命令行 dsh，
-    // 失败原因说的是「没有找到桌面版，也没有找到 dsh 命令行」，不会指错目录。
-    expect(defaultHarnessAppDirs("win32")).toEqual([]);
-    expect(defaultHarnessAppDirs("darwin")).toContain("/Applications/DeepSeek Harness.app");
+  it("looks for the Windows desktop app where its installer puts it", () => {
+    // Windows 是用户级安装：%LOCALAPPDATA%\Programs\DeepSeek Harness（已实测核实）。
+    // 机器级安装才落在 Program Files，作为兜底一并找。
+    expect(defaultHarnessAppDirs("win32", {
+      LOCALAPPDATA: "C:\\Users\\alice\\AppData\\Local",
+      ProgramFiles: "C:\\Program Files"
+    } as NodeJS.ProcessEnv)).toEqual([
+      "C:\\Users\\alice\\AppData\\Local\\Programs\\DeepSeek Harness",
+      "C:\\Program Files\\DeepSeek Harness"
+    ]);
+    expect(defaultHarnessAppDirs("win32", { LOCALAPPDATA: "C:\\Users\\alice\\AppData\\Local" } as NodeJS.ProcessEnv))
+      .toHaveLength(1);
+    expect(defaultHarnessAppDirs("darwin", {})).toContain("/Applications/DeepSeek Harness.app");
   });
 });
 

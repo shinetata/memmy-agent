@@ -133,7 +133,8 @@ describe("agent paths", () => {
       platform: "win32",
       homeDirectory: "C:\\Users\\alice",
       environment: {
-        APPDATA: "C:\\Users\\alice\\AppData\\Roaming"
+        APPDATA: "C:\\Users\\alice\\AppData\\Roaming",
+        LOCALAPPDATA: "C:\\Users\\alice\\AppData\\Local"
       }
     } as const;
 
@@ -154,7 +155,8 @@ describe("agent paths", () => {
       codex: "C:\\Users\\alice\\.codex\\sessions",
       opencode: "C:\\Users\\alice\\.local\\share\\opencode\\opencode.db",
       openclaw: "C:\\Users\\alice\\.openclaw",
-      hermes: "C:\\Users\\alice\\.hermes",
+      // Hermes 的官方 Windows 安装器用 %LOCALAPPDATA%\\hermes，不是 ~/.hermes。
+      hermes: "C:\\Users\\alice\\AppData\\Local\\hermes",
       deepseekHarness: "C:\\Users\\alice\\.dsh\\sessions",
       pi: "C:\\Users\\alice\\.pi\\agent\\sessions",
       qwenwork: "C:\\Users\\alice\\.qwenworkcn\\projects",
@@ -176,5 +178,56 @@ describe("agent paths", () => {
       homeDirectory: "C:\\Users\\alice",
       environment: {}
     }).userDirectory).toBe("C:\\Users\\alice\\AppData\\Roaming\\Cursor\\User");
+  });
+});
+
+describe("Hermes 主目录的前向兼容", () => {
+  const legacy = "C:\\Users\\alice\\.hermes";
+  const current = "C:\\Users\\alice\\AppData\\Local\\hermes";
+  const options = (taken: readonly string[]) => ({
+    platform: "win32" as const,
+    homeDirectory: "C:\\Users\\alice",
+    environment: { LOCALAPPDATA: "C:\\Users\\alice\\AppData\\Local" } as NodeJS.ProcessEnv,
+    exists: (path: string) => taken.includes(path)
+  });
+
+  it("uses the official Windows location on a fresh machine", () => {
+    // 两个都不存在时指向新位置：失败原因里给出的就是官方安装器会用的那个目录。
+    expect(resolveHermesHomeDirectory(options([]))).toBe(current);
+    expect(resolveHermesHomeDirectory(options([current]))).toBe(current);
+  });
+
+  it("keeps the legacy ~/.hermes when that is where the components already are", () => {
+    // 升级前 Memmy 把 skill 与 hook 装进 ~/.hermes：新位置没出现时必须沿用旧位置，
+    // 否则这批用户的组件会「失联」，被当成没装而重装一份。
+    expect(resolveHermesHomeDirectory(options([legacy]))).toBe(legacy);
+  });
+
+  it("prefers the official location once it exists on both", () => {
+    // 用户后装了官方 Hermes：真实数据在新位置，就改用它（旧目录里的组件留在那里，无害）。
+    expect(resolveHermesHomeDirectory(options([legacy, current]))).toBe(current);
+  });
+
+  it("still lets HERMES_HOME decide", () => {
+    expect(resolveHermesHomeDirectory({
+      platform: "win32",
+      homeDirectory: "C:\\Users\\alice",
+      environment: {
+        LOCALAPPDATA: "C:\\Users\\alice\\AppData\\Local",
+        HERMES_HOME: "D:\\hermes"
+      } as NodeJS.ProcessEnv,
+      exists: () => true
+    })).toBe("D:\\hermes");
+  });
+
+  it("leaves macOS and Linux on ~/.hermes", () => {
+    for (const platform of ["darwin", "linux"] as const) {
+      expect(resolveHermesHomeDirectory({
+        platform,
+        homeDirectory: "/Users/alice",
+        environment: {} as NodeJS.ProcessEnv,
+        exists: () => false
+      })).toBe(normalize("/Users/alice/.hermes"));
+    }
   });
 });
