@@ -6,7 +6,7 @@
  * 列出它们：剩余时间、由哪个 Agent 执行，可以换用或提前结束；没有授权时什么都不多写。关闭时云端结束她在这个项目里的
  * 限时授权，还在等待的请求以「某某已关闭接收协助请求」结束。
  *
- * 次数限制不做成设置项：同一时间一个、单次最长 15 分钟，由产品内置，在协助请求弹窗里说明。
+ * 次数限制不做成设置项：同一时间一个、单次最长 30 分钟，由产品内置，在协助请求弹窗里说明。
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ChevronDown, Loader2, LifeBuoy } from "lucide-react";

@@ -389,7 +389,7 @@ describe("项目设置弹窗", () => {
     await render();
     expect(document.body.textContent).toContain("接收协助请求");
     expect(document.body.textContent).not.toContain("限时授权");
-    expect(document.body.textContent).not.toContain("单次最长 15 分钟");
+    expect(document.body.textContent).not.toContain("单次最长 30 分钟");
 
     // 打开开关后读一次授权：空的时候什么都不多写。
     await act(async () => switchNamed("接收协助请求")!.click());

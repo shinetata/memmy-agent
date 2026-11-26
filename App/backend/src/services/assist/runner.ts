@@ -29,7 +29,7 @@ export function createAssistRunner(runners: { acp: AssistRunner; memmy: AssistRu
 
 export interface AcpAssistRunnerOptions {
   env?: NodeJS.ProcessEnv;
-  /** 单次请求上限，默认 15 分钟。 */
+  /** 单次请求上限，默认 30 分钟。 */
   timeoutMs?: number;
   /** 本机状态目录，默认 ~/.memmy；适配器也装在这下面。 */
   home?: string;
@@ -49,7 +49,7 @@ interface AssistLaunch {
 }
 
 export function createAcpAssistRunner(options: AcpAssistRunnerOptions = {}): AssistRunner {
-  // 单次执行的上限：没配时按产品内置的 15 分钟，与 Memmy 自己执行那边一致。
+  // 单次执行的上限：没配时按产品内置的 30 分钟，与 Memmy 自己执行那边一致。
   // 并行化之后这条不能少：挂住的请求不会再挡住别人，但它自己必须能结束。
   const timeoutMs = options.timeoutMs ?? ACP_TIMEOUT_MS;
   /**

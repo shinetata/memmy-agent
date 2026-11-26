@@ -149,7 +149,7 @@ describe("authenticate 按需调用", () => {
     const started = Date.now();
     const { error } = await run("auth-hangs", { authTimeoutMs: 300 });
     expect((error as AcpError).kind).toBe("unauthenticated");
-    // 15 分钟的总超时不能先到：登录方法不回应时这里必须自己收尾。
+    // 30 分钟的总超时不能先到：登录方法不回应时这里必须自己收尾。
     expect(Date.now() - started).toBeLessThan(10_000);
   });
 

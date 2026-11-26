@@ -22,7 +22,7 @@ export interface MemmyAssistRunnerOptions {
   localProjectId: (cloudProjectId: string) => Promise<string | null>;
   /** 读进度的间隔，默认 1 秒。 */
   pollIntervalMs?: number;
-  /** 单次请求上限，与外部 Agent 一致，默认 15 分钟。 */
+  /** 单次请求上限，与外部 Agent 一致，默认 30 分钟。 */
   timeoutMs?: number;
 }
 
@@ -104,7 +104,7 @@ export function createMemmyAssistRunner(options: MemmyAssistRunnerOptions): Assi
         while (!isFinished(current.status)) {
           if (Date.now() > deadline) {
             await client.stopAssistRun?.(chatId).catch(() => undefined);
-            throw failWith(new AcpError("执行超过 15 分钟，已停止", "timeout"));
+            throw failWith(new AcpError("执行超过 30 分钟，已停止", "timeout"));
           }
           await sleep(pollMs);
           let next: AssistRunSnapshot | null;

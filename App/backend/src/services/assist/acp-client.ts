@@ -38,7 +38,7 @@ export interface AcpRunOptions {
   onSession?: (sessionId: string) => void;
   /** 停止执行：杀掉子进程，prompt 以 cancelled 结束。 */
   signal?: AbortSignal;
-  /** 单次请求的最长时间。不传时这一轮没有上限：协助执行由 ./runner 给出默认的 15 分钟。 */
+  /** 单次请求的最长时间。不传时这一轮没有上限：协助执行由 ./runner 给出默认的 30 分钟。 */
   timeoutMs?: number;
   /** Agent 的名字，只用于拼给人看的原因（例如「Cursor 返回错误：…」）；默认「Agent」。 */
   agentName?: string;
@@ -254,8 +254,8 @@ export function stripTrailingStreamNoise(text: string): string {
   return current;
 }
 
-/** 单次请求的上限：单次最长 15 分钟，超时就当作失败并告诉发起方。 */
-export const ACP_TIMEOUT_MS = 15 * 60 * 1000;
+/** 单次请求的上限：单次最长 30 分钟，超时就当作失败并告诉发起方。 */
+export const ACP_TIMEOUT_MS = 30 * 60 * 1000;
 
 /** 需要登录时调 authenticate 的上限：QwenWork 的登录方法会一直不回应，不能跟着一起等。 */
 export const AUTH_TIMEOUT_MS = 15_000;
@@ -540,7 +540,7 @@ export async function runAcpAgent(options: AcpRunOptions): Promise<AcpRunResult>
   });
 
   const timer = options.timeoutMs === undefined ? null : setTimeout(() => {
-    finish(new AcpError("这次执行超过了 15 分钟，已停止", "timeout"));
+    finish(new AcpError("这次执行超过了 30 分钟，已停止", "timeout"));
     child.kill("SIGTERM");
   }, options.timeoutMs);
 

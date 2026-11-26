@@ -167,7 +167,7 @@ describe("成员协助的授权弹窗", () => {
     expect(button("Cursor")).toBeUndefined();
     // 底部只说清执行过程在哪里看、可以随时停：次数与时长属于设置里的规则，不在授权弹窗里重复。
     expect(document.body.textContent).toContain("执行过程会显示在 Memmy 项目的协助里，可以随时停止。");
-    expect(document.body.textContent).not.toContain("单次最长 15 分钟");
+    expect(document.body.textContent).not.toContain("单次最长 30 分钟");
 
     await act(async () => button("允许")?.click());
     expect(onDecided).toHaveBeenCalledWith({ action: "allow", agent: "memmy", scope: "once" });
@@ -1538,7 +1538,7 @@ describe("项目设置的成员协助", () => {
     expect(document.body.textContent).not.toContain("20 次");
     expect(button("结束授权")).toBeTruthy();
     // 次数与时长限制移到协助请求弹窗里说明，设置这一节不再重复。
-    expect(document.body.textContent).not.toContain("单次最长 15 分钟");
+    expect(document.body.textContent).not.toContain("单次最长 30 分钟");
   });
 
   it("限时授权一行：首字头像、成员名、换用下拉与结束授权按钮", async () => {

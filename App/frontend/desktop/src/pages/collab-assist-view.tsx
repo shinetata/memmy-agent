@@ -21,7 +21,7 @@ import grantStyles from "./collab-assist-grant.module.css";
 
 type Translate = (key: MessageKey, values?: Record<string, string>) => string;
 
-/** 限时授权的四档时长（分钟）。不提供永久，也不设 10 分钟：单次执行最长 15 分钟，太短的授权等不到下一次请求。 */
+/** 限时授权的四档时长（分钟）。不提供永久，也不设 10 分钟：单次执行最长 30 分钟，太短的授权等不到下一次请求。 */
 export const ASSIST_GRANT_MINUTES: readonly AssistGrantMinutes[] = [30, 60, 120, 240];
 /** 默认 1 小时。 */
 export const DEFAULT_GRANT_MINUTES: AssistGrantMinutes = 60;
