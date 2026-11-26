@@ -230,7 +230,9 @@ const ProjectTaskSchema = z.object({
   updatedAt: z.string(),
   turnCount: z.number(),
   included: z.boolean(),
-  synced: z.boolean()
+  synced: z.boolean(),
+  // 旧版后端不返回这个字段：没有它时按未归档处理，弹窗照旧列出所有任务。
+  archived: z.boolean().default(false)
 });
 const ProjectTasksResponseSchema = z.object({ tasks: z.array(ProjectTaskSchema) });
 /** 一条 Memmy 任务的共享状态；`started` 是这次排进上传队列的任务数。 */

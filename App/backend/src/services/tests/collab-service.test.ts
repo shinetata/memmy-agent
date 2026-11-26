@@ -906,6 +906,74 @@ describe("collab service", () => {
     expect((await svc.listProjectTasks("p-9")).tasks.every((task) => !task.included)).toBe(true);
   });
 
+  it("leaves archived tasks out of the sync picker and keeps their sharing untouched", async () => {
+    const root = mkdtempSync(join(tmpdir(), "memmy-collab-home-"));
+    roots.push(root);
+    const agentSessions = join(root, "workspace", "sessions");
+    mkdirSync(agentSessions, { recursive: true });
+    for (const id of ["task-a", "task-b"] as const) {
+      writeMemmyTask(agentSessions, id, "local-9", `${id} 的原名字`, [
+        { role: "user", content: "问题", timestamp: "2026-10-22T05:00:00.000Z" },
+        { role: "assistant", content: "回答", timestamp: "2026-10-22T05:00:01.000Z" }
+      ]);
+    }
+    const { fetcher, calls } = fakeFetch({
+      "GET /api/collab/projects": () => ({ code: 0, data: { projects: [{ id: "p-9", name: "Memmy 开发", role: "owner", memberCount: 2, sessionCount: 0, createdAt: null }] } }),
+      "PUT /api/collab/projects/p-9/sessions": (call) => {
+        const upload = (call.body as { sessions: Array<{ sourceSessionId: string }> }).sessions[0]!;
+        return { code: 0, data: { sessions: [{ id: `id-${upload.sourceSessionId}` }] } };
+      },
+      "DELETE /api/collab/projects/p-9/sessions/id-task-a": () => ({ code: 0, data: null }),
+      "DELETE /api/collab/projects/p-9/sessions/id-task-b": () => ({ code: 0, data: null })
+    });
+    const sidebarStatePath = join(root, "webui", "sidebar-state.json");
+    const svc = service(fetcher, { projectsDir: join(root, "projects"), agentSessionsDir: agentSessions, sidebarStatePath });
+    await svc.bindLocalProject("p-9", "local-9");
+
+    // 两条都共享出去，确认归档之前它们都在项目里。
+    await svc.saveProjectTasks("p-9", ["task-a", "task-b"]);
+    await waitForUploads(svc, "p-9");
+    expect(uploadedIds(calls).sort()).toEqual(["task-a", "task-b"]);
+
+    // 侧栏把 task-b 归档、把 task-a 改了名。
+    mkdirSync(join(root, "webui"), { recursive: true });
+    writeFileSync(sidebarStatePath, JSON.stringify({
+      schema_version: 1,
+      pinned_keys: [],
+      archived_keys: ["websocket:task-b"],
+      title_overrides: { "websocket:task-a": "侧栏里的新名字" },
+      tags_by_key: {},
+      collapsed_groups: {},
+      view: { density: "comfortable", show_previews: false, show_timestamps: false, show_archived: false, show_project_archived: false, sort: "updated_desc" },
+      updated_at: null
+    }), "utf8");
+
+    // 弹窗只列侧栏看得见的那条；归档那条照样返回（项目统计要算上它），但带上 archived，标题跟侧栏一致。
+    const listed = (await svc.listProjectTasks("p-9")).tasks;
+    const byId = new Map(listed.map((task) => [task.conversationId, task]));
+    expect(byId.get("task-a")).toMatchObject({ title: "侧栏里的新名字", included: true, synced: true, archived: false });
+    expect(byId.get("task-b")).toMatchObject({ included: true, synced: true, archived: true });
+
+    // 保存时被隐藏的 task-b 不算取消共享：不删云端副本，共享状态照旧。
+    calls.length = 0;
+    await svc.saveProjectTasks("p-9", ["task-a"]);
+    await waitForUploads(svc, "p-9");
+    expect(calls.filter((call) => call.method === "DELETE")).toEqual([]);
+    expect(await svc.getTaskSharing("p-9", "task-b")).toEqual({ shared: true, synced: true });
+
+    // 取消归档之后它又出现在侧栏那一批里，仍然勾着。
+    writeFileSync(sidebarStatePath, JSON.stringify({ archived_keys: [] }), "utf8");
+    const afterUnarchive = (await svc.listProjectTasks("p-9")).tasks;
+    expect(afterUnarchive.map((task) => task.conversationId).sort()).toEqual(["task-a", "task-b"]);
+    expect(afterUnarchive.find((task) => task.conversationId === "task-b"))
+      .toMatchObject({ included: true, synced: true, archived: false });
+
+    // 索引文件坏掉只当没有归档，不影响列任务。
+    writeFileSync(sidebarStatePath, "not json", "utf8");
+    expect((await svc.listProjectTasks("p-9")).tasks).toHaveLength(2);
+    expect((await svc.listProjectTasks("p-9")).tasks.every((task) => task.archived === false)).toBe(true);
+  });
+
   it("keeps an assist result out of a shared task: only the two sides of the assist may see it", async () => {
     const root = mkdtempSync(join(tmpdir(), "memmy-collab-home-"));
     roots.push(root);

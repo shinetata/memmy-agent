@@ -2848,6 +2848,17 @@
   font-size: 12.5px;
 }
 
+/* 没有可同步的任务：可能一条都没建，也可能全都归档了，放在卡片的位置占一行就够了。 */
+.tasksEmpty {
+  margin: 14px 0 0;
+  padding: 18px 20px;
+  border: 1px solid var(--collab-line);
+  border-radius: 14px;
+  color: var(--collab-muted);
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+
 /* 项目成员：复制邀请链接、获得链接者、加入申请与成员行 */
 .inviteButton {
   display: flex;

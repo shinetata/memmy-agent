@@ -347,6 +347,30 @@ describe("项目设置弹窗", () => {
     expect(document.body.textContent).not.toContain(" / ");
   });
 
+  it("归档的任务不进比例：这个数字与弹窗里列出来的那批对得上", async () => {
+    // 21 条里有 18 条归档了；弹窗只列没归档的 3 条，设置里的比例也得是这批。
+    mocks.listProjectTasks.mockResolvedValue([
+      { conversationId: "a", synced: true, archived: false },
+      { conversationId: "b", synced: false, archived: false },
+      { conversationId: "c", synced: false, archived: false },
+      { conversationId: "d", synced: true, archived: true },
+      { conversationId: "e", synced: true, archived: true }
+    ]);
+    await render();
+
+    expect(fieldButton("共享给成员的任务")?.textContent).toContain("1 / 3");
+  });
+
+  it("全都归档时不报比例，与弹窗的空状态一致", async () => {
+    mocks.listProjectTasks.mockResolvedValue([
+      { conversationId: "a", synced: true, archived: true },
+      { conversationId: "b", synced: false, archived: true }
+    ]);
+    await render();
+
+    expect(fieldButton("共享给成员的任务")?.textContent).toContain("暂无");
+  });
+
   it("文件夹只显示末级目录名，完整路径在悬停提示里，整行是「在文件夹中显示」", async () => {
     await render();
 

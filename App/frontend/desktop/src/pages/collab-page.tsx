@@ -2756,8 +2756,10 @@ function ProjectTaskPickerDialog(props: {
     collab.listProjectTasks(project.id)
       .then((listing) => {
         if (cancelled) return;
-        setTasks(listing);
-        setSelected(new Set(listing.filter((task) => task.included).map((task) => task.conversationId)));
+        // 归档的任务侧栏已经收起来了，这里列出同一批；共享名单与项目统计仍按全部任务算。
+        const visible = listing.filter((task) => !task.archived);
+        setTasks(visible);
+        setSelected(new Set(visible.filter((task) => task.included).map((task) => task.conversationId)));
       })
       .catch((cause: unknown) => {
         if (!cancelled) setError(messageOf(cause));
@@ -2821,6 +2823,8 @@ function ProjectTaskPickerDialog(props: {
     >
       {tasks === null ? (
         <p className={styles.loading}>{error ?? t("collab.loading")}</p>
+      ) : tasks.length === 0 ? (
+        <p className={styles.tasksEmpty}>{t("collab.tasks.empty")}</p>
       ) : (
         // One bordered card holds the select-all row and the sessions, so every box sits on the same left edge.
         <div className={styles.tasksCard}>
@@ -3126,7 +3130,10 @@ export function ProjectBoardSettingsDialog(props: {
     props.collab.listProjectTasks(sharedId)
       .then((tasks) => {
         if (cancelled) return;
-        setTaskStats({ synced: tasks.filter((task) => task.synced).length, total: tasks.length });
+        // 只算没有归档的任务：归档的在侧栏里已经收起来了，弹窗也不列它们，
+        // 这个比例要和弹窗里看到的那一批对得上，否则会出现「列 3 条却写着 1 / 21」。
+        const visible = tasks.filter((task) => !task.archived);
+        setTaskStats({ synced: visible.filter((task) => task.synced).length, total: visible.length });
       })
       .catch(() => {
         if (!cancelled) setTaskStats(null);

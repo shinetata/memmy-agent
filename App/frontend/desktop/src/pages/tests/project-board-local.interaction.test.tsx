@@ -243,4 +243,26 @@ describe("project board", () => {
 
     expect(mocks.saveProjectTasks).toHaveBeenCalledWith(CLOUD_PROJECT.id, ["conv-1"]);
   });
+
+  it("lists only the sessions the sidebar still shows when picking what to sync", async () => {
+    // 归档的任务在侧栏里已经收起来了，选择框也要列同一批。
+    mocks.listProjectTasks.mockResolvedValue([
+      { conversationId: "conv-1", title: TASK.title, lastQuestion: TASK.preview, updatedAt: TASK.updatedAt, turnCount: 3, included: true, synced: true, archived: false },
+      { conversationId: "conv-2", title: "已归档的那条任务", lastQuestion: "侧栏里看不到", updatedAt: "2026-10-22T03:00:00.000Z", turnCount: 1, included: true, synced: true, archived: true }
+    ]);
+
+    await renderBoard();
+    await act(async () => iconButton("项目设置").click());
+    await act(async () => document.querySelector<HTMLElement>(".modal-body [role='switch']")!.click());
+    await flush();
+
+    expect(document.body.textContent).toContain("选择要同步的任务");
+    expect(document.body.textContent).toContain(TASK.title);
+    expect(document.body.textContent).not.toContain("已归档的那条任务");
+
+    // 归档任务不在勾选结果里：保存不会改动它的共享（后端据此保持原样）。
+    await act(async () => button("确定").click());
+    await flush();
+    expect(mocks.saveProjectTasks).toHaveBeenCalledWith(CLOUD_PROJECT.id, ["conv-1"]);
+  });
 });

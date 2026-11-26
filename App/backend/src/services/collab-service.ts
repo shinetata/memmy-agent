@@ -144,6 +144,12 @@ export interface CollabServiceOptions {
   projectsDir?: string;
   /** Memmy's own task sessions; ~/.memmy/workspace/sessions by default. */
   agentSessionsDir?: string;
+  /**
+   * 侧栏的状态文件（`webui/sidebar-state.json`）：里面记着哪几条任务被归档、哪几条被改过名。
+   * 归档只是这个人本机的视图，所以它只影响「选择要同步的任务」列哪些，不影响共享。
+   * 默认按 memmy-agent 的数据目录推导。
+   */
+  sidebarStatePath?: string;
   fetcher?: typeof fetch;
   now?: () => Date;
   /** Codex 的状态库目录，用来把关联的 Codex 项目换算成它覆盖的根；默认 ~/.codex。 */
@@ -756,6 +762,11 @@ export interface ProjectTaskSession {
   included: boolean;
   /** Already uploaded at least once. */
   synced: boolean;
+  /**
+   * 侧栏已经归档。归档只是本机视图：这些任务不在「选择要同步的任务」里列出来，
+   * 但共享状态、云端副本与项目的同步统计仍把它们算在内。
+   */
+  archived: boolean;
 }
 
 /** 一条 Memmy 任务在该项目里的共享状态；`synced` 表示云端已经有它的副本。 */
@@ -923,6 +934,7 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
   /** Working directories for online projects that did not choose a folder, next to the project links. */
   const onlineWorkdirRoot = join(dirname(projectsDir), "online-projects");
   const agentSessionsDir = options.agentSessionsDir ?? join(memmyHome, "workspace", "sessions");
+  const sidebarStatePath = options.sidebarStatePath ?? join(resolveAgentDataDir(memmyHome), "webui", "sidebar-state.json");
   const linkBase = (options.linkBaseUrl?.trim() || safeOrigin(options.cloudBaseUrl)).replace(/\/+$/u, "");
   const cloud = createCollabCloudRequest(options);
 
@@ -1338,6 +1350,37 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
   /** The Memmy tasks of the bound project, when this project has one. */
   async function projectTaskSessions(stored: StoredLinks): Promise<LocalAgentSession[]> {
     return stored.localProjectId ? listMemmyTaskSessions(stored.localProjectId) : [];
+  }
+
+  /**
+   * 侧栏里这条任务的样子：是否归档、改成了什么名字。
+   *
+   * <p>归档与重命名只写在这个人本机的 `sidebar-state.json`，不写回会话文件，所以读会话文件的
+   * 「选择要同步的任务」看不到它们；不读这里，弹窗会列出侧栏已经藏起来的任务，标题也还是旧的那个。
+   * 文件缺失、读不动、格式不对都按「没有归档、没有改名」处理：最坏结果是弹窗里多列几条、标题旧一点。</p>
+   */
+  async function readSidebarTaskView(): Promise<{ archived: Set<string>; titles: Map<string, string> }> {
+    const raw = await readFile(sidebarStatePath, "utf8").catch(() => null);
+    if (!raw) return { archived: new Set(), titles: new Map() };
+    let parsed: Record<string, unknown>;
+    try {
+      parsed = record(JSON.parse(raw));
+    } catch {
+      return { archived: new Set(), titles: new Map() };
+    }
+    const conversationIdOf = (key: unknown) => text(key).startsWith("websocket:") ? text(key).slice("websocket:".length) : "";
+    const archived = new Set<string>();
+    for (const key of list(parsed.archived_keys)) {
+      const conversationId = conversationIdOf(key);
+      if (conversationId) archived.add(conversationId);
+    }
+    const titles = new Map<string, string>();
+    for (const [key, value] of Object.entries(record(parsed.title_overrides))) {
+      const conversationId = conversationIdOf(key);
+      const title = text(value).trim();
+      if (conversationId && title) titles.set(conversationId, title);
+    }
+    return { archived, titles };
   }
 
   async function readMemmyTask(conversationId: string): Promise<{ title: string; updatedAt: string; turns: CollabSessionTurn[] }> {
@@ -2227,18 +2270,22 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
       const account = requireAccount();
       const stored = await readLinks(projectId, account.accountId);
       const tasks = await projectTaskSessions(stored);
+      // 归档的任务照样返回，只带上 `archived`：弹窗据此不列它们，而同步统计仍按项目里的全部任务算。
+      const sidebar = await readSidebarTaskView();
       return {
         tasks: [...tasks]
           .sort((left, right) => (right.updatedAt ?? "").localeCompare(left.updatedAt ?? ""))
           .map((task) => ({
             conversationId: task.conversationId,
-            title: task.title,
+            // 侧栏显示的是改过的名字；会话文件里还是原来的第一句。
+            title: sidebar.titles.get(task.conversationId) ?? task.title,
             lastQuestion: task.lastQuestion,
             updatedAt: task.updatedAt,
             turnCount: task.turnCount,
             // 本人开启过共享（含新建时默认开启）、或这一版之前已上传过的任务才算在内；没有记录的不算。
             included: isTaskShared(stored, task.conversationId),
-            synced: Boolean(stored.synced[sessionKey(task)])
+            synced: Boolean(stored.synced[sessionKey(task)]),
+            archived: sidebar.archived.has(task.conversationId)
           }))
       };
     },
@@ -2248,17 +2295,22 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
       return exclusive(async () => {
         const stored = await readLinks(projectId, account.accountId);
         const tasks = await projectTaskSessions(stored);
+        // 归档的任务不出现在弹窗里，勾选结果里也就没有它们：保存时把它们当作「没被改动」，
+        // 既不删云端副本，也不改共享名单——归档是本机视图，改了它不该让别人那边少一条任务。
+        const sidebar = await readSidebarTaskView();
+        const isArchived = (conversationId: string) => sidebar.archived.has(conversationId);
+        const shown = tasks.filter((task) => !isArchived(task.conversationId));
         const keep = new Set(included);
         const onDisk = new Set(tasks.map((task) => task.conversationId));
         // Exclusions for sessions that are gone stay as they were; the ones here follow this selection.
         const nextRemovedSessions = [
-          ...stored.removedSessions.filter((conversationId) => !onDisk.has(conversationId)),
-          ...tasks.filter((task) => !keep.has(task.conversationId)).map((task) => task.conversationId)
+          ...stored.removedSessions.filter((conversationId) => !onDisk.has(conversationId) || isArchived(conversationId)),
+          ...shown.filter((task) => !keep.has(task.conversationId)).map((task) => task.conversationId)
         ];
 
         let removed = 0;
         const listing = createListingReader(projectId);
-        for (const task of tasks) {
+        for (const task of shown) {
           if (keep.has(task.conversationId)) continue;
           const key = sessionKey(task);
           const synced = stored.synced[key];
@@ -2272,8 +2324,10 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
 
         stored.removedSessions = nextRemovedSessions;
         // The selection is the shared list itself: what is checked here is what the project holds.
+        // 归档任务不在勾选结果里，原样留在名单上（原来共享的仍然共享）。
         stored.sharedSessions = tasks
-          .filter((task) => keep.has(task.conversationId))
+          .filter((task) => keep.has(task.conversationId)
+            || (isArchived(task.conversationId) && stored.sharedSessions.includes(task.conversationId)))
           .map((task) => task.conversationId);
         // Saved before any upload, so closing the board or the app never loses the choice.
         const pending = sessionsToUpload(stored, tasks);
@@ -2955,6 +3009,18 @@ interface MemmySessionRecords {
   workspacePath: string | null;
   updatedAt: string;
   turns: CollabSessionTurn[];
+}
+
+/**
+ * memmy-agent 的数据目录，与它的 `getDataDir()` 用同一套环境变量：显式指定的数据目录、配置文件的目录，
+ * 最后才是 Memmy 的主目录（`~/.memmy`）。侧栏状态与它自己的会话文件都在这个目录下。
+ */
+function resolveAgentDataDir(memmyHome: string): string {
+  const explicit = process.env.MEMMY_AGENT_DATA_DIR?.trim();
+  if (explicit) return explicit;
+  const configPath = process.env.MEMMY_CONFIG?.trim();
+  if (configPath) return dirname(configPath);
+  return memmyHome;
 }
 
 export function isAssistResult(content: string): boolean {
