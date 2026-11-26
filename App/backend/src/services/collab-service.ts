@@ -75,10 +75,11 @@ async function locateWithinDeadline(input: Parameters<typeof locateRecordFile>[0
 const READ_MANY_CHUNK = 20;
 const LINKS_FILE = "links.json";
 /**
- * 每名成员在一个项目内最多保留的任务数（云端 `CollabLimits.MAX_SESSIONS_PER_MEMBER`），
- * 新建的 Memmy 任务与关联的 Agent 任务共用。超出这个数量的任务不上传：云端本来就会按最近交互挤掉。
+ * 每名成员在一个项目内可共享的任务数，云端随项目列表下发（`collab.limits.sessions-per-member`）。
+ * 缺省值与云端 CollabLimits 一致，只在旧云端不返回时使用。新建的 Memmy 任务与关联的 Agent 任务共用同一份额度：
+ * 超出后按最近交互自动替换，所以上传时也只取最近交互的这么多条，更早的传上去同样会被云端清理掉。
  */
-const SESSIONS_PER_MEMBER = 20;
+const DEFAULT_SESSIONS_PER_MEMBER = 100;
 /** Matches the cloud limits so an upload is never rejected for size. */
 const MAX_UPLOAD_TURNS = 300;
 const MAX_QUESTION_CHARS = 4_000;
@@ -1013,6 +1014,15 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
   /** Upload progress per project, kept in memory: the board polls it while sessions arrive. */
   const syncProgress = new Map<string, CollabSyncProgress>();
 
+  /** 每名成员在一个项目内可共享的任务数，云端随项目列表下发；旧云端不返回时用缺省值。 */
+  let sessionsPerMember = DEFAULT_SESSIONS_PER_MEMBER;
+
+  /** 记下云端下发的额度；旧云端不带这个字段时沿用上一次的值，不影响上传继续跑。 */
+  function noteSessionsPerMember(data: Record<string, unknown>): void {
+    const value = data.sessionsPerMember;
+    if (typeof value === "number" && Number.isFinite(value) && value >= 1) sessionsPerMember = Math.floor(value);
+  }
+
   function reportProgress(projectId: string, patch: Partial<CollabSyncProgress>): void {
     const current = syncProgress.get(projectId) ?? { running: false, total: 0, completed: 0, failed: 0 };
     syncProgress.set(projectId, { ...current, ...patch });
@@ -1104,7 +1114,7 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
   }
 
   /**
-   * 要上传的任务：在本项目范围内、且首次上传或内容变了的那几条。只取最近交互的前 20 条，
+   * 要上传的任务：在本项目范围内、且首次上传或内容变了的那几条。只取最近交互的前 N 条（N 为云端下发的额度），
    * 更早的传上去也会被云端清理掉。Memmy 自己的任务还要本人开启共享，未开启的只留在本机。
    */
   function sessionsToUpload(stored: StoredLinks, local: readonly LocalAgentSession[]): LocalAgentSession[] {
@@ -1115,7 +1125,7 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
     return inScope
       // 存档里的会话也在内：上传前会按需解压读出正文（见 local-session-reader 的存档读取）。
       .sort((left, right) => (Date.parse(right.updatedAt) || 0) - (Date.parse(left.updatedAt) || 0))
-      .slice(0, SESSIONS_PER_MEMBER)
+      .slice(0, sessionsPerMember)
       .filter((session) => {
         const synced = stored.synced[sessionKey(session)];
         // A retitled session needs a new upload even when its turns did not change: the board shows the title.
@@ -1653,6 +1663,7 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
     if (!projects.length) return projects;
     const data = await cloud("/projects").catch(() => null);
     if (!data) return projects;
+    noteSessionsPerMember(record(data));
     const joined = new Set(list(data.projects).map((project) => text(record(project).id)));
     const kept: StoredLinks[] = [];
     for (const stored of projects) {
@@ -2026,6 +2037,8 @@ export function createCollabService(options: CollabServiceOptions): CollabServic
     async listProjects() {
       const account = requireAccount();
       const data = await cloud("/projects");
+      // 额度随项目列表一起下发：每次列项目都记一下，不必等到下一次全量同步。
+      noteSessionsPerMember(record(data));
       const projects = list(data.projects).map(toProject);
       // Each project's local working project is recorded on this computer, next to its session links.
       const bound = await Promise.all(projects.map(async (project) => {

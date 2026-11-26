@@ -505,11 +505,11 @@ describe("collab service", () => {
     await expect(service(fetcher).removeSession("p-1", "other")).rejects.toMatchObject({ code: "memory_layer_unavailable" });
   });
 
-  it("uploads only the most recent 20 sessions of what the person associated", async () => {
-    // 云端每人每项目只保留 20 个：更早的任务不上传，省掉传完再被删的往返。
+  it("uploads only the most recent sessions within the member quota", async () => {
+    // 每名成员每项目有一个额度（云端缺省 100）：更早的任务不上传，省掉传完再被删的往返。
     const start = Date.UTC(2026, 9, 22, 10, 0, 0);
-    const local = Array.from({ length: 25 }, (_, index) => localSession(
-      "codex", `c-${String(index).padStart(2, "0")}`, null, new Date(start - index * 60_000).toISOString()));
+    const local = Array.from({ length: 105 }, (_, index) => localSession(
+      "codex", `c-${String(index).padStart(3, "0")}`, null, new Date(start - index * 60_000).toISOString()));
     const { fetcher, calls } = linkFetch(local);
     const svc = service(fetcher);
 
@@ -517,13 +517,13 @@ describe("collab service", () => {
       groups: [],
       sessions: local.map((session) => ({ sourceId: session.sourceId, conversationId: session.conversationId }))
     });
-    expect(saved.started).toBe(20);
+    expect(saved.started).toBe(100);
     await waitForUploads(svc, "p-1");
 
     const uploaded = uploadedIds(calls);
-    expect(uploaded).toHaveLength(20);
-    expect(uploaded).toContain("c-00");
-    expect(uploaded).not.toContain("c-24");
+    expect(uploaded).toHaveLength(100);
+    expect(uploaded).toContain("c-000");
+    expect(uploaded).not.toContain("c-104");
   });
 
   it("pages a project's sessions ten at a time, counting every match", async () => {
