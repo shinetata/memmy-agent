@@ -70,6 +70,17 @@ describe("local session groups", () => {
     });
   });
 
+  it("matches a Windows long-path session against a plainly recorded project root", () => {
+    // Codex 桌面端给自己新建的项目目录会以 `\\?\C:\…` 记进索引的 cwd，项目登记的根是 `C:\…`。
+    const projects = [{ id: "p-test", name: "测试", roots: ["C:\\Users\\sunq\\Documents\\ChatGPT\\测试"] }];
+    expect(codexProjectGroup(projects, "\\\\?\\C:\\Users\\sunq\\Documents\\ChatGPT\\测试")).toEqual({ id: "p-test", label: "测试", path: null });
+    expect(codexProjectGroup(projects, "\\\\?\\C:\\Users\\sunq\\Documents\\ChatGPT\\测试\\src")).toMatchObject({ id: "p-test" });
+    // UNC 的长路径写法同样要归到 \\server\share 这个根上。
+    expect(codexProjectGroup([{ id: "p-share", name: "share", roots: ["\\\\server\\share\\proj"] }], "\\\\?\\UNC\\server\\share\\proj")).toMatchObject({ id: "p-share" });
+    // 分组 id 与展示的路径都不该带前缀。
+    expect(directoryGroup("\\\\?\\C:\\work\\MemOS_Product")).toMatchObject({ id: "C:\\work\\MemOS_Product" });
+  });
+
   it("ranks Windows sessions ran in the asking directory first", () => {
     const session = { workspacePath: "C:\\work\\MemOS_Product\\docs", conversationId: "c-1" } as LocalSession;
     expect(isSameWorkspace(session, "C:\\work\\MemOS_Product\\")).toBe(true);

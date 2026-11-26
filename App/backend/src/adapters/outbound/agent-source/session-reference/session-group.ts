@@ -32,14 +32,25 @@ const WORKBUDDY_PLAYGROUND = /\/WorkBuddy\/\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-\d{2}\/
 /**
  * 这些路径都来自本机存储，Windows 上是反斜杠：判断层级、取末段前统一成 `/` 再比，
  * 同一段逻辑两个平台都对，也不必按平台分岔。
+ *
+ * <p>Windows 还有一种写法：Rust 侧 `canonicalize` 出来的长路径前缀 `\\?\C:\…`，以及 UNC 的
+ * `\\?\UNC\server\share`。Codex 桌面端给自己新建的项目目录就是按这种形式记进索引的，而项目登记的根是
+ * `C:\…`；前缀不去掉，`\\?\C:\x\y` 与 `C:\x\y` 永远比不出包含关系，会话就会掉进「不在项目中的对话」。</p>
  */
 function withForwardSlashes(path: string): string {
-  return trimSeparators(path).replace(/\\/gu, "/");
+  return withoutExtendedPrefix(trimSeparators(path).replace(/\\/gu, "/"));
+}
+
+/** 去掉 Windows 的长路径前缀：`\\?\C:\…` → `C:\…`，`\\?\UNC\server\share` → `\\server\share`；分隔符风格保持原样。 */
+function withoutExtendedPrefix(path: string): string {
+  const unc = /^([/\\])\1\?[/\\]unc[/\\]/iu.exec(path);
+  if (unc) return `${unc[1]}${unc[1]}${path.slice(unc[0].length)}`;
+  return path.replace(/^[/\\]{2}\?[/\\](?=[a-zA-Z]:[/\\])/u, "");
 }
 
 /** 去掉尾部分隔符；末尾是反斜杠时同样要去掉，否则同一个目录会得到两个不同的 id。 */
 export function trimSeparators(path: string): string {
-  return path.replace(/[/\\]+$/u, "");
+  return withoutExtendedPrefix(path.replace(/[/\\]+$/u, ""));
 }
 
 /** 末级目录名（或文件名）。 */
