@@ -1233,7 +1233,7 @@ function Preview() {
     );
   }
 
-  // dialog-other：她上次给这位成员选的是第二层里的 Codex，打开时第二层自动展开并选中它。
+  // dialog-other：上次为该成员使用的 Codex 显示在选择器里。
   const dialogClient = view === "dialog-other" ? fakeClient({ defaultAgent: "codex" }) : client;
   // dialog-waited：她上线时请求已经等了 18 小时，弹窗写明多久前发起。
   const shownItem = view === "dialog-waited" ? { ...inboxItem, waitingSeconds: 18 * 3600 + 120 } : inboxItem;

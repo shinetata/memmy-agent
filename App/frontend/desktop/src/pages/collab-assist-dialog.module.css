@@ -1,325 +1,395 @@
-/*
- * 成员协助的授权弹窗：谁在请求、要做的事、由哪个 Agent 执行、允许到什么程度。
- * 尺寸与间距照着原型（520px 弹窗、28px 内边距、两列 Agent 选项）来。
- */
-
 :global(.modal).dialog {
   display: flex;
   flex-direction: column;
-  width: min(520px, calc(100vw - 32px));
-  /* 内容比窗口高时（Agent 多、窗口矮）弹窗不超出窗口：正文单独滚动，底部「拒绝 / 允许」始终可见。
-     减去遮罩的上下内边距；Windows 上遮罩从标题栏下方开始，再减一个工具栏高度。 */
+  width: min(700px, calc(100vw - 32px));
+  max-height: calc(100dvh - 48px);
+  border: 1px solid #e0ebe7;
+  border-radius: 19px;
+  box-shadow: 0 27px 70px #102b2642, 0 4px 14px #132d2412;
+}
+
+:global(body.memmy-platform-windows) .dialog {
   max-height: calc(100dvh - 48px - var(--codex-toolbar-height, 0px));
 }
 
-.body {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-}
-
-.footer {
-  flex: 0 0 auto;
-  border-top: 1px solid color-mix(in srgb, var(--color-border-stone, #cce0db) 35%, transparent);
-}
-
-/* 与看板其它弹窗一致：一层浅遮罩，不做整窗模糊。 */
 :global(.modal-backdrop).backdrop {
-  background: rgba(17, 29, 28, 0.12);
+  padding-inline: 16px;
+  background: #243e3740;
   backdrop-filter: none;
-  -webkit-backdrop-filter: none;
 }
 
-/* 新手引导期间：弹窗的遮罩让给引导的蒙版，避免两层暗色叠在一起。 */
 :global(.modal-backdrop).backdropYield {
   background: transparent;
 }
 
-.top {
-  padding: 16px 28px 4px;
-  text-align: center;
+.body:global(.modal-body) {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 0;
+  min-height: 0;
+  padding: 0;
 }
 
-.mascot {
-  margin: 0 auto 2px;
-  display: block;
+.header {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 12px;
+  padding: 21px 26px 18px;
 }
 
-.title {
-  margin: 0;
+.avatar {
+  display: grid;
+  flex: none;
+  width: 40px;
+  height: 40px;
+  place-items: center;
+  border-radius: 13px;
+  background: #e6f4ef;
+  color: #356858;
   font-size: 17px;
-  font-weight: 700;
-  color: var(--color-text-ink, #111d1c);
+  font-weight: 650;
+}
+
+.requester {
+  min-width: 0;
+}
+
+.requester h2 {
+  margin: 0;
+  color: var(--color-text-ink);
+  font-size: 14px;
+  font-weight: 650;
+  line-height: 1.45;
+}
+
+.requester p {
+  margin: 3px 0 0;
+  color: #526562;
+  font-size: 12px;
+}
+
+.close {
+  display: grid;
+  flex: none;
+  align-self: flex-start;
+  width: 30px;
+  height: 30px;
+  margin: -3px -6px 0 auto;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #61736d;
+  cursor: pointer;
+}
+
+.close:hover:not(:disabled) {
+  background: #f0f4f2;
+}
+
+.review {
+  display: flex;
+  flex: none;
+  align-items: flex-start;
+  gap: 9px;
+  max-height: min(112px, 22dvh);
+  margin: 0 26px 12px;
+  overflow: auto;
+  padding: 11px 12px;
+  border: 1px solid #eeddb8;
+  border-radius: 10px;
+  background: #fff8e9;
+  color: #744a19;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.review svg {
+  flex: none;
+  margin-top: 1px;
+}
+
+.scroll {
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-color: #c4d6cf transparent;
+  padding: 0 26px 22px;
+}
+
+.request {
+  padding: 20px 21px 16px;
+  border: 1px solid #dfede8;
+  border-radius: 14px;
+  background: #f5faf8;
+}
+
+.request h3 {
+  margin: 0 0 12px;
+  color: var(--color-text-ink);
+  font-size: clamp(19px, 4.5vw, 25px);
+  font-weight: 680;
+  line-height: 1.3;
+  white-space: pre-wrap;
+}
+
+.request ol {
+  margin-block: 0;
+  color: #3d514b;
+  font-size: 14px;
+  line-height: 1.65;
+}
+
+.request li::marker {
+  color: #538374;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.request:has(.details) {
+  padding-bottom: 0;
+}
+
+.details {
+  margin-top: 16px;
+  border-top: 1px solid #e1ebe7;
+}
+
+.details summary {
+  display: flex;
+  width: fit-content;
+  min-height: 42px;
+  align-items: center;
+  gap: 7px;
+  color: #3e6459;
+  font-size: 12px;
+  font-weight: 400;
+  list-style: none;
+  cursor: pointer;
+}
+
+.details summary::-webkit-details-marker {
+  display: none;
+}
+
+.details[open] summary > svg {
+  transform: rotate(180deg);
+}
+
+.attachmentCount {
+  color: #526562;
+  font-weight: 500;
+}
+
+.detailsBody {
+  display: grid;
+  gap: 10px;
+  padding-bottom: 14px;
+  color: #526562;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.detailsBody p {
+  margin: 0;
+  white-space: pre-wrap;
+}
+
+.settings {
+  display: grid;
+  grid-template-columns: minmax(0, .9fr) minmax(0, 1.1fr);
+  align-items: start;
+  gap: 13px 18px;
+  margin-top: 21px;
+}
+
+.fieldLabel {
+  display: block;
+  color: var(--color-text-ink);
+  font-size: 13px;
+  font-weight: 650;
   line-height: 1.4;
 }
 
-/* 执行方检查结论：标题下的一行，左对齐，不加底色与边框，只有一枚提示图标。 */
-.review {
-  display: flex;
-  align-items: flex-start;
-  gap: 6px;
-  margin: 8px 0 0;
-  font-size: 13px;
-  line-height: 1.6;
-  color: var(--color-text-ink, #111d1c);
-  text-align: left;
+.selectButton:global(.select-control__button) {
+  anchor-name: --assist-agent;
+  min-height: 42px;
+  padding: 0 32px 0 10px;
+  border-color: #d7e5df;
+  border-radius: 9px;
+  background: var(--color-background-paper);
+  font-weight: 590;
 }
 
-.reviewIcon {
-  flex: none;
-  margin-top: 2px;
-  color: var(--color-warning);
+.selectButton:global(.select-control__button):is(:hover, [aria-expanded="true"]):not(:disabled) {
+  border-color: #a2c4b9;
 }
 
-/* 背景：单独成块，左侧一道竖线，紧接标题（标题居中，背景左对齐）。
- * 「背景」是行内标签而不是左栏：正文换行后回到左边缘，不会整段缩进到标签右侧。 */
-.reason {
-  margin: 12px 0 0;
-  padding: 6px 10px;
-  border-left: 2px solid color-mix(in srgb, var(--color-action-sky, #5cbfae) 55%, transparent);
-  border-radius: 0 8px 8px 0;
-  background: color-mix(in srgb, var(--color-canvas-oat, #f3f8f7) 55%, transparent);
-  font-size: 12.5px;
-  color: color-mix(in srgb, var(--color-text-ink, #111d1c) 82%, transparent);
-  line-height: 1.7;
-  text-align: left;
-  /* 背景可以是多行：保留发起方写的换行。 */
-  white-space: pre-wrap;
+.selectButton:global(.select-control__button):focus-visible {
+  outline: 2px solid #287b68;
+  outline-offset: 2px;
 }
 
-.reasonKey {
-  margin-right: 8px;
-  font-size: 12px;
-  color: color-mix(in srgb, var(--color-text-ink, #111d1c) 50%, transparent);
+.selectMenu:global(.select-control__menu) {
+  position: fixed;
+  position-anchor: --assist-agent;
+  position-try-fallbacks: --assist-agent-menu-above;
+  position-visibility: anchors-visible;
+  inset: auto;
+  top: calc(anchor(bottom) + 6px);
+  left: anchor(left);
+  width: anchor-size(width);
+  max-height: min(212px, 45dvh);
+  padding: 5px;
+  overscroll-behavior: contain;
+  border-color: #dbe8e3;
+  border-radius: 11px;
+  box-shadow: 0 10px 30px #183c3229, 0 2px 6px #183c3212;
 }
 
-.sect {
-  margin: 10px 28px 0;
+@position-try --assist-agent-menu-above {
+  top: auto;
+  bottom: calc(anchor(top) + 6px);
 }
 
-.sectKey {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-bottom: 6px;
-  font-size: 12px;
-  color: color-mix(in srgb, var(--color-text-ink, #111d1c) 50%, transparent);
-}
-
-.todo {
-  padding: 8px 14px;
-  border-radius: 12px;
-  background: color-mix(in srgb, var(--color-canvas-oat, #f3f8f7) 55%, transparent);
-  border: 1px solid color-mix(in srgb, var(--color-border-stone, #cce0db) 30%, transparent);
-  font-size: 13px;
-  line-height: 1.7;
-  color: color-mix(in srgb, var(--color-text-ink, #111d1c) 80%, transparent);
-}
-
-.todo ol {
-  margin: 0;
-  padding-left: 18px;
-  list-style: decimal;
-}
-
-/* 这次排查的一句话标题：加粗、可与正文同色，多行时保留发起方写的换行。 */
-.todoTitle {
-  margin: 0 0 6px;
-  font-weight: 600;
-  color: color-mix(in srgb, var(--color-text-ink, #111d1c) 80%, transparent);
-  white-space: pre-wrap;
-}
-
-/* 执行方：两列，与原型一致；已关联的 Agent 各占一格。 */
-.agents {
+.selectMenu :global(.select-control__options) {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 6px;
+  gap: 2px;
 }
 
-.agent {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  padding: 8px 10px;
-  border: 1px solid color-mix(in srgb, var(--color-border-stone, #cce0db) 60%, transparent);
-  border-radius: 10px;
-  background: var(--color-background-paper, #fff);
-  cursor: pointer;
-  font-size: 13px;
-  text-align: left;
+.selectMenu :global(.select-control__option) {
+  min-height: 38px;
 }
 
-.agent:hover {
-  background: #f8fbfa;
+.selectMenu :global(.select-control__option--selected),
+.selectMenu :global(.select-control__option--selected):hover:not(:disabled) {
+  background: #eaf7f2;
+  color: #196553;
+  font-weight: 650;
 }
 
-.agentOn {
-  border-color: var(--color-action-sky, #5cbfae);
-  background: color-mix(in srgb, var(--color-action-sky, #5cbfae) 7%, white);
-  box-shadow: inset 0 0 0 1px var(--color-action-sky, #5cbfae);
+.selectMenu :global(.select-control__option-check) {
+  color: currentColor;
 }
 
-.radio {
-  position: relative;
-  width: 16px;
-  height: 16px;
-  flex: none;
-  border-radius: 50%;
-  border: 1.5px solid #b9cbc7;
-  background: #fff;
-}
-
-.agentOn .radio,
-.optOn .radio {
-  border-color: var(--color-action-sky, #5cbfae);
-}
-
-.agentOn .radio::after,
-.optOn .radio::after {
-  content: "";
-  position: absolute;
-  inset: 3px;
-  border-radius: 50%;
-  background: var(--color-action-sky, #5cbfae);
+.agentLogo, .agentMark {
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
 }
 
 .agentLogo {
-  width: 22px;
-  height: 22px;
-  flex: none;
-  border-radius: 6px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  overflow: hidden;
-  background: #fff;
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-border-stone, #cce0db) 70%, transparent);
-}
-
-.agentLogo img {
-  width: 15px;
-  height: 15px;
-  /* 标志按比例缩进方块：个别 Agent 的图不是方的，写死宽高会被压扁。 */
   object-fit: contain;
 }
 
 .agentMark {
+  display: grid;
+  place-items: center;
+  background: #e6f4ef;
+  color: #356858;
   font-size: 11px;
   font-weight: 700;
-  color: color-mix(in srgb, var(--color-text-ink, #111d1c) 60%, transparent);
 }
 
-.agentName {
-  flex: 1;
-  font-weight: 600;
-  color: color-mix(in srgb, var(--color-text-ink, #111d1c) 80%, transparent);
-}
-
-.listNote {
+.scopes {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 3px;
+  min-height: 42px;
   margin-top: 7px;
-  font-size: 11.5px;
-  color: color-mix(in srgb, var(--color-text-ink, #111d1c) 50%, transparent);
-  line-height: 1.6;
-}
-
-/* 允许方式：两档，默认「仅这一次」；选了「一段时间内直接执行」时，时长在这一项里面展开。 */
-.opt {
-  margin-bottom: 8px;
-  border-radius: 12px;
-  border: 1px solid color-mix(in srgb, var(--color-border-stone, #cce0db) 50%, transparent);
-  background: #fff;
-}
-
-.optHead {
-  display: flex;
-  gap: 10px;
-  width: 100%;
-  padding: 9px 14px;
-  border: 0;
-  border-radius: 12px;
-  background: transparent;
-  cursor: pointer;
-  text-align: left;
-}
-
-.optExtra {
-  padding: 0 14px 11px 40px;
-}
-
-.optOn {
-  border-color: var(--color-action-sky, #5cbfae);
-  background: color-mix(in srgb, var(--color-action-sky, #5cbfae) 6%, white);
-}
-
-.opt .radio {
-  margin-top: 2px;
-}
-
-/* 第二层执行方默认收起：一行「使用其他 Agent（N）」，展开后与第一层同样可选。 */
-.moreToggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  margin-top: 8px;
-  padding: 2px 0;
-  border: 0;
-  background: transparent;
-  font-size: 12px;
-  color: color-mix(in srgb, var(--color-text-ink, #111d1c) 58%, transparent);
-  cursor: pointer;
-}
-
-.moreToggle:hover {
-  color: var(--color-action-sky-hover, #3aa893);
-}
-
-.moreToggle + .agents {
-  margin-top: 6px;
-}
-
-.optBody {
-  flex: 1;
-}
-
-.optTitle {
-  display: block;
-  font-size: 13.5px;
-  font-weight: 600;
-  color: var(--color-text-ink, #111d1c);
-}
-
-.optDesc {
-  display: block;
-  margin-top: 3px;
-  font-size: 12px;
-  color: color-mix(in srgb, var(--color-text-ink, #111d1c) 50%, transparent);
-  line-height: 1.65;
-}
-
-.notice {
-  margin: 10px 28px 0;
-  padding: 8px 12px;
+  padding: 3px;
+  border: 1px solid #e0eae6;
   border-radius: 9px;
-  background: #f6f8f8;
-  font-size: 11.5px;
-  color: color-mix(in srgb, var(--color-text-ink, #111d1c) 50%, transparent);
-  line-height: 1.65;
+  background: #f1f5f3;
+}
+
+.scopes label {
+  position: relative;
+  display: flex;
+  min-width: 0;
+}
+
+.scopes input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  opacity: 0;
+}
+
+.scopes span {
+  display: grid;
+  flex: 1;
+  place-items: center;
+  padding: 4px 6px;
+  border-radius: 6px;
+  color: #526562;
+  font-size: 13px;
+  font-weight: 400;
+  text-align: center;
+  cursor: pointer;
+}
+
+.scopes input:checked + span {
+  background: var(--color-background-paper);
+  box-shadow: 0 1px 3px #1b372719, 0 0 0 1px #dce9e3;
+  color: #196553;
+}
+
+.scopes input:focus-visible + span {
+  outline: 2px solid #287b68;
+  outline-offset: -1px;
+}
+
+.scopes input:disabled + span {
+  cursor: default;
+}
+
+.timed {
+  grid-column: 1 / -1;
+  padding: 12px 14px;
+  border: 1px solid #e1ebe6;
+  border-radius: 10px;
+  background: #f7faf8;
+}
+
+.duration {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 13px;
+  color: var(--color-text-ink);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.timed p {
+  margin: 9px 0 0;
+  color: #526562;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.footer:global(.modal-footer) {
+  flex: none;
+  justify-content: flex-end;
+  padding: 0 26px 20px;
 }
 
 .error {
-  margin: 8px 28px 0;
+  margin: 10px 0 0;
+  color: var(--color-status-error);
   font-size: 12px;
-  color: var(--color-status-error, #f87b8e);
 }
 
-.actions {
-  display: flex;
-  gap: 12px;
-  width: 100%;
-}
-
-.actions > * {
-  flex: 1;
+@media (max-width: 560px) {
+  .header { padding: 16px; }
+  .review { margin-inline: 16px; }
+  .scroll { padding: 0 16px 17px; }
+  .request { padding: 15px 14px 12px; }
+  .settings { grid-template-columns: minmax(0, 1fr); margin-top: 15px; }
+  .footer:global(.modal-footer) { padding: 0 16px 14px; }
 }

@@ -44,6 +44,7 @@ export function Select(props: SelectProps) {
   const listboxId = `${controlId}-listbox`;
   const labelId = `${controlId}-label`;
   const rootRef = useRef<HTMLDivElement | null>(null);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
   const [open, setOpen] = useState(false);
   const [activeValue, setActiveValue] = useState(props.value);
@@ -74,6 +75,18 @@ export function Select(props: SelectProps) {
     return () => document.removeEventListener("mousedown", closeOnOutsideClick);
   }, [enabledOptions, open, props.value]);
 
+  useEffect(() => {
+    const menu = menuRef.current;
+    const option = menu?.querySelector(".select-control__option--active");
+    if (!menu || !option || menu.scrollHeight <= menu.clientHeight) return;
+
+    const menuTop = menu.getBoundingClientRect().top + menu.clientTop;
+    const menuBottom = menuTop + menu.clientHeight;
+    const bounds = option.getBoundingClientRect();
+    if (bounds.top < menuTop) menu.scrollTop += bounds.top - menuTop;
+    else if (bounds.bottom > menuBottom) menu.scrollTop += bounds.bottom - menuBottom;
+  }, [open, activeValue]);
+
   function showOptionAside(option: SelectOption, element: HTMLButtonElement) {
     const menuTop = menuRef.current?.getBoundingClientRect().top ?? 0;
     setHoveredTop(element.getBoundingClientRect().top - menuTop);
@@ -100,6 +113,7 @@ export function Select(props: SelectProps) {
 
     props.onValueChange(nextValue);
     setOpen(false);
+    triggerRef.current?.focus({ preventScroll: true });
   }
 
   function handleKeyDown(event: KeyboardEvent<HTMLButtonElement>) {
@@ -119,12 +133,6 @@ export function Select(props: SelectProps) {
       return;
     }
 
-    if (event.key === "Escape") {
-      event.preventDefault();
-      setOpen(false);
-      return;
-    }
-
     if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
       if (open) {
@@ -141,6 +149,13 @@ export function Select(props: SelectProps) {
     <div
       ref={rootRef}
       className={`select-control select-control--placement-${props.placement ?? "bottom"} ${props.className ?? ""}`}
+      onKeyDown={(event) => {
+        if (event.key !== "Escape" || !open) return;
+        event.preventDefault();
+        event.stopPropagation();
+        setOpen(false);
+        triggerRef.current?.focus({ preventScroll: true });
+      }}
     >
       {props.label && (
         <span id={labelId} className={props.labelClassName ?? "select-control__label"}>
@@ -149,6 +164,7 @@ export function Select(props: SelectProps) {
       )}
       {props.name && <input type="hidden" name={props.name} value={props.value} />}
       <button
+        ref={triggerRef}
         id={controlId}
         type="button"
         className={`select-control__button ${
@@ -156,6 +172,7 @@ export function Select(props: SelectProps) {
         }${props.buttonClassName ?? ""}`}
         role="combobox"
         aria-controls={listboxId}
+        aria-activedescendant={open && activeOption ? `${listboxId}-option-${props.options.indexOf(activeOption)}` : undefined}
         aria-expanded={open}
         aria-haspopup="listbox"
         aria-label={props.ariaLabel}
@@ -182,7 +199,7 @@ export function Select(props: SelectProps) {
           onMouseLeave={() => setHoveredValue(null)}
         >
           <div id={listboxId} className="select-control__options" role="listbox" aria-labelledby={props.label ? labelId : undefined}>
-            {props.options.map((option) => {
+            {props.options.map((option, index) => {
               const showGroupLabel = Boolean(option.groupLabel && option.groupLabel !== previousGroupLabel);
               previousGroupLabel = option.groupLabel;
 
@@ -190,6 +207,7 @@ export function Select(props: SelectProps) {
                 <div key={option.value}>
                   {showGroupLabel && <div className="select-control__group-label">{option.groupLabel}</div>}
                   <button
+                    id={`${listboxId}-option-${index}`}
                     type="button"
                     role="option"
                     aria-selected={option.value === props.value}

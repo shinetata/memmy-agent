@@ -2392,8 +2392,6 @@ export function AppFrame(props: AppFrameProps) {
       <CollabAssistHost
         collab={collabClient}
         enabled={collabEnabled && Boolean(state.account.userId)}
-        // 正开着看板时，那个项目的待处理请求已经显示在看板上，不再计入右下角角标。
-        boardProjectId={boardProjectId}
         onOpenTask={(conversationId) => {
           void openAgentTaskInChat({ memmyAgent: clients?.memmyAgent, dispatch, task: { sessionKey: `websocket:${conversationId}` } });
         }}

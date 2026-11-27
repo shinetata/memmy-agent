@@ -2372,7 +2372,7 @@
 
 /*
  * 页脚三个按钮同一套尺寸：按钮本身不写字号，会继承 16px 正文，和弹窗里 13.5px 的字不是一套；
- * 「加入项目」原本是 sm（30px、12px），和右侧两个差一档。这里统一成 36px 高、14px、600 字重。
+ * 「加入项目」原本是 sm（30px、12px），和右侧两个差一档。这里统一成 36px 高、14px、400 字重。
  * 写成 `:global(.button).xxx` 是为了压过全局 `.button-sm` / `.button-md` 的 min-height 与 padding。
  */
 :global(.button).simpleCreateFooterButton {
@@ -3624,14 +3624,18 @@
   pointer-events: none;
 }
 
-/* 取消与「加入项目」同款：描边按钮，不用主按钮的实底 */
-:global(.modal).simpleCreateModal :global(.modal-footer) :global(.button-ghost) {
-  border: 1px solid var(--collab-line);
+/* 项目相关弹窗的次要操作使用统一的描边按钮。 */
+:global(.modal).simpleCreateModal :global(.modal-footer) :global(.button-ghost),
+:global(.modal-footer) :global(.button-ghost).simpleCreateFooterButton {
+  --footer-button-line: var(--collab-line, color-mix(in srgb, var(--color-border-stone) 80%, transparent));
+  border: 1px solid var(--footer-button-line);
   background: transparent;
-  color: var(--collab-ink);
+  color: var(--collab-ink, var(--color-text-ink));
   box-shadow: none;
 }
 
-:global(.modal).simpleCreateModal :global(.modal-footer) :global(.button-ghost):hover:not(:disabled) {
-  background: color-mix(in srgb, var(--collab-line) 40%, #fff);
+:global(.modal).simpleCreateModal :global(.modal-footer) :global(.button-ghost):hover:not(:disabled),
+:global(.modal-footer) :global(.button-ghost).simpleCreateFooterButton:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--footer-button-line) 40%, #fff);
+  color: var(--collab-ink, var(--color-text-ink));
 }

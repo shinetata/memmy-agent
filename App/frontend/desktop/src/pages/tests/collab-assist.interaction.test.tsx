@@ -12,6 +12,7 @@ import type {
 } from "../../api/collab-client.js";
 import { ApiRequestError } from "../../api/http.js";
 import { consumeAssistFocus, getAssistFocus } from "../../app/collab-assist-focus.js";
+import { requestAssistAuthorization } from "../../app/collab-assist-refresh.js";
 import {
   getDemoGuideState,
   resetDemoGuideStore,
@@ -157,23 +158,21 @@ describe("成员协助的授权弹窗", () => {
       </I18nProvider>
     ));
 
-    // 原型：默认「仅这一次」，之后的请求还会先问她；执行方默认选她给这位成员选过的，没有就是 Memmy。
-    expect(document.body.textContent).toContain("仅这一次");
-    expect(document.body.textContent).toContain("孙起之后的请求还会先问你。");
-    expect(document.body.textContent).toContain("由谁执行");
-    expect(document.body.textContent).toContain("列出的是这台电脑上能运行的 Agent，执行时使用你在该 Agent 中的账号。");
-    // 本项目没用过的 Agent 收起成一行。
-    expect(document.body.textContent).toContain("使用其他 Agent（1）");
-    expect(button("Cursor")).toBeUndefined();
-    // 底部只说清执行过程在哪里看、可以随时停：次数与时长属于设置里的规则，不在授权弹窗里重复。
-    expect(document.body.textContent).toContain("执行过程会显示在 Memmy 项目的协助里，可以随时停止。");
-    expect(document.body.textContent).not.toContain("单次最长 30 分钟");
+    const picker = document.querySelector<HTMLButtonElement>('[role="combobox"]')!;
+    expect(picker.textContent).toBe("Memmy");
+    expect(document.querySelector<HTMLInputElement>('input[type="radio"]:checked')?.parentElement?.textContent).toBe("仅这一次");
+    expect(document.querySelector('[role="listbox"]')).toBeNull();
+    await act(async () => picker.click());
+    expect([...document.querySelectorAll('[role="option"]')].map((option) => option.textContent)).toEqual([
+      "Memmy", "Claude Code", "Cursor"
+    ]);
+    expect(document.querySelector('[role="option"][aria-selected="true"]')?.textContent).toBe("Memmy");
 
-    await act(async () => button("允许")?.click());
+    await act(async () => button("允许这一次")?.click());
     expect(onDecided).toHaveBeenCalledWith({ action: "allow", agent: "memmy", scope: "once" });
   });
 
-  it("选「一段时间内直接执行」时出现时长，默认 1 小时，选好的时长一起交上去", async () => {
+  it("选「限时允许」时出现时长，默认 1 小时，选好的时长一起交上去", async () => {
     const onDecided = vi.fn();
     await act(async () => root.render(
       <I18nProvider language="zh-CN">
@@ -183,18 +182,18 @@ describe("成员协助的授权弹窗", () => {
 
     expect(document.body.textContent).not.toContain("2 小时");
     await act(async () => {
-      [...document.querySelectorAll<HTMLButtonElement>("button")]
-        .find((item) => item.textContent?.includes("一段时间内直接执行"))?.click();
+      [...document.querySelectorAll<HTMLLabelElement>("label")]
+        .find((item) => item.textContent === "限时允许")?.querySelector("input")?.click();
     });
     expect(document.body.textContent).toContain(
-      "孙起在「Memmy 内测反馈」里的后续请求在这段时间内由 Memmy 直接执行，不再询问。到时自动结束，也可以随时在项目设置中结束。"
+      "Memmy 可在这段时间内直接执行孙起在本项目的后续请求。授权到期自动结束，也可在项目设置中提前结束。"
     );
     // 四档时长，默认 1 小时；没有永久，也没有 10 分钟。
     const options = [...document.querySelectorAll<HTMLButtonElement>("[role=radio]")];
     expect(options.map((item) => item.textContent)).toEqual(["30 分钟", "1 小时", "2 小时", "4 小时"]);
     expect(options.find((item) => item.getAttribute("aria-checked") === "true")?.textContent).toBe("1 小时");
     await act(async () => options.find((item) => item.textContent === "2 小时")?.click());
-    await act(async () => button("允许")?.click());
+    await act(async () => button("允许 2 小时")?.click());
 
     expect(onDecided).toHaveBeenCalledWith({ action: "allow", agent: "memmy", scope: "timed", minutes: 120 });
   });
@@ -212,7 +211,7 @@ describe("成员协助的授权弹窗", () => {
     expect(logos.some((src) => src.includes("memmy-rice"))).toBe(false);
   });
 
-  it("默认选中的 Agent 在第二层时自动展开", async () => {
+  it("上次选中的 Agent 直接显示在收起的选择器里", async () => {
     const onDecided = vi.fn();
     const collab = client({
       assistAgents: vi.fn().mockResolvedValue({
@@ -230,8 +229,9 @@ describe("成员协助的授权弹窗", () => {
     ));
 
     expect(collab.assistAgents).toHaveBeenCalledWith("p1", REQUESTER.userId);
-    expect(button("Cursor")?.getAttribute("aria-pressed")).toBe("true");
-    await act(async () => button("允许")?.click());
+    expect(document.querySelector('[role="combobox"]')?.textContent).toBe("Cursor");
+    expect(document.querySelector('[role="listbox"]')).toBeNull();
+    await act(async () => button("允许这一次")?.click());
     expect(onDecided).toHaveBeenCalledWith({ action: "allow", agent: "cursor", scope: "once" });
   });
 
@@ -254,19 +254,20 @@ describe("成员协助的授权弹窗", () => {
     await act(async () => root.render(page(null)));
     await flush();
     expect(document.body.textContent).not.toContain("需要你确认：");
+    await act(async () => document.querySelector<HTMLButtonElement>('[role="combobox"]')?.click());
     await act(async () => button("Claude Code")?.click());
-    expect(button("Claude Code")?.getAttribute("aria-pressed")).toBe("true");
+    expect(document.querySelector('[role="combobox"]')?.textContent).toBe("Claude Code");
 
-    // 宿主下一次轮询把审查结论传进来：原因行出现，她选好的 Agent 与展开状态都不动。
+    // 宿主下一次轮询把审查结论传进来，当前 Agent 选择仍然保留。
     await act(async () => root.render(page({
       executor: { status: "confirm", reason: "附带的脚本会删除下载目录里的文件" }
     })));
 
     expect(document.body.textContent).toContain("需要你确认：附带的脚本会删除下载目录里的文件");
-    expect(button("Claude Code")?.getAttribute("aria-pressed")).toBe("true");
+    expect(document.querySelector('[role="combobox"]')?.textContent).toBe("Claude Code");
     // 没有因为换了一份数据就重新拉一次 Agent 候选、把选择清掉。
     expect(collab.assistAgents).toHaveBeenCalledTimes(1);
-    await act(async () => button("允许")?.click());
+    await act(async () => button("允许这一次")?.click());
     expect(onDecided).toHaveBeenCalledWith({ action: "allow", agent: "claude_code", scope: "once" });
   });
 
@@ -304,7 +305,11 @@ describe("成员协助的授权弹窗", () => {
     expect(document.body.textContent).not.toContain("第四条");
     await act(async () => button("展开其余 2 条")?.click());
     expect(document.body.textContent).toContain("第四条");
-    // 预览展开的是附件原文。
+    // 背景和附件默认折叠，展开后可查看附件原文。
+    const requestDetails = document.querySelector<HTMLDetailsElement>("details")!;
+    expect(requestDetails.open).toBe(false);
+    expect(requestDetails.querySelector("summary")?.textContent).toContain("1 个附件");
+    requestDetails.open = true;
     await act(async () => button("预览")?.click());
     expect(document.body.textContent).toContain("#!/bin/sh");
   });
@@ -1109,7 +1114,7 @@ describe("成员协助的宿主", () => {
     // 收件箱里的待授权请求直接弹出授权弹窗，Memmy 是默认的执行方。
     expect(document.body.textContent).toContain("孙起请求你的电脑协助");
 
-    await act(async () => button("允许")?.click());
+    await act(async () => button("允许这一次")?.click());
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 700));
     });
@@ -1161,7 +1166,7 @@ describe("成员协助的宿主", () => {
         <CollabAssistHost collab={collab} enabled onOpenTask={onOpenTask} onOpenBoard={onOpenBoard} />
       </I18nProvider>
     ));
-    await act(async () => button("允许")?.click());
+    await act(async () => button("允许这一次")?.click());
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 700));
     });
@@ -1212,7 +1217,7 @@ describe("成员协助的宿主", () => {
         <CollabAssistHost collab={collab} enabled onOpenTask={onOpenTask} />
       </I18nProvider>
     ));
-    await act(async () => button("允许")?.click());
+    await act(async () => button("允许这一次")?.click());
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 700));
     });
@@ -1275,30 +1280,24 @@ describe("成员协助的宿主", () => {
     }
   });
 
-  it("does not count requests of the project that is open on the board", async () => {
-    resetCollabProjectsStore();
-    await loadCollabProjects({
-      listProjects: vi.fn().mockResolvedValue({ projects: [{ id: "p1", name: "Memmy 内测反馈", localProjectId: "local-1" }] })
-    } as unknown as CollabClient).catch(() => undefined);
-    // 有生效中的限时授权：不会弹授权弹窗，角标才会出现，正好用来看它是否被排除。
-    const granted = { ...inbox, granted: true, grantAgent: "memmy" as const };
-    const collab = client({ assistInbox: vi.fn().mockResolvedValue({ requests: [granted] }) });
+  it("暂不处理后没有浮动气泡，仍能从项目看板重新打开授权", async () => {
+    const collab = client({ assistInbox: vi.fn().mockResolvedValue({ requests: [inbox] }) });
 
     await act(async () => root.render(
       <I18nProvider language="zh-CN">
-        <CollabAssistHost collab={collab} enabled boardProjectId="local-1" />
+        <CollabAssistHost collab={collab} enabled />
       </I18nProvider>
     ));
+    expect(button("允许这一次")).toBeDefined();
+    await act(async () => document.querySelector<HTMLButtonElement>('button[aria-label="暂不处理"]')?.click());
+    expect(button("允许这一次")).toBeUndefined();
     expect(document.body.textContent).not.toContain("有 1 条协助请求待处理");
 
-    // 不在这个项目的看板上时照旧计入角标。
-    await act(async () => root.render(
-      <I18nProvider language="zh-CN">
-        <CollabAssistHost collab={collab} enabled boardProjectId={null} />
-      </I18nProvider>
-    ));
-    expect(document.body.textContent).toContain("有 1 条协助请求待处理");
-    resetCollabProjectsStore();
+    await act(async () => {
+      expect(await requestAssistAuthorization(inbox.id)).toBe(true);
+    });
+    expect(button("允许这一次")).toBeDefined();
+    expect(collab.decideAssist).not.toHaveBeenCalled();
   });
 
   it("限时授权的请求在审查结论要求确认后弹出授权弹窗", async () => {
@@ -1316,7 +1315,9 @@ describe("成员协助的宿主", () => {
         });
       await act(async () => root.render(
         <I18nProvider language="zh-CN">
-          <CollabAssistHost collab={client({ assistInbox })} enabled />
+          <NotificationCenterProvider>
+            <CollabAssistHost collab={client({ assistInbox })} enabled />
+          </NotificationCenterProvider>
         </I18nProvider>
       ));
       // 结论还没落地：限时授权有效，先不打扰她。
@@ -1328,6 +1329,7 @@ describe("成员协助的宿主", () => {
       // 结论要求她看过：和没有授权的请求一样弹出授权弹窗，原因行一起出来。
       expect(document.body.textContent).toContain("孙起请求你的电脑协助");
       expect(document.body.textContent).toContain("需要你确认：附带的脚本会删除下载目录里的文件");
+      expect(document.querySelector(".memmy-notification-stack")).toBeNull();
     } finally {
       vi.useRealTimers();
     }
@@ -1342,10 +1344,13 @@ describe("成员协助的宿主", () => {
       Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "visible" });
       await act(async () => root.render(
         <I18nProvider language="zh-CN">
-          <CollabAssistHost collab={client({ assistInbox })} enabled />
+          <NotificationCenterProvider>
+            <CollabAssistHost collab={client({ assistInbox })} enabled />
+          </NotificationCenterProvider>
         </I18nProvider>
       ));
       expect(document.body.textContent).toContain("孙起请求你的电脑协助");
+      expect(document.querySelector(".memmy-notification-stack")).toBeNull();
 
       await act(async () => {
         await vi.advanceTimersByTimeAsync(5_000);
@@ -1371,10 +1376,9 @@ describe("成员协助的宿主", () => {
         <CollabAssistHost collab={collab} enabled onOpenBoard={onOpenBoard} />
       </I18nProvider>
     ));
-    await act(async () => {
-      [...document.querySelectorAll<HTMLButtonElement>("button")].find((item) => item.textContent?.includes("Claude Code"))?.click();
-    });
-    await act(async () => button("允许")?.click());
+    await act(async () => document.querySelector<HTMLButtonElement>('[role="combobox"]')?.click());
+    await act(async () => button("Claude Code")?.click());
+    await act(async () => button("允许这一次")?.click());
 
     expect(onOpenBoard).toHaveBeenCalledWith("local-1");
     expect(getAssistFocus()).toEqual({ projectId: "p1", threadId: "t1" });
@@ -1382,11 +1386,11 @@ describe("成员协助的宿主", () => {
     resetCollabProjectsStore();
   });
 
-  it("请求在别处处理掉之后，对应的通知自动收起", async () => {
+  it("后续协助仍提示确认，在别处处理后通知自动收起", async () => {
     vi.useFakeTimers();
     try {
       const assistInbox = vi.fn()
-        .mockResolvedValueOnce({ requests: [{ ...inbox, granted: true, grantAgent: "memmy" }], dailyLimit: 20 })
+        .mockResolvedValueOnce({ requests: [{ ...inbox, status: "confirm", lastAgent: "memmy" }], dailyLimit: 20 })
         .mockResolvedValue({ requests: [], dailyLimit: 20 });
       Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "visible" });
       await act(async () => root.render(
@@ -1396,12 +1400,12 @@ describe("成员协助的宿主", () => {
           </NotificationCenterProvider>
         </I18nProvider>
       ));
-      expect(document.body.textContent).toContain("选择 Agent 并授权");
+      expect(button("查看并确认")).toBeDefined();
 
       await act(async () => {
         await vi.advanceTimersByTimeAsync(5_000);
       });
-      expect(document.body.textContent).not.toContain("选择 Agent 并授权");
+      expect(button("查看并确认")).toBeUndefined();
     } finally {
       vi.useRealTimers();
     }

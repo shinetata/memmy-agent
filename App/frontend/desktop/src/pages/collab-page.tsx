@@ -45,7 +45,7 @@ import {
   demoGuideInvitePending,
   subscribeDemoGuideInvite
 } from "../app/collab-demo-guide-invite.js";
-import { requestAssistInboxRefresh } from "../app/collab-assist-refresh.js";
+import { requestAssistAuthorization, requestAssistInboxRefresh } from "../app/collab-assist-refresh.js";
 import type { MemmyAgentProject } from "../api/memmy-agent-client.js";
 import { openAgentTaskInChat } from "../app/open-agent-task.js";
 import { Memmy } from "../components/mascot/memmy.js";
@@ -1250,10 +1250,16 @@ const CollabBoard = memo(function CollabBoard(props: {
   const allPageSelected = selectableIds.length > 0 && selectableIds.every((id) => selected.has(id));
 
   /**
-   * 点开一行协助：双方先在右侧打开这次协助的完整会话。由 Memmy 执行或发起时，会话底部再给出
-   * 「在 Memmy 中打开任务」或「打开发起的任务」。
+   * 待授权请求优先打开授权弹窗，其余请求在右侧打开协助会话。
    */
   function openAssist(thread: AssistThread) {
+    const latest = thread.requests[0];
+    if (latest && thread.status === "pending" && assistWaitsForMe(thread)) {
+      void requestAssistAuthorization(latest.id).then((opened) => {
+        if (!opened) setAssistDetailId(thread.threadId);
+      });
+      return;
+    }
     setAssistDetailId(thread.threadId);
   }
 

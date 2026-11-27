@@ -12,6 +12,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AssistRequest, AssistThread } from "../../api/collab-client.js";
 import { consumeAssistFocus, getAssistFocus, requestAssistFocus } from "../../app/collab-assist-focus.js";
+import { registerAssistInboxRefresh } from "../../app/collab-assist-refresh.js";
 import { resetDemoGuideStore } from "../../app/collab-demo-guide-store.js";
 import { resetCollabProjectsStore } from "../../app/collab-projects-store.js";
 import { I18nProvider } from "../../i18n/i18n-provider.js";
@@ -213,10 +214,25 @@ describe("assists on the project board", () => {
     const banner = document.querySelector("[data-collab-assist-waiting]");
     expect(banner?.textContent).toContain("孙起请你协助「看一下 ~/.memmy 的大小」，等你处理");
 
-    // 只有一条时「去处理」直接展开这一条，不再换页。
+    // 授权宿主不可用时，「去处理」仍可展开请求详情。
     clickText("去处理");
     await flush();
     expect(document.querySelector("[data-collab-assist-conversation]")?.textContent).toContain("看一下 ~/.memmy 的大小");
+  });
+
+  it("reopens authorization for a pending request from the board", async () => {
+    const openAuthorization = vi.fn().mockResolvedValue(true);
+    registerAssistInboxRefresh(openAuthorization);
+    try {
+      await renderBoard([thread(request("w1", "pending"))]);
+      clickText("去处理");
+      await flush();
+
+      expect(openAuthorization).toHaveBeenCalledWith("w1");
+      expect(document.querySelector("[data-collab-assist-conversation]")).toBeNull();
+    } finally {
+      registerAssistInboxRefresh(null);
+    }
   });
 
   it("opens the assist records when several are waiting, without opening a thread", async () => {

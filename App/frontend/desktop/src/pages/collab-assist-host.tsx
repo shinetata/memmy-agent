@@ -11,12 +11,12 @@
  * 发起方也在这里得到通知：从外部 Agent 发出的请求，Agent 常常不在本轮等到结果（比如对方不在线），
  * 结果回来、Agent 还没取走时弹一条通知，告诉发起人回到那个 Agent 取回结果，或者在项目的「协助」里查看。
  */
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { AssistInboxItem, AssistOutcome, CollabClient } from "../api/collab-client.js";
 import { requestAssistFocus } from "../app/collab-assist-focus.js";
 import { registerAssistInboxRefresh } from "../app/collab-assist-refresh.js";
 import { dispatchDemoGuide, getDemoGuideState, isDemoGuideActive, subscribeDemoGuide } from "../app/collab-demo-guide-store.js";
-import { getCollabProjectsSnapshot, subscribeCollabProjects } from "../app/collab-projects-store.js";
+import { getCollabProjectsSnapshot } from "../app/collab-projects-store.js";
 import { useOptionalNotificationCenter } from "../components/notification-center.js";
 import type { MessageKey } from "../i18n/messages.js";
 import { useTranslation } from "../i18n/use-translation.js";
@@ -101,11 +101,6 @@ export function CollabAssistHost(props: {
   onOpenTask?: (conversationId: string) => void;
   /** 打开某个本机项目的看板：由外部 Agent 执行的协助在看板右侧展开详情。 */
   onOpenBoard?: (localProjectId: string) => void;
-  /**
-   * 当前正开着看板的本机项目 id（未在看板时为 null）。属于它的待处理请求已经出现在看板的提示条与「协助」数字上，
-   * 不再计入右下角角标：同一个请求不在两处同时催。
-   */
-  boardProjectId?: string | null;
 }) {
   const { t } = useTranslation();
   const notifications = useOptionalNotificationCenter();
@@ -121,14 +116,9 @@ export function CollabAssistHost(props: {
   openBoardRef.current = props.onOpenBoard;
   const [inbox, setInbox] = useState<AssistInboxItem[]>([]);
   const [dialogRequest, setDialogRequest] = useState<AssistInboxItem | null>(null);
-  /** 云端的项目列表：用来把请求的云端 id 对上本机项目，判断它是否正开在看板上。 */
-  const projects = useSyncExternalStore(subscribeCollabProjects, getCollabProjectsSnapshot, getCollabProjectsSnapshot).projects ?? [];
-  /** 已经提示过的请求 → 那条通知的 id：同一条请求只弹一次，请求处理掉后收起。 */
+  /** 已经提示过的待确认请求 → 通知 id。请求处理掉后收起。 */
   const announced = useRef(new Map<string, string | null>());
-  /**
-   * 已经自动弹过授权弹窗的请求。和 {@link announced} 分开算：限时授权的请求第一次出现时已经发过通知，
-   * 审查结论落地之后仍要弹一次窗。
-   */
+  /** 已经自动弹过授权弹窗的请求。 */
   const prompted = useRef(new Set<string>());
   /** 已经通知过的发起方结果：本机删除失败时也不重复弹。 */
   const announcedOutcomes = useRef(new Set<string>());
@@ -148,7 +138,7 @@ export function CollabAssistHost(props: {
     openBoardRef.current(project.localProjectId);
   }, []);
 
-  /** 通知或右下角入口被点开：确认在任务里进行的直接进任务，其余弹授权。 */
+  /** 确认通知被点开：需要在任务里确认时直接进任务，其余弹授权。 */
   const actOn = useCallback((item: AssistInboxItem) => {
     if (confirmsInTask(item)) {
       openAssist(item, true);
@@ -181,20 +171,25 @@ export function CollabAssistHost(props: {
     }
   }, [collab, notifications, t, openAssist]);
 
-  const poll = useCallback(async () => {
-    if (!collab || !enabled) return;
+  const poll = useCallback(async (requestId?: string): Promise<boolean> => {
+    if (!collab || !enabled) return false;
     void announceOutcomes();
     let next: AssistInboxItem[] = [];
     try {
       next = (await collab.assistInbox()).requests;
     } catch {
-      return;
+      return false;
     }
     setInbox(next);
     // 请求已经在别处处理掉：开着的授权弹窗不再有意义，直接关掉。
     setDialogRequest((current) => (
       current && !next.some((item) => item.id === current.id && waitingForHer(item)) ? null : current
     ));
+    const requested = next.find((item) => item.id === requestId && item.status === "pending" && !item.autoRun);
+    if (requested) {
+      prompted.current.add(requested.id);
+      setDialogRequest(requested);
+    }
     // 通知随请求状态收起：已经不等她处理的请求，把留着的通知撤掉。
     for (const [id, notificationId] of announced.current) {
       if (next.some((item) => item.id === id && waitingForHer(item))) continue;
@@ -209,32 +204,33 @@ export function CollabAssistHost(props: {
       setDialogRequest((current) => current ?? asking);
     }
     for (const item of next) {
+      // 待授权请求由弹窗和待处理入口承接，审查结论要求确认的限时请求在上面打开。
+      if (item.status === "pending") {
+        if (!item.granted && !prompted.current.has(item.id)) {
+          prompted.current.add(item.id);
+          setDialogRequest((current) => current ?? item);
+        }
+        continue;
+      }
+      if (item.status !== "confirm") continue;
       if (announced.current.has(item.id)) continue;
-      if (!waitingForHer(item)) continue;
-      const confirm = item.status === "confirm";
       // 新手引导正讲到这一步时不再另发一条通知：引导卡片已经把「谁请你做什么」说得更清楚，
       // 通知只会浮在蒙版上多催一次，跳过之后也要单独收。演示成员以外的请求照常提示。
       const quiet = demoQuietRef.current.active && item.requester.userId === demoQuietRef.current.memberUserId;
-      // 一条不打断她的通知：点击就去授权或确认。
+      // 后续协助等待确认时，通过通知进入待确认的位置。
       const notificationId = quiet ? null : notifications?.notify({
         variant: "info",
         title: t("collab.assist.notifyTitle", { name: item.requester.name }),
-        body: confirm
-          ? t("collab.assist.notifyConfirmBody", {
-              agent: assistAgentName(item.lastAgent ?? item.agent ?? item.grantAgent, t("collab.assist.executorFallback")),
-              issue: item.reason || item.title
-            })
-          : t("collab.assist.notifyBody", { issue: item.reason || item.title }),
-        actionLabel: confirm ? t("collab.assist.notifyConfirmAction") : t("collab.assist.notifyAction"),
+        body: t("collab.assist.notifyConfirmBody", {
+          agent: assistAgentName(item.lastAgent ?? item.agent ?? item.grantAgent, t("collab.assist.executorFallback")),
+          issue: item.reason || item.title
+        }),
+        actionLabel: t("collab.assist.notifyConfirmAction"),
         onAction: () => actOn(item)
       }) ?? null;
       announced.current.set(item.id, notificationId);
-      // 有生效中的限时授权的请求不打扰她：她的 Memmy 会直接开始执行。审查结论要求她确认时由上面那一段弹窗。
-      if (item.status === "pending" && !item.granted && !prompted.current.has(item.id)) {
-        prompted.current.add(item.id);
-        setDialogRequest((current) => current ?? item);
-      }
     }
+    return Boolean(requested);
   }, [collab, enabled, notifications, t, actOn, announceOutcomes]);
 
   useEffect(() => {
@@ -272,9 +268,8 @@ export function CollabAssistHost(props: {
     }
   }, [demoGuideActive, demoGuide.phase, demoMemberUserId, inbox, notifications]);
 
-  // 新手引导开启「接收协助请求」之后要立刻看到请求：把这次立即刷新交给引导调用，不等下一轮轮询。
   useEffect(() => {
-    registerAssistInboxRefresh(() => void poll());
+    registerAssistInboxRefresh(poll);
     return () => registerAssistInboxRefresh(null);
   }, [poll]);
 
@@ -287,76 +282,54 @@ export function CollabAssistHost(props: {
     return () => clearInterval(timer);
   }, [collab, enabled, poll]);
 
-  const waiting = useMemo(() => {
-    const onBoardId = props.boardProjectId;
-    if (!onBoardId) return inbox.filter(waitingForHer);
-    // 收件箱里的 projectId 是云端项目 id，看板记的是本机项目 id：过 projects 里的 localProjectId 对一次。
-    const onBoard = new Set(projects
-      .filter((project) => project.localProjectId === onBoardId)
-      .map((project) => project.id));
-    return inbox.filter((item) => waitingForHer(item) && !onBoard.has(item.projectId));
-  }, [inbox, projects, props.boardProjectId]);
-
   if (!collab || !enabled) return null;
 
   return (
-    <>
-      <CollabAssistDialog
-        open={dialogRequest !== null}
-        request={dialogRequest}
-        // 审查在弹窗打开之后才完成时，原因行靠这一份出现；request 对象不动，选择不会被重置。
-        safety={inbox.find((item) => item.id === dialogRequest?.id)?.safety ?? dialogRequest?.safety ?? null}
-        collab={collab}
-        demoAnchor={demoGuideActive}
-        onDecided={async (decision) => {
-          if (!dialogRequest) return;
-          const request = dialogRequest;
-          const decided = await collab.decideAssist(request.id, decision);
-          setDialogRequest(null);
-          void poll();
-          if (decision.action !== "allow") return;
-          // 新手引导里允许之后也进那条任务：演示要让人看到协助 chip、执行过程与「结果已发给谁」，
-          // 与正式逻辑走同一条路，区别只在拿不到任务时按「这一步没有完成」处理，而不是退回看板。
-          // 右侧那张协助详情（技术细节、注入的提示词）不是给人看的，绝不能停在那里。
-          if (isDemoGuideActive()) {
-            dispatchDemoGuide({ type: "help-decided", allow: true });
-            if (decision.agent === "memmy" && openTaskRef.current) {
-              const conversationId = await waitForMemmyTask(collab, decided.id);
-              if (conversationId) {
-                openTaskRef.current(conversationId);
-                return;
-              }
-              // 15 秒还没有那条任务：这一步算没有完成，引导给出重试与跳过。
-              dispatchDemoGuide({ type: "fail", reason: t("collab.demo.failed.help") });
-            }
-            // 由外部 Agent 执行（或没有任务可进）：打开项目看板，在右侧展开这次协助。
-            openAssist({ projectId: request.projectId, threadId: request.threadId }, false);
-            return;
-          }
-          // 由 Memmy 执行：等它在项目里建好任务（通常一两秒），直接进入那条任务。
+    <CollabAssistDialog
+      open={dialogRequest !== null}
+      request={dialogRequest}
+      // 审查在弹窗打开之后才完成时，原因行靠这一份出现；request 对象不动，选择不会被重置。
+      safety={inbox.find((item) => item.id === dialogRequest?.id)?.safety ?? dialogRequest?.safety ?? null}
+      collab={collab}
+      demoAnchor={demoGuideActive}
+      onDecided={async (decision) => {
+        if (!dialogRequest) return;
+        const request = dialogRequest;
+        const decided = await collab.decideAssist(request.id, decision);
+        setDialogRequest(null);
+        void poll();
+        if (decision.action !== "allow") return;
+        // 新手引导里允许之后也进那条任务：演示要让人看到协助 chip、执行过程与「结果已发给谁」，
+        // 与正式逻辑走同一条路，区别只在拿不到任务时按「这一步没有完成」处理，而不是退回看板。
+        // 右侧那张协助详情（技术细节、注入的提示词）不是给人看的，绝不能停在那里。
+        if (isDemoGuideActive()) {
+          dispatchDemoGuide({ type: "help-decided", allow: true });
           if (decision.agent === "memmy" && openTaskRef.current) {
             const conversationId = await waitForMemmyTask(collab, decided.id);
             if (conversationId) {
-              openTaskRef.current?.(conversationId);
+              openTaskRef.current(conversationId);
               return;
             }
+            // 15 秒还没有那条任务：这一步算没有完成，引导给出重试与跳过。
+            dispatchDemoGuide({ type: "fail", reason: t("collab.demo.failed.help") });
           }
-          // 由外部 Agent 执行：打开项目看板，在右侧展开这次协助。
+          // 由外部 Agent 执行（或没有任务可进）：打开项目看板，在右侧展开这次协助。
           openAssist({ projectId: request.projectId, threadId: request.threadId }, false);
-        }}
-        onClose={() => setDialogRequest(null)}
-      />
-
-      {waiting.length > 0 && !dialogRequest ? (
-        <button
-          type="button"
-          className="fixed bottom-4 right-4 z-40 rounded-full bg-action-sky px-4 py-2 text-xs font-semibold text-white shadow-lg"
-          onClick={() => actOn(waiting[0]!)}
-        >
-          {t("collab.assist.pendingBadge", { count: String(waiting.length) })}
-        </button>
-      ) : null}
-    </>
+          return;
+        }
+        // 由 Memmy 执行：等它在项目里建好任务（通常一两秒），直接进入那条任务。
+        if (decision.agent === "memmy" && openTaskRef.current) {
+          const conversationId = await waitForMemmyTask(collab, decided.id);
+          if (conversationId) {
+            openTaskRef.current?.(conversationId);
+            return;
+          }
+        }
+        // 由外部 Agent 执行：打开项目看板，在右侧展开这次协助。
+        openAssist({ projectId: request.projectId, threadId: request.threadId }, false);
+      }}
+      onClose={() => setDialogRequest(null)}
+    />
   );
 }
 

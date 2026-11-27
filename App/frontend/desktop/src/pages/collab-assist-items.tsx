@@ -12,7 +12,7 @@ import styles from "./collab-assist-items.module.css";
 /** 默认显示前几条。 */
 const PREVIEW_ITEMS = 3;
 
-export function AssistItems(props: { items: readonly string[] }) {
+export function AssistItems(props: { items: readonly string[]; showSummary?: boolean }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const { items } = props;
@@ -24,18 +24,22 @@ export function AssistItems(props: { items: readonly string[] }) {
       <ol className={styles.items}>
         {shown.map((item, index) => <li key={`${index}-${item.slice(0, 24)}`}>{item}</li>)}
       </ol>
-      <div className={styles.meta}>
-        {hidden > 0 ? (
-          <button type="button" className={styles.toggle} onClick={() => setOpen((value) => !value)}>
-            {open
-              ? t("collab.assist.collapse")
-              : t("collab.assist.itemsMore", { count: String(hidden) })}
-          </button>
-        ) : <span />}
-        <span className={styles.size}>
-          {t("collab.assist.itemsSummary", { count: String(items.length), size: assistTextSize(items.join("\n")) })}
-        </span>
-      </div>
+      {(hidden > 0 || props.showSummary !== false) && (
+        <div className={styles.meta}>
+          {hidden > 0 ? (
+            <button type="button" className={styles.toggle} onClick={() => setOpen((value) => !value)}>
+              {open
+                ? t("collab.assist.collapse")
+                : t("collab.assist.itemsMore", { count: String(hidden) })}
+            </button>
+          ) : <span />}
+          {props.showSummary !== false && (
+            <span className={styles.size}>
+              {t("collab.assist.itemsSummary", { count: String(items.length), size: assistTextSize(items.join("\n")) })}
+            </span>
+          )}
+        </div>
+      )}
     </>
   );
 }
