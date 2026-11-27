@@ -3172,16 +3172,6 @@
   background: var(--collab-surface);
 }
 
-/* 项目图标只留一个云 logo：不画方块、不铺白底，颜色也跟着线框改用中性灰（2026-11-18 两次要求） */
-.joinCardIcon {
-  display: grid;
-  flex: none;
-  place-items: center;
-  width: 24px;
-  height: 24px;
-  color: var(--collab-muted);
-}
-
 .joinCardName {
   flex: 1;
   min-width: 0;

@@ -1,4 +1,4 @@
-import { Cloud, Folder, X } from "lucide-react";
+import { Folder, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createHttpCollabClient, type CollabClient, type CollabInvitePreview, type CollabProject } from "../api/collab-client.js";
 import { useOptionalApiClients } from "../app/providers.js";
@@ -183,7 +183,6 @@ export function JoinProjectModal(props: {
         {preview ? (
           <>
             <div className={styles.joinCard}>
-              <span className={styles.joinCardIcon} aria-hidden="true"><Cloud size={20} /></span>
               <span className={styles.joinCardName}>{preview.projectName}</span>
               <span className={styles.avatarStack} aria-label={preview.memberNames.join("、")}>
                 {preview.memberNames.slice(0, CARD_AVATARS).map((name, index) => (
