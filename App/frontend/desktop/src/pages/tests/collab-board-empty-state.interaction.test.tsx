@@ -201,12 +201,13 @@ describe("the project board with no tasks", () => {
     const contexts = [...guide.querySelectorAll("section:has(h3)")];
     expect(guide.textContent).not.toContain("在 Memmy 中");
     expect(contexts[0]?.querySelector("h3")?.textContent).toBe("复制任务链接");
+    expect(contexts[0]?.textContent).toContain("粘贴到自己已接入的 Agent 对话里");
     expect(contexts[0]?.textContent).toContain("用 @ 引用任务");
     expect(contexts[1]?.querySelector("h3")?.textContent).toBe("在已接入的 Agent 中");
     expect(contexts[1]?.textContent).toContain("按内容搜索会话");
     expect(contexts[1]?.textContent).toContain(`搜一下 Memmy 的『${sharedProject.name}』项目中关于【关键词】的内容`);
     expect(contexts[1]?.textContent).toContain("通过链接读取任务");
-    expect(contexts[1]?.textContent).toContain("把链接粘贴到对话里");
+    expect(contexts[1]?.textContent).toContain("帮我读取这条 Memmy 任务");
 
     const assistTab = [...guide.querySelectorAll<HTMLButtonElement>("button[aria-pressed]")]
       .find((button) => button.textContent === "成员协助")!;
@@ -232,6 +233,8 @@ describe("the project board with no tasks", () => {
     const guide = document.querySelector('[role="dialog"]')!;
     expect(guide.querySelector("h2")?.textContent).toBe("Shared project guide");
     expect(guide.textContent).toContain("Copy a task link");
+    expect(guide.textContent).toContain("paste it into a conversation with your own connected agent");
+    expect(guide.textContent).toContain("Read this Memmy task");
     expect(guide.textContent).toContain("Search conversations by content");
     expect(guide.textContent).toContain(`Search the Memmy project ‘${sharedProject.name}’ for content about [topic]`);
 
